@@ -13,8 +13,9 @@ icon: material/lightning-bolt
     <h1 style="font-weight: 800;"><b>ToolFront</b></h1>
 </div>
 <p align="center">
-    <em>Build and deploy AI apps in minutes. All in pure Markdown. Zero boilerplate.
-</em>
+    <em>
+      Build and deploy AI apps in minutes. All in pure Markdown. Zero boilerplate.
+    </em>
 </em>
 </p>
 
