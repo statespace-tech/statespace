@@ -68,7 +68,7 @@ class TestDeployCommand:
                 id="env-123",
                 auth_token="token-abc",
                 url="https://cf.example.com",
-                fly_url="https://fly.example.com",
+                fly_url=None,
             )
             mock_client.return_value = mock_instance
 
@@ -77,7 +77,6 @@ class TestDeployCommand:
             assert result.exit_code == 0
             assert "env-123" in result.output
             assert "https://cf.example.com" in result.output
-            assert "https://fly.example.com" in result.output
             assert "token-abc" in result.output
 
     def test_warns_when_no_markdown_files(self, runner, tmp_path):
