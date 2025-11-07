@@ -32,7 +32,7 @@ def update(deployment_id: str, path: Path, api_key: str, gateway_url: str):
 
     try:
         client.update_environment(deployment_id, files)
-        
+
         click.echo("\n" + "─" * 80)
         click.echo(f"  {click.style('✓', fg='green')} Deployment updated successfully")
         click.echo(f"  Files uploaded and search index updated")

@@ -22,19 +22,19 @@ def list(api_key: str, gateway_url: str):
             return
 
         click.echo(f"📦 {len(envs)} deployment(s)\n")
-        
+
         # Print table header
         click.echo(f"{'NAME':<30} {'STATUS':<12} {'ID':<38} {'URL'}")
         click.echo("─" * 120)
-        
+
         # Print table rows
         for env in envs:
             status_emoji = "✅" if env.status == "running" else "⏳" if env.status == "pending" else "❌"
             status_display = f"{status_emoji} {env.status}"
-            name_display = click.style(env.name, bold=True, fg='cyan')
+            name_display = click.style(env.name, bold=True, fg="cyan")
             id_display = click.style(env.id[:36], dim=True)
             url_display = env.url or "-"
-            
+
             click.echo(f"{name_display:<38} {status_display:<20} {id_display:<38} {url_display}")
 
     except RuntimeError as e:

@@ -34,7 +34,7 @@ def deploy(path: Path, api_key: str, gateway_url: str, name: str | None, verify:
 
     try:
         result = client.deploy_environment(env_name, files)
-        
+
         click.echo("\n" + "─" * 80)
         click.echo(f"  Deployment ID:  {click.style(result.id, fg='green')}")
         if result.fly_url:
@@ -44,7 +44,7 @@ def deploy(path: Path, api_key: str, gateway_url: str, name: str | None, verify:
         if result.auth_token:
             click.echo(f"  Auth Token:     {result.auth_token}")
         click.echo("─" * 80)
-        
+
         click.echo("\n✓ Deployment created. Use the URL above (ready immediately).")
 
         if verify and result.auth_token:
