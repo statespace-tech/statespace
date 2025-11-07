@@ -77,9 +77,7 @@ class GatewayClient:
             fly_url=data.get("fly_url"),
         )
 
-    def verify_environment(
-        self, url: str, auth_token: str, max_attempts: int = 20, progress_callback=None
-    ) -> bool:
+    def verify_environment(self, url: str, auth_token: str, max_attempts: int = 20, progress_callback=None) -> bool:
         import time
 
         for attempt in range(1, max_attempts + 1):
@@ -115,13 +113,13 @@ class GatewayClient:
             raise RuntimeError(f"Failed to list environments: {response.status_code}\n{response.text}")
 
         json_response = response.json()
-        
+
         # Handle both wrapped {"data": [...]} and direct list responses
         if isinstance(json_response, dict):
             data = json_response.get("data", json_response)
         else:
             data = json_response
-            
+
         if not isinstance(data, list):
             data = [data]
 
