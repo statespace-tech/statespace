@@ -68,7 +68,7 @@ class TestDeployCommand:
                 id="env-123",
                 auth_token="token-abc",
                 url="https://cf.example.com",
-                fly_url=None,
+                fly_url="https://fly.example.com",
             )
             mock_client.return_value = mock_instance
 
