@@ -3,21 +3,22 @@ from pathlib import Path
 import click
 
 from toolfront.lib.gateway import GatewayClient
+from toolfront.lib.config import get_api_credentials
 
 
 @click.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
-@click.option("--api-key", envvar="TOOLFRONT_API_KEY", required=True, help="Gateway API key")
-@click.option(
-    "--gateway-url",
-    default="https://api.toolfront.ai",
-    envvar="TOOLFRONT_GATEWAY_URL",
-    help="Gateway base URL",
-)
+@click.option("--api-key", help="Gateway API key (overrides config)")
+@click.option("--gateway-url", help="Gateway base URL (overrides config)")
 @click.option("--name", help="Environment name (defaults to directory name)")
 @click.option("--verify", is_flag=True, help="Wait and verify environment is accessible after deployment")
-def deploy(path: Path, api_key: str, gateway_url: str, name: str | None, verify: bool):
+def deploy(path: Path, api_key: str | None, gateway_url: str | None, name: str | None, verify: bool):
     """Deploy markdown repository to Gateway"""
+    try:
+        gateway_url, api_key = get_api_credentials(api_key, gateway_url)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+
     dir_path = path if path.is_dir() else path.parent
     env_name = name or dir_path.name
 

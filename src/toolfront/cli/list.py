@@ -1,19 +1,16 @@
 import click
 
 from toolfront.lib.gateway import GatewayClient
+from toolfront.lib.config import get_api_credentials
 
 
 @click.command()
-@click.option("--api-key", envvar="TOOLFRONT_API_KEY", required=True, help="Gateway API key")
-@click.option(
-    "--gateway-url",
-    default="https://api.toolfront.ai",
-    envvar="TOOLFRONT_GATEWAY_URL",
-    help="Gateway base URL",
-)
-def list_deployments(api_key: str, gateway_url: str):
+@click.option("--api-key", help="Gateway API key (overrides config)")
+@click.option("--gateway-url", help="Gateway base URL (overrides config)")
+def list_deployments(api_key: str | None, gateway_url: str | None):
     """List all deployments"""
     try:
+        gateway_url, api_key = get_api_credentials(api_key, gateway_url)
         client = GatewayClient(gateway_url, api_key)
         envs = client.list_environments()
 
