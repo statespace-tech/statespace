@@ -4,6 +4,7 @@ from typing import Any
 
 import httpx
 import yaml
+from httpx import HTTPTransport
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 from pydantic_ai import Agent, UnexpectedModelBehavior, models
 from pydantic_ai.mcp import MCPServerStdio
@@ -168,24 +169,14 @@ class Application(BaseModel):
             timeout=DEFAULT_TIMEOUT_SECONDS,
         )
 
-        import time
-
-        last_error = None
-        for attempt in range(3):
-            try:
-                with httpx.Client() as client:
-                    response = client.get(str(self.url), headers=self.param or {}, timeout=10.0)
-                    response.raise_for_status()
-                    instructions = response.text + f"\n\n Your current URL is: {self.url}"
-                    break
-            except (httpx.ConnectError, httpx.TimeoutException) as e:
-                last_error = e
-                if attempt < 2:
-                    time.sleep(5)
-            except Exception as e:
-                raise RuntimeError(f"Failed to read instructions from {self.url}: {e}") from e
-        else:
-            raise RuntimeError(f"Failed to read instructions from {self.url}: {last_error}") from last_error
+        try:
+            transport = HTTPTransport(retries=2)
+            with httpx.Client(transport=transport) as client:
+                response = client.get(str(self.url), headers=self.param or {}, timeout=10.0)
+                response.raise_for_status()
+                instructions = response.text + f"\n\n Your current URL is: {self.url}"
+        except Exception as e:
+            raise RuntimeError(f"Failed to read instructions from {self.url}: {e}") from e
 
         history_processor_ = history_processor(context_window=context_window)
 
