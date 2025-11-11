@@ -19,6 +19,7 @@ class ActionRequest(BaseModel):
     command: list[str]
     args: dict[str, str] | None = None
     env: dict[str, str] | None = None
+    path: str | None = None
 
     @field_validator("args", mode="before")
     @classmethod
@@ -98,14 +99,15 @@ def serve(directory, host, port):
     @app.get("/{file_path:path}")
     async def read_file(file_path: str):
         """Read a file from the served directory"""
-        full_path = resolve_file_path(directory, file_path)
+        full_path = resolve_file_path(directory, file_path or "")
         return FileResponse(full_path)
 
-    @app.post("/{file_path:path}")
-    async def action(file_path: str, action: ActionRequest = Body(...)):
-        """Execute a command defined in a file's frontmatter"""
+    @app.post("/action")
+    async def action_endpoint(action: ActionRequest = Body(...)):
+        """Execute a command defined in a file's frontmatter (dedicated endpoint)"""
         command = action.command
         args = action.args
+        file_path = action.path or ""
 
         # Resolve file path
         full_path = resolve_file_path(directory, file_path)
@@ -134,7 +136,8 @@ def serve(directory, host, port):
 
     click.echo(f"Starting ToolFront server on {host}:{port}")
     click.echo(f"Serving files from: {directory}")
-    click.echo(f"GET  http://{host}:{port}/path/to/file.md - Read file")
-    click.echo(f"POST http://{host}:{port}/path/to/file.md - Execute command")
+    click.echo(f"GET  http://{host}:{port}/           - Read root README.md")
+    click.echo(f"GET  http://{host}:{port}/path       - Read path/README.md")
+    click.echo(f"POST http://{host}:{port}/action     - Execute command")
 
     uvicorn.run(app, host=host, port=port)
