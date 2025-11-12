@@ -59,7 +59,7 @@ def get_current_context() -> dict:
 def get_api_credentials(api_key: Optional[str] = None, gateway_url: Optional[str] = None) -> tuple[str, str]:
     """
     Get API credentials, preferring explicit args, then config file, then env vars.
-    
+
     Returns: (gateway_url, api_key)
     """
     import os

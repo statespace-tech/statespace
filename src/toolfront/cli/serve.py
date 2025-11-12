@@ -124,7 +124,9 @@ def serve(directory, host, port):
 
         # Validate command name matches a tool (first element only)
         if not any(command[0] == t[0] for t in tools if len(t) > 0):
-            raise HTTPException(status_code=400, detail=f"Invalid command: {command[0]}. Must be one of: {[t[0] for t in tools]}")
+            raise HTTPException(
+                status_code=400, detail=f"Invalid command: {command[0]}. Must be one of: {[t[0] for t in tools]}"
+            )
 
         # Expand placeholders; skip unfilled placeholders like {path}
         expanded_command = []
