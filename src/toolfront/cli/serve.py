@@ -106,7 +106,7 @@ def serve(directory, host, port):
     async def action_endpoint(action: ActionRequest = Body(...)):
         """Execute a command defined in a file's frontmatter (dedicated endpoint)"""
         command = action.command
-        args = action.args
+        args = action.args or {}
         file_path = action.path or ""
 
         # Resolve file path
@@ -122,11 +122,18 @@ def serve(directory, host, port):
         if not tools:
             raise HTTPException(status_code=400, detail=f"No tools found in frontmatter of: {path}")
 
-        if not any(command[: len(t)] == t for t in tools):
-            raise HTTPException(status_code=400, detail=f"Invalid command: {command}. Must be one of: {tools}")
+        # Validate command name matches a tool (first element only)
+        if not any(command[0] == t[0] for t in tools if len(t) > 0):
+            raise HTTPException(status_code=400, detail=f"Invalid command: {command[0]}. Must be one of: {[t[0] for t in tools]}")
 
-        # Expand placeholders in command and replace arguments with values
-        expanded_command = [os.path.expandvars(c).format(**args) for c in command]
+        # Expand placeholders; skip unfilled placeholders like {path}
+        expanded_command = []
+        for part in command:
+            try:
+                expanded_command.append(os.path.expandvars(part).format(**args))
+            except KeyError:
+                if not (part.startswith("{") and part.endswith("}")):
+                    expanded_command.append(part)
 
         result = subprocess.run(expanded_command, cwd=path.parent, env=action.env, capture_output=True, text=True)
 
