@@ -131,9 +131,8 @@ class Application(BaseModel):
                 if self.env is not None:
                     payload["env"] = self.env
 
-                action_url = f"{str(url).rstrip('/')}/action"
                 response = await client.post(
-                    action_url,
+                    url,
                     json=payload,
                     headers=self.param or {},
                     timeout=DEFAULT_TIMEOUT_SECONDS,
