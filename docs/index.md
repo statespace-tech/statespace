@@ -178,7 +178,7 @@ Expand your app with specialized workflows.
 
 ### Deploy It
 
-Create a free [Statespace account](https://statespace.com) and deploy your app in one command.
+Create a free [Statespace account](#deploy-it)[^1] and deploy your app in one command.
 
 ```bash
 toolfront deploy .
@@ -188,7 +188,7 @@ toolfront deploy .
 
 ## Installation
 
-Install `toolfront` with your favorite PyPI package manager[^1].
+Install `toolfront` with your favorite PyPI package manager.
 
 === ":fontawesome-brands-python: &nbsp; pip"
 
@@ -208,5 +208,4 @@ Install `toolfront` with your favorite PyPI package manager[^1].
     poetry add toolfront
     ```
 
-[^1]: Requires Python 3.10+
-
+[^1]: Statespace is currently in beta. Email `esteban[at]statespace[dot]com` or join our [Discord](https://discord.gg/rRyM7zkZTf) to get an API key

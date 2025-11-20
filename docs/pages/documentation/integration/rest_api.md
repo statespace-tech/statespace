@@ -1,17 +1,15 @@
 ---
-icon: lucide/box
+icon: lucide/waypoints
 ---
 
 # REST API
 
-ToolFront's REST API enables custom client integrations for interacting with applications over HTTP.
+The REST API enables lets you build custom client to interacting with applications over HTTP.
 
 !!! warning "Advanced usage"
     The API is for advanced use cases. Most users should use the [SDK](python_sdk.md), [MCP](mcp_server.md), or [CLI](command_line.md) instead.
 
 ## Basic usage
-
-ToolFront applications expose two endpoints: one to fetch instructions and another to execute tools.
 
 ### Fetch instructions
 
@@ -30,8 +28,6 @@ curl -X POST https://myapp.toolfront.app/README.md \
   -H "Content-Type: application/json" \
   -d '{"command": ["ls", "-la"]}'
 ```
-
----
 
 ## Endpoints
 

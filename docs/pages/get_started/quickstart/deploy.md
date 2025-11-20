@@ -17,7 +17,7 @@ toolfront serve my-app --port 8000
 
 ## Cloud Deployment
 
-Create a free [Statespace account](statespace.com) and get an API key. Then, deploy to ToolFront Cloud:
+Create a free [Statespace account](#cloud-deployment)[^1] and get an API key. Then, deploy to ToolFront Cloud:
 
 ```bash
 toolfront deploy my-app  --api-key <your-statespace-key>
@@ -35,3 +35,5 @@ Open the application URL in your browser. You should see the `README.md` content
     Your app is now running locally or in the cloud.
 
     **Next:** [Connect AI agents](interact.md)
+
+[^1]: Statespace is currently in beta. Email `esteban[at]statespace[dot]com` or join our [Discord](https://discord.gg/rRyM7zkZTf) to get an API key

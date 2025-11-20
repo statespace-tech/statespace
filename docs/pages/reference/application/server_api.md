@@ -9,8 +9,6 @@ Full list of REST endpoints to interact with running applications.
 !!! warning "Advanced Usage"
     This API is for advanced use cases. Most users should interact with running applications through the [Python SDK](../../documentation/integration/python_sdk.md), [MCP Server](../../documentation/integration/mcp_server.md), or [Command Line](../../documentation/integration/command_line.md) instead.
 
----
-
 <div class="grid" markdown>
 
 <div markdown>
@@ -29,7 +27,7 @@ Fetch Markdown/resources from the app.
 
 Pass via `param` (e.g., Authorization: Bearer token)
 
-**Response Attributed**
+**Response Attributes**
 
 `content` <span class="param-tag param-type">string</span>
 
@@ -47,24 +45,22 @@ curl -X GET \
   https://127.0.0.1:8000/README.md
 ```
 
-**Response**
+**Example Response**
 
-```markdown
+```yaml
 ---
 tools:
   - [ls]
   - [cat]
-
 ---
+
 # Instructions
-...
+You are an AI agent.
 ```
 
 </div>
 
 </div>
-
----
 
 <div class="grid" markdown>
 
@@ -96,7 +92,7 @@ Execute tool from frontmatter.
 
   : Bearer token
 
-**Response Attributed**
+**Response Attributes**
 
 `stdout` <span class="param-tag param-type">string</span>
 
@@ -126,7 +122,7 @@ curl -X POST \
   }'
 ```
 
-**Response**
+**Example Response**
 
 ```json
 {
@@ -139,9 +135,3 @@ curl -X POST \
 </div>
 
 </div>
-
-**Errors**:
-
-- 400: No frontmatter found, no tools defined, or invalid command
-- 403: Access denied (path outside served directory)
-- 404: File not found
