@@ -19,13 +19,12 @@ WORKDIR /app
 COPY pyproject.toml uv.lock* ./
 COPY src ./src
 
-RUN uv pip install --system -e . zensical mkdocstrings[python]
+RUN uv pip install --system -e . zensical
 
-COPY mkdocs.yml ./
+COPY zensical.toml ./
 
 COPY pages ./docs/pages
 COPY assets ./docs/assets
-COPY overrides ./docs/overrides
 COPY index.md ./docs/
 
 EXPOSE 8080
