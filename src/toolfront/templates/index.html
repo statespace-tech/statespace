@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>App - Statespace</title>
+    <link rel="icon" href="/favicon.svg">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-icons-font@latest/font/simple-icons.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; line-height: 1.618; }
+        .header { background: white; border-bottom: 1px solid #e5e5e5; padding: 1rem 3.236rem; display: flex; align-items: center; justify-content: space-between; }
+        .header-left { display: flex; align-items: center; gap: 1rem; text-decoration: none; }
+        .logo { width: 32px; height: 32px; }
+        .brand { font-size: 1.272rem; font-weight: 700; color: #111; }
+        .github-link { display: flex; align-items: center; gap: 0.618rem; text-decoration: none; color: #666; font-size: 0.875rem; transition: color 0.15s; }
+        .github-link:hover { color: #111; }
+        .github-icon { width: 20px; height: 20px; }
+        .tab-icon { width: 16px; height: 16px; vertical-align: middle; margin-right: 0.618rem; }
+        .container { max-width: 800px; margin: 0 auto; padding: 4.854rem 3rem; }
+        h2 { text-align: center; color: #111; margin-bottom: 3rem; font-size: 2rem; font-weight: 600; }
+        .tabs { display: flex; justify-content: center; gap: 0; margin-bottom: 0; border-bottom: 1px solid #e5e5e5; }
+        .tab { flex: 1; padding: 1rem 1.618rem; cursor: pointer; background: none; border: none; font-size: 1rem; color: #666; transition: all 0.15s; position: relative; }
+        .tab:hover { color: #111; }
+        .tab.active { color: #0b7; font-weight: 500; }
+        .tab.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: #0b7; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .code-block { position: relative; margin-bottom: 1.618rem; }
+        .copy-btn { position: absolute; top: 0.786rem; right: 0.786rem; background: white; color: #666; border: 1px solid #ddd; padding: 0.382rem 0.786rem; border-radius: 4px; font-size: 0.786rem; cursor: pointer; transition: all 0.15s; z-index: 1; }
+        .copy-btn:hover { background: #f9f9f9; border-color: #ccc; color: #333; }
+        .copy-btn.copied { background: #0b7; border-color: #0b7; color: white; }
+        pre { background: #f9f9f9; color: #333; padding: 1.618rem; padding-right: 5rem; border-radius: 6px; overflow-x: auto; margin: 0; font-size: 0.875rem; line-height: 1.618; border: 1px solid #e0e0e0; }
+        code { font-family: monospace; }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <a href="https://statespace.com" class="header-left">
+            <img src="/favicon.svg" alt="Statespace" class="logo">
+            <span class="brand">Statespace</span>
+        </a>
+        <a href="https://github.com/statespace-tech/toolfront" class="github-link" target="_blank" rel="noopener">
+            <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
+            </svg>
+            GitHub
+        </a>
+    </div>
+    <div class="container">
+        <h2>Connect to this application</h2>
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('python')">
+                <i class="si si-python" style="font-size: 16px; margin-right: 0.5rem;"></i>
+                Python SDK
+            </button>
+            <button class="tab" onclick="switchTab('agent')">
+                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="16 18 22 12 16 6"></polyline>
+                    <polyline points="8 6 2 12 8 18"></polyline>
+                </svg>
+                Coding Agents
+            </button>
+            <button class="tab" onclick="switchTab('mcp')">
+                <i class="si si-modelcontextprotocol" style="font-size: 16px; margin-right: 0.5rem;"></i>
+                MCP
+            </button>
+        </div>
+        <div id="python" class="tab-content active">
+            <div class="code-block">
+                <button class="copy-btn" onclick="copyCode(this, 'python-code')">Copy</button>
+                <pre><code id="python-code">from toolfront import Application
+
+app = Application(url="{current_url}")
+
+result = app.ask("Tell me about this app", model="openai:gpt-5")</code></pre>
+            </div>
+        </div>
+        <div id="agent" class="tab-content">
+            <div class="code-block">
+                <button class="copy-btn" onclick="copyCode(this, 'agent-code')">Copy</button>
+                <pre><code id="agent-code">$ claude "Tell me about this app: {current_url}"
+
+$ gemini "Tell me about this app: {current_url}"
+
+$ cursor "Tell me about this app: {current_url}"</code></pre>
+            </div>
+        </div>
+        <div id="mcp" class="tab-content">
+            <div class="code-block">
+                <button class="copy-btn" onclick="copyCode(this, 'mcp-code')">Copy</button>
+                <pre><code id="mcp-code">{
+  "mcpServers": {
+    "toolfront": {
+      "command": "uvx",
+      "args": ["toolfront", "mcp", "{current_url}"]
+    }
+  }
+}</code></pre>
+            </div>
+        </div>
+    </div>
+    <div class="hidden">
+{robots_txt_content}
+
+For complete instructions and available tools, check out /README
+    </div>
+    <script>
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
+        }
+        function copyCode(btn, codeId) {
+            const code = document.getElementById(codeId);
+            navigator.clipboard.writeText(code.textContent.trim()).then(() => {
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>
