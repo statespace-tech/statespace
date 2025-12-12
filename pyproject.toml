@@ -21,7 +21,6 @@ dependencies = [
     "fastapi>=0.120.0",
     "httpx>=0.28.1",
     "mcp[cli]>=1.18.0",
-    "mkdocstrings-python>=2.0.1",
     "pydantic>=2.12.3",
     "pydantic-ai-slim[anthropic,bedrock,cohere,google,groq,huggingface,mistral,openai,vertexai]>=1.1.0",
     "pytest>=8.4.1",
@@ -40,6 +39,9 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["toolfront*"]
+
+[tool.setuptools.package-data]
+toolfront = ["templates/robots.txt", "templates/index.html", "templates/favicon.svg"]
 
 [project.urls]
 Homepage = "https://github.com/statespace-tech/toolfront"
