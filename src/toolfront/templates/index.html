@@ -8,29 +8,29 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-icons-font@latest/font/simple-icons.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; line-height: 1.618; }
-        .header { background: white; border-bottom: 1px solid #e5e5e5; padding: 1rem 3.236rem; display: flex; align-items: center; justify-content: space-between; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; line-height: 1.6; }
+        .header { background: white; border-bottom: 1px solid #e5e5e5; padding: 1rem 3rem; display: flex; align-items: center; justify-content: space-between; }
         .header-left { display: flex; align-items: center; gap: 1rem; text-decoration: none; }
         .logo { width: 32px; height: 32px; }
-        .brand { font-size: 1.272rem; font-weight: 700; color: #111; }
-        .github-link { display: flex; align-items: center; gap: 0.618rem; text-decoration: none; color: #666; font-size: 0.875rem; transition: color 0.15s; }
+        .brand { font-size: 1.25rem; font-weight: 700; color: #111; }
+        .github-link { display: flex; align-items: center; gap: 0.5rem; text-decoration: none; color: #666; font-size: 0.875rem; transition: color 0.15s; }
         .github-link:hover { color: #111; }
         .github-icon { width: 20px; height: 20px; }
-        .tab-icon { width: 16px; height: 16px; vertical-align: middle; margin-right: 0.618rem; }
-        .container { max-width: 800px; margin: 0 auto; padding: 4.854rem 3rem; }
+        .tab-icon { width: 16px; height: 16px; vertical-align: middle; margin-right: 0.5rem; }
+        .container { max-width: 800px; margin: 0 auto; padding: 4rem 3rem; }
         h2 { text-align: center; color: #111; margin-bottom: 3rem; font-size: 2rem; font-weight: 600; }
-        .tabs { display: flex; justify-content: center; gap: 0; margin-bottom: 0; border-bottom: 1px solid #e5e5e5; }
-        .tab { flex: 1; padding: 1rem 1.618rem; cursor: pointer; background: none; border: none; font-size: 1rem; color: #666; transition: all 0.15s; position: relative; }
+        .tabs { display: flex; justify-content: center; gap: 0; margin-bottom: 0; border-bottom: 1px solid #e5e5e5; position: relative; }
+        .tab { flex: 1; padding: 1rem 1.5rem; cursor: pointer; background: none; border: none; font-size: 1rem; color: #666; transition: color 0.15s; position: relative; }
         .tab:hover { color: #111; }
-        .tab.active { color: #0b7; font-weight: 500; }
-        .tab.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: #0b7; }
+        .tab.active { color: #111; font-weight: 500; }
+        .tab-indicator { position: absolute; bottom: -1px; height: 2px; background: #111; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        .code-block { position: relative; margin-bottom: 1.618rem; }
-        .copy-btn { position: absolute; top: 0.786rem; right: 0.786rem; background: white; color: #666; border: 1px solid #ddd; padding: 0.382rem 0.786rem; border-radius: 4px; font-size: 0.786rem; cursor: pointer; transition: all 0.15s; z-index: 1; }
+        .code-block { position: relative; margin-bottom: 1.5rem; }
+        .copy-btn { position: absolute; top: 0.75rem; right: 0.75rem; background: white; color: #666; border: 1px solid #ddd; padding: 0.5rem 0.75rem; border-radius: 4px; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; z-index: 1; }
         .copy-btn:hover { background: #f9f9f9; border-color: #ccc; color: #333; }
         .copy-btn.copied { background: #0b7; border-color: #0b7; color: white; }
-        pre { background: #f9f9f9; color: #333; padding: 1.618rem; padding-right: 5rem; border-radius: 6px; overflow-x: auto; margin: 0; font-size: 0.875rem; line-height: 1.618; border: 1px solid #e0e0e0; }
+        pre { background: #f9f9f9; color: #333; padding: 1.5rem; padding-right: 5rem; border-radius: 6px; overflow-x: auto; margin: 0; font-size: 0.875rem; line-height: 1.6; border: 1px solid #e0e0e0; }
         code { font-family: monospace; }
         .hidden { display: none; }
     </style>
@@ -66,6 +66,7 @@
                 <i class="si si-modelcontextprotocol" style="font-size: 16px; margin-right: 0.5rem;"></i>
                 MCP
             </button>
+            <div class="tab-indicator"></div>
         </div>
         <div id="python" class="tab-content active">
             <div class="code-block">
@@ -107,11 +108,20 @@ $ cursor "Tell me about this app: {current_url}"</code></pre>
 For complete instructions and available tools, check out /README
     </div>
     <script>
+        function updateIndicator() {
+            const activeTab = document.querySelector('.tab.active');
+            const indicator = document.querySelector('.tab-indicator');
+            if (activeTab && indicator) {
+                indicator.style.left = activeTab.offsetLeft + 'px';
+                indicator.style.width = activeTab.offsetWidth + 'px';
+            }
+        }
         function switchTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
             event.target.classList.add('active');
+            updateIndicator();
         }
         function copyCode(btn, codeId) {
             const code = document.getElementById(codeId);
@@ -121,6 +131,8 @@ For complete instructions and available tools, check out /README
                 setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
             });
         }
+        window.addEventListener('load', updateIndicator);
+        window.addEventListener('resize', updateIndicator);
     </script>
 </body>
 </html>
