@@ -49,57 +49,13 @@
         </a>
     </div>
     <div class="container">
-        <h2>Connect to this application</h2>
-        <div class="tabs">
-            <button class="tab active" onclick="switchTab('python')">
-                <i class="si si-python" style="font-size: 16px; margin-right: 0.5rem;"></i>
-                Python SDK
-            </button>
-            <button class="tab" onclick="switchTab('agent')">
-                <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="16 18 22 12 16 6"></polyline>
-                    <polyline points="8 6 2 12 8 18"></polyline>
-                </svg>
-                Coding Agents
-            </button>
-            <button class="tab" onclick="switchTab('mcp')">
-                <i class="si si-modelcontextprotocol" style="font-size: 16px; margin-right: 0.5rem;"></i>
-                MCP
-            </button>
-            <div class="tab-indicator"></div>
-        </div>
-        <div id="python" class="tab-content active">
-            <div class="code-block">
-                <button class="copy-btn" onclick="copyCode(this, 'python-code')">Copy</button>
-                <pre><code id="python-code">from toolfront import Application
-
-app = Application(url="{current_url}")
-
-result = app.ask("Tell me about this app", model="openai:gpt-5")</code></pre>
-            </div>
-        </div>
-        <div id="agent" class="tab-content">
-            <div class="code-block">
-                <button class="copy-btn" onclick="copyCode(this, 'agent-code')">Copy</button>
-                <pre><code id="agent-code">$ claude "Tell me about this app: {current_url}"
-
-$ gemini "Tell me about this app: {current_url}"
-
-$ cursor "Tell me about this app: {current_url}"</code></pre>
-            </div>
-        </div>
-        <div id="mcp" class="tab-content">
-            <div class="code-block">
-                <button class="copy-btn" onclick="copyCode(this, 'mcp-code')">Copy</button>
-                <pre><code id="mcp-code">{
-  "mcpServers": {
-    "toolfront": {
-      "command": "uvx",
-      "args": ["toolfront", "mcp", "{current_url}"]
-    }
-  }
-}</code></pre>
-            </div>
+        <h2>Connect to this app</h2>
+        <p style="text-align: center; color: #666; margin-bottom: 2rem; font-size: 1rem;">
+            Paste this in your agent's prompts or instructions:
+        </p>
+        <div class="code-block">
+            <button class="copy-btn" onclick="copyCode(this, 'app-code')">Copy</button>
+            <pre><code id="app-code">Tell me about this app: {current_url}</code></pre>
         </div>
     </div>
     <div class="hidden">
