@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 import yaml
-from httpx import HTTPStatusError, HTTPTransport
+from httpx import HTTPStatusError
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 from pydantic_ai import Agent, UnexpectedModelBehavior, models
 from pydantic_ai.mcp import MCPServerStdio
