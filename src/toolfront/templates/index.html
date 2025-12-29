@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>App - Statespace</title>
     <link rel="icon" href="/favicon.svg">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/simple-icons-font@latest/font/simple-icons.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; line-height: 1.6; }
@@ -16,18 +15,10 @@
         .github-link { display: flex; align-items: center; gap: 0.5rem; text-decoration: none; color: #666; font-size: 0.875rem; transition: color 0.15s; }
         .github-link:hover { color: #111; }
         .github-icon { width: 20px; height: 20px; }
-        .tab-icon { width: 16px; height: 16px; vertical-align: middle; margin-right: 0.5rem; }
         .container { max-width: 800px; margin: 0 auto; padding: 4rem 3rem; }
         h2 { text-align: center; color: #111; margin-bottom: 3rem; font-size: 2rem; font-weight: 600; }
-        .tabs { display: flex; justify-content: center; gap: 0; margin-bottom: 0; border-bottom: 1px solid #e5e5e5; position: relative; }
-        .tab { flex: 1; padding: 1rem 1.5rem; cursor: pointer; background: none; border: none; font-size: 1rem; color: #666; transition: color 0.15s; position: relative; }
-        .tab:hover { color: #111; }
-        .tab.active { color: #111; font-weight: 500; }
-        .tab-indicator { position: absolute; bottom: -1px; height: 2px; background: #111; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
         .code-block { position: relative; margin-bottom: 1.5rem; }
-        .copy-btn { position: absolute; top: 0.75rem; right: 0.75rem; background: white; color: #666; border: 1px solid #ddd; padding: 0.5rem 0.75rem; border-radius: 4px; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; z-index: 1; }
+        .copy-btn { position: absolute; top: 0.75rem; right: 0.75rem; background: white; color: #666; border: 1px solid #ddd; padding: 0.5rem 0.75rem; border-radius: 4px; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
         .copy-btn:hover { background: #f9f9f9; border-color: #ccc; color: #333; }
         .copy-btn.copied { background: #0b7; border-color: #0b7; color: white; }
         pre { background: #f9f9f9; color: #333; padding: 1.5rem; padding-right: 5rem; border-radius: 6px; overflow-x: auto; margin: 0; font-size: 0.875rem; line-height: 1.6; border: 1px solid #e0e0e0; }
@@ -50,45 +41,27 @@
     </div>
     <div class="container">
         <h2>Connect to this app</h2>
-        <p style="text-align: center; color: #666; margin-bottom: 2rem; font-size: 1rem;">
-            Paste this in your agent's prompts or instructions:
-        </p>
         <div class="code-block">
             <button class="copy-btn" onclick="copyCode(this, 'app-code')">Copy</button>
-            <pre><code id="app-code">Tell me about this app: {current_url}</code></pre>
+            <pre><code id="app-code">$ agent "tell me about this app: {current_url}"</code></pre>
         </div>
     </div>
     <div class="hidden">
 {agents_md_content}
-
 For complete instructions and available tools, check out /README
     </div>
     <script>
-        function updateIndicator() {
-            const activeTab = document.querySelector('.tab.active');
-            const indicator = document.querySelector('.tab-indicator');
-            if (activeTab && indicator) {
-                indicator.style.left = activeTab.offsetLeft + 'px';
-                indicator.style.width = activeTab.offsetWidth + 'px';
-            }
-        }
-        function switchTab(tabId) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            event.target.classList.add('active');
-            updateIndicator();
-        }
         function copyCode(btn, codeId) {
             const code = document.getElementById(codeId);
-            navigator.clipboard.writeText(code.textContent.trim()).then(() => {
+            navigator.clipboard.writeText(code.textContent).then(() => {
                 btn.textContent = 'Copied!';
                 btn.classList.add('copied');
-                setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+                setTimeout(() => {
+                    btn.textContent = 'Copy';
+                    btn.classList.remove('copied');
+                }, 2000);
             });
         }
-        window.addEventListener('load', updateIndicator);
-        window.addEventListener('resize', updateIndicator);
     </script>
 </body>
 </html>
