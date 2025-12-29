@@ -58,7 +58,6 @@ test = [
     "pytest-httpx>=0.30.0",
 ]
 dev = [
-    "mkdocstrings-python>=2.0.1",
     "pre-commit>=3.0.0",
     "ruff>=0.1.0",
     "zensical>=0.0.11",
