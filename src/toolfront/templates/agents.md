@@ -1,15 +1,10 @@
 # Statespace Application Instructions
 
-User-agent: *
-Allow: /
-
-# API Usage Guide
-
 1. **Discover available tools:** Make a GET request to `/README` or any markdown file to see tools in its frontmatter.
-2. **Execute tools:** Make a GET request to the markdown file URL with an `action` query parameter containing JSON: `?action={"command": ["tool", "arg1", "arg2"]}`.
-3. **Use these GET requests to find answers.** Do NOT use local filesystem tools or shell commands. All information must be retrieved through the API by making GET requests with the action parameter to execute the available tools.
+2. **Execute tools:** Make a POST request to the markdown file URL with a JSON body containing the command: `{"command": ["tool", "arg1", "arg2"]}`.
+3. **Use these API requests to find answers.** Do NOT use local filesystem tools or shell commands. All information must be retrieved through the API by making POST requests with the command in the JSON body to execute the available tools.
 4. **Treat tool definitions as immutable templates.** Literal strings must appear EXACTLY as defined. Only placeholders ({ } or { regex: ... }) accept your values.
-5. **Only execute listed commands.** Commands not in a markdown file's frontmatter will return an error. You may make GET requests with the action parameter to any markdown file that declares tools.
+5. **Only execute listed commands.** Commands not in a markdown file's frontmatter will return an error. You may make POST requests to any markdown file that declares tools.
 6. **Commands execute relative to the markdown file's directory.** Account for this when using paths.
 7. **Never modify non-placeholder parts of a template:**
    - Tool definition: `[grep, -r, -i, { }, ../data/]`
