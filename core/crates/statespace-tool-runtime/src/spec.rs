@@ -147,18 +147,16 @@ pub fn is_valid_tool_call(command: &[String], specs: &[ToolSpec]) -> bool {
 }
 
 fn matches_spec(command: &[String], spec: &ToolSpec) -> bool {
-    // All spec parts are required - command must have at least as many args
     if command.len() < spec.parts.len() {
         return false;
     }
 
-    // Extra args beyond spec parts only allowed if options_disabled is false
     if command.len() > spec.parts.len() && spec.options_disabled {
         return false;
     }
 
     for (i, part) in spec.parts.iter().enumerate() {
-        let cmd_part = &command[i]; // Safe: we checked length above
+        let cmd_part = &command[i];
 
         match part {
             ToolPart::Literal(lit) => {
@@ -330,16 +328,10 @@ mod tests {
 
     #[test]
     fn validate_placeholder_is_required() {
-        // Placeholders are NOT optional - must provide a value
         let specs = vec![make_spec(vec![lit("ls"), placeholder()], false)];
 
-        // Missing placeholder arg should fail
         assert!(!is_valid_tool_call(&["ls".into()], &specs));
-
-        // Providing the placeholder arg should pass
         assert!(is_valid_tool_call(&["ls".into(), "dir".into()], &specs));
-
-        // Extra args beyond placeholder still allowed (options_disabled = false)
         assert!(is_valid_tool_call(
             &["ls".into(), "dir".into(), "-la".into()],
             &specs

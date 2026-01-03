@@ -70,29 +70,49 @@ impl FromStr for HttpMethod {
 #[serde(tag = "type", rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum BuiltinTool {
-    Glob { pattern: String },
+    Glob {
+        pattern: String,
+    },
 
     /// HTTP request tool with SSRF protections.
     ///
     /// Only supports `curl URL` and `curl -X METHOD URL` syntax.
     /// All other flags are rejected to keep behavior predictable and safe.
-    Curl { url: String, method: HttpMethod },
+    Curl {
+        url: String,
+        method: HttpMethod,
+    },
 
-    Exec { command: String, args: Vec<String> },
+    Exec {
+        command: String,
+        args: Vec<String>,
+    },
 }
 
 impl BuiltinTool {
     /// Parse a command into a BuiltinTool
     pub fn from_command(command: &[String]) -> Result<Self, Error> {
         if command.is_empty() {
-            return Err(Error::InvalidCommand(
-                "Command cannot be empty".to_string(),
-            ));
+            return Err(Error::InvalidCommand("Command cannot be empty".to_string()));
         }
 
         const ALLOWED_COMMANDS: &[&str] = &[
-            "grep", "head", "tail", "wc", "sort", "uniq", "cut", "sed", "awk", "find", "tree",
-            "file", "stat", "md5sum", "sha256sum", "du",
+            "grep",
+            "head",
+            "tail",
+            "wc",
+            "sort",
+            "uniq",
+            "cut",
+            "sed",
+            "awk",
+            "find",
+            "tree",
+            "file",
+            "stat",
+            "md5sum",
+            "sha256sum",
+            "du",
         ];
 
         match command[0].as_str() {
@@ -148,23 +168,21 @@ impl BuiltinTool {
                 },
                 None::<&str>,
             ),
-            |(mut acc, expecting_value), arg| {
-                match expecting_value {
-                    Some("-X" | "--request") => {
-                        acc.method = Some(arg.clone());
-                        Ok((acc, None))
-                    }
-                    Some(flag) => Err(Error::InvalidCommand(format!("Unknown flag: {flag}"))),
-                    None if arg == "-X" || arg == "--request" => Ok((acc, Some(arg.as_str()))),
-                    None if !arg.starts_with('-') && acc.url.is_none() => {
-                        acc.url = Some(arg.clone());
-                        Ok((acc, None))
-                    }
-                    None if arg.starts_with('-') => {
-                        Err(Error::InvalidCommand(format!("Unknown flag: {arg}")))
-                    }
-                    None => Ok((acc, None)),
+            |(mut acc, expecting_value), arg| match expecting_value {
+                Some("-X" | "--request") => {
+                    acc.method = Some(arg.clone());
+                    Ok((acc, None))
                 }
+                Some(flag) => Err(Error::InvalidCommand(format!("Unknown flag: {flag}"))),
+                None if arg == "-X" || arg == "--request" => Ok((acc, Some(arg.as_str()))),
+                None if !arg.starts_with('-') && acc.url.is_none() => {
+                    acc.url = Some(arg.clone());
+                    Ok((acc, None))
+                }
+                None if arg.starts_with('-') => {
+                    Err(Error::InvalidCommand(format!("Unknown flag: {arg}")))
+                }
+                None => Ok((acc, None)),
             },
         );
 
@@ -176,9 +194,9 @@ impl BuiltinTool {
             )));
         }
 
-        let url = args.url.ok_or_else(|| {
-            Error::InvalidCommand("curl requires a URL argument".to_string())
-        })?;
+        let url = args
+            .url
+            .ok_or_else(|| Error::InvalidCommand("curl requires a URL argument".to_string()))?;
 
         let method = match args.method {
             Some(m) => m.parse()?,
@@ -245,11 +263,9 @@ mod tests {
 
     #[test]
     fn test_from_command_curl() {
-        let tool = BuiltinTool::from_command(&[
-            "curl".to_string(),
-            "https://api.github.com".to_string(),
-        ])
-        .unwrap();
+        let tool =
+            BuiltinTool::from_command(&["curl".to_string(), "https://api.github.com".to_string()])
+                .unwrap();
         assert_eq!(
             tool,
             BuiltinTool::Curl {

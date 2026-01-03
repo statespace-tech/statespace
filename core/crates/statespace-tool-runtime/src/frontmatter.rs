@@ -56,8 +56,6 @@ impl Frontmatter {
                 return false;
             }
 
-            // Command must have exactly as many args as the tool spec
-            // (all parts including placeholders are required)
             if command.len() != tool.len() {
                 return false;
             }

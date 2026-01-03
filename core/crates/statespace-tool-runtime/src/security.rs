@@ -19,8 +19,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// - Blocks localhost by name
 /// - Blocks cloud metadata services
 pub fn validate_url_initial(url: &str) -> Result<reqwest::Url, Error> {
-    let parsed = reqwest::Url::parse(url)
-        .map_err(|e| Error::InvalidCommand(format!("Invalid URL: {e}")))?;
+    let parsed =
+        reqwest::Url::parse(url).map_err(|e| Error::InvalidCommand(format!("Invalid URL: {e}")))?;
 
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
         return Err(Error::Security(format!(
@@ -46,11 +46,12 @@ pub fn validate_url_initial(url: &str) -> Result<reqwest::Url, Error> {
     }
 
     if let Ok(ip) = host.parse::<IpAddr>()
-        && is_private_or_restricted_ip(&ip) {
-            return Err(Error::Security(format!(
-                "Access to private/restricted IP blocked: {ip}"
-            )));
-        }
+        && is_private_or_restricted_ip(&ip)
+    {
+        return Err(Error::Security(format!(
+            "Access to private/restricted IP blocked: {ip}"
+        )));
+    }
 
     Ok(parsed)
 }

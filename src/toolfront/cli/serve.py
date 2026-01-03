@@ -109,12 +109,14 @@ def _resolve_file_path(directory: Path, file_path: str) -> Path:
     if full_path.is_file():
         return full_path
 
-    # Case 2: Path is a directory, serve README.md
+    # Case 2: Path is a directory, serve README.md if it exists
     if full_path.is_dir():
         readme_path = full_path / "README.md"
         if readme_path.is_file():
             return readme_path
-        raise HTTPException(status_code=404, detail=f"Directory found but no README.md: {file_path}")
+        # Directory exists but no README.md - just 404
+        # Agent should use tools like `ls` to discover directory contents
+        raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
 
     # Case 3: Path doesn't exist, try adding .md extension
     if not str(full_path).endswith(".md"):

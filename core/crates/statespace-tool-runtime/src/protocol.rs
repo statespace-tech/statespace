@@ -1,6 +1,6 @@
 //! Tool execution protocol types
 //!
-//! Compatible with the ToolFront Python serve.py protocol.
+//! Compatible with the Statespace/ToolFront protocol.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

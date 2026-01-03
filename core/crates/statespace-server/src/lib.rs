@@ -1,6 +1,6 @@
 //! Statespace Server - Open Source AI Tool Execution Runtime
 //!
-//! This library provides the core functionality for serving AI tool execution
+//! This library provides the HTTP server layer for serving AI tool execution
 //! environments from markdown files with frontmatter-defined tool specifications.
 //!
 //! # Features
@@ -28,32 +28,28 @@
 //!
 //! # Architecture
 //!
-//! This library follows FP-Rust patterns inspired by Oxide's Omicron:
+//! This library builds on `statespace-tool-runtime` for core tool logic:
 //!
-//! - **Pure modules** (no I/O): `frontmatter`, `validation`, `spec`, `security`, `protocol`, `templates`
-//! - **Effectful edge**: `executor`, `content`, `server`, `init`
+//! - **From runtime**: `BuiltinTool`, `ToolExecutor`, `Frontmatter`, `ExecutionLimits`, etc.
+//! - **Server-specific**: `ContentResolver`, `ServerConfig`, Axum router, templates
 
+// Server-specific modules
 pub mod content;
 pub mod error;
-pub mod executor;
-pub mod frontmatter;
 pub mod init;
-pub mod protocol;
-pub mod security;
 pub mod server;
-pub mod spec;
 pub mod templates;
-pub mod tools;
-pub mod validation;
 
+// Re-export core runtime types
+pub use statespace_tool_runtime::{
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, FileInfo, Frontmatter, HttpMethod,
+    ToolExecutor, ToolOutput, ToolPart, ToolSpec, expand_placeholders, is_valid_tool_call,
+    parse_frontmatter, validate_command_with_specs,
+};
+
+// Server-specific exports
 pub use content::{ContentResolver, LocalContentResolver};
 pub use error::{Error, Result};
-pub use executor::{ExecutionLimits, ToolExecutor};
-pub use frontmatter::{parse_frontmatter, Frontmatter};
 pub use init::initialize_templates;
-pub use protocol::{ActionRequest, ActionResponse};
-pub use server::{build_router, ServerConfig, ServerState};
-pub use spec::{is_valid_tool_call, ToolPart, ToolSpec};
-pub use templates::{render_index_html, AGENTS_MD, FAVICON_SVG};
-pub use tools::{BuiltinTool, HttpMethod};
-pub use validation::{expand_placeholders, validate_command_with_specs};
+pub use server::{ServerConfig, ServerState, build_router};
+pub use templates::{AGENTS_MD, FAVICON_SVG, render_index_html};

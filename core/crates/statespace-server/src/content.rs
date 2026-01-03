@@ -2,7 +2,7 @@
 //!
 //! This module provides the `ContentResolver` trait and a local filesystem implementation.
 
-use crate::error::Error;
+use statespace_tool_runtime::Error;
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -74,10 +74,9 @@ impl LocalContentResolver {
             if readme.is_file() {
                 return Ok(readme);
             }
-            return Err(Error::NotFound(format!(
-                "Directory found but no README.md: {}",
-                original
-            )));
+            // Directory exists but no README.md - just 404
+            // Agent should use tools like `ls` to discover directory contents
+            return Err(Error::NotFound(original.to_string()));
         }
 
         let mut with_md = target.to_path_buf();

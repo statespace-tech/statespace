@@ -4,7 +4,7 @@
 //! exist in the content directory. Files are only written if they don't
 //! already exist (idempotent).
 
-use crate::templates::{render_index_html, AGENTS_MD, FAVICON_SVG};
+use crate::templates::{AGENTS_MD, FAVICON_SVG, render_index_html};
 use std::io;
 use std::path::Path;
 use tokio::fs;
@@ -57,14 +57,25 @@ pub async fn initialize_templates(
 
     results.push((
         TemplateFile::FaviconSvg,
-        write_if_missing(content_root, TemplateFile::FaviconSvg.filename(), FAVICON_SVG).await?,
+        write_if_missing(
+            content_root,
+            TemplateFile::FaviconSvg.filename(),
+            FAVICON_SVG,
+        )
+        .await?,
     ));
 
-    let agents_content = read_or_default(content_root, TemplateFile::AgentsMd.filename(), AGENTS_MD).await;
+    let agents_content =
+        read_or_default(content_root, TemplateFile::AgentsMd.filename(), AGENTS_MD).await;
     let index_html = render_index_html(base_url, &agents_content);
     results.push((
         TemplateFile::IndexHtml,
-        write_if_missing(content_root, TemplateFile::IndexHtml.filename(), &index_html).await?,
+        write_if_missing(
+            content_root,
+            TemplateFile::IndexHtml.filename(),
+            &index_html,
+        )
+        .await?,
     ));
 
     for (file, result) in &results {
@@ -90,7 +101,9 @@ async fn write_if_missing(root: &Path, filename: &str, content: &str) -> io::Res
 
 async fn read_or_default(root: &Path, filename: &str, default: &str) -> String {
     let path = root.join(filename);
-    fs::read_to_string(&path).await.unwrap_or_else(|_| default.to_string())
+    fs::read_to_string(&path)
+        .await
+        .unwrap_or_else(|_| default.to_string())
 }
 
 #[cfg(test)]
@@ -127,8 +140,13 @@ mod tests {
             .await
             .unwrap();
 
-        let agents_result = results.iter().find(|(f, _)| matches!(f, TemplateFile::AgentsMd));
-        assert!(matches!(agents_result, Some((_, InitResult::AlreadyExists))));
+        let agents_result = results
+            .iter()
+            .find(|(f, _)| matches!(f, TemplateFile::AgentsMd));
+        assert!(matches!(
+            agents_result,
+            Some((_, InitResult::AlreadyExists))
+        ));
 
         let agents = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
         assert_eq!(agents, "# Custom agents");

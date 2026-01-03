@@ -1,18 +1,18 @@
 //! HTTP server - Axum router for the statespace server
 
 use crate::content::{ContentResolver, LocalContentResolver};
-use crate::executor::{ExecutionLimits, ToolExecutor};
-use crate::frontmatter::parse_frontmatter;
-use crate::protocol::{ActionRequest, ActionResponse};
+use crate::error::ErrorExt;
 use crate::templates::FAVICON_SVG;
-use crate::tools::BuiltinTool;
-use crate::validation::{expand_env_vars, expand_placeholders, validate_command_with_specs};
 use axum::{
+    Json, Router,
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
-    Json, Router,
+};
+use statespace_tool_runtime::{
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, expand_env_vars,
+    expand_placeholders, parse_frontmatter, validate_command_with_specs,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -169,7 +169,7 @@ async fn serve_markdown(path: &str, state: &ServerState) -> Response {
         Ok(content) => Html(content).into_response(),
         Err(e) => {
             warn!("File not found: {} ({})", path, e);
-            e.into_response()
+            (e.status_code(), e.user_message()).into_response()
         }
     }
 }
@@ -189,7 +189,7 @@ async fn action_handler(
     execute_action(&path, &state, request).await
 }
 
-fn error_to_action_response(e: crate::error::Error) -> Response {
+fn error_to_action_response(e: statespace_tool_runtime::Error) -> Response {
     let status = e.status_code();
     let response = ActionResponse::error(e.user_message());
     (status, Json(response)).into_response()

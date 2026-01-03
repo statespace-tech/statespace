@@ -4,15 +4,13 @@
 
 use crate::error::Error;
 use crate::frontmatter::Frontmatter;
-use crate::spec::{is_valid_tool_call, ToolSpec};
+use crate::spec::{ToolSpec, is_valid_tool_call};
 use std::collections::HashMap;
 
 /// Validate that command is declared in frontmatter (legacy).
 pub fn validate_command(frontmatter: &Frontmatter, command: &[String]) -> Result<(), Error> {
     if command.is_empty() {
-        return Err(Error::InvalidCommand(
-            "command cannot be empty".to_string(),
-        ));
+        return Err(Error::InvalidCommand("command cannot be empty".to_string()));
     }
 
     if !frontmatter.has_tool(command) {
@@ -32,9 +30,7 @@ pub fn validate_command(frontmatter: &Frontmatter, command: &[String]) -> Result
 /// - Placeholders: `{ }` for any value
 pub fn validate_command_with_specs(specs: &[ToolSpec], command: &[String]) -> Result<(), Error> {
     if command.is_empty() {
-        return Err(Error::InvalidCommand(
-            "command cannot be empty".to_string(),
-        ));
+        return Err(Error::InvalidCommand("command cannot be empty".to_string()));
     }
 
     if !is_valid_tool_call(command, specs) {

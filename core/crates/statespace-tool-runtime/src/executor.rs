@@ -55,9 +55,10 @@ impl ToolOutput {
 pub struct FileInfo {
     pub key: String,
     pub size: u64,
+    pub last_modified: chrono::DateTime<chrono::Utc>,
 }
 
-/// Executes tools against a local filesystem
+/// Executes tools against a filesystem root
 pub struct ToolExecutor {
     root: PathBuf,
     limits: ExecutionLimits,
@@ -152,9 +153,17 @@ impl ToolExecutor {
                         .to_string_lossy()
                         .into_owned();
 
+                    let metadata = std::fs::metadata(&path).ok();
+                    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let last_modified = metadata
+                        .and_then(|m| m.modified().ok())
+                        .map(chrono::DateTime::<chrono::Utc>::from)
+                        .unwrap_or_else(chrono::Utc::now);
+
                     files.push(FileInfo {
                         key: relative,
-                        size: 0,
+                        size,
+                        last_modified,
                     });
                 }
                 Err(e) => warn!("Glob error: {}", e),

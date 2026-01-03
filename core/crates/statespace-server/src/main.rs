@@ -1,7 +1,7 @@
 //! Statespace CLI - serve a tool site from a local directory
 
 use clap::{Parser, Subcommand};
-use statespace_server::{build_router, initialize_templates, ExecutionLimits, ServerConfig};
+use statespace_server::{ExecutionLimits, ServerConfig, build_router, initialize_templates};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,6 +17,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Manage and serve tool site applications
+    App {
+        #[command(subcommand)]
+        command: AppCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AppCommands {
     /// Serve a tool site from a local directory
     Serve {
         /// Path to the tool site directory (must contain README.md)
@@ -57,16 +66,18 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Serve {
-            directory,
-            host,
-            port,
-            timeout,
-            max_output,
-            no_init,
-        } => {
-            run_serve(directory, host, port, timeout, max_output, no_init).await?;
-        }
+        Commands::App { command } => match command {
+            AppCommands::Serve {
+                directory,
+                host,
+                port,
+                timeout,
+                max_output,
+                no_init,
+            } => {
+                run_serve(directory, host, port, timeout, max_output, no_init).await?;
+            }
+        },
     }
 
     Ok(())
