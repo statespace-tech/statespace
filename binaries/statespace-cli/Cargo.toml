@@ -15,8 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 # Internal crates
-statespace-server = { path = "../statespace-server" }
-statespace-tool-runtime = { path = "../statespace-tool-runtime" }
+statespace-server.workspace = true
+statespace-tool-runtime.workspace = true
 
 # CLI
 clap.workspace = true

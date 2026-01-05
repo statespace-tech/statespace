@@ -15,7 +15,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # Core runtime
-statespace-tool-runtime = { path = "../statespace-tool-runtime" }
+statespace-tool-runtime.workspace = true
 
 # Web framework
 axum.workspace = true

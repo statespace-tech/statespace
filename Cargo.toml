@@ -1,15 +1,19 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["binaries/*", "crates/*"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 authors = ["Statespace Authors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/statespace-ai/statespace"
+repository = "https://github.com/statespace-tech/statespace"
 
 [workspace.dependencies]
+# Internal crates
+statespace-tool-runtime = { path = "crates/statespace-tool-runtime" }
+statespace-server = { path = "crates/statespace-server" }
+
 # Web framework
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
@@ -28,6 +32,7 @@ async-trait = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive", "env"] }
+dirs = "5"
 
 # Logging
 tracing = "0.1"
