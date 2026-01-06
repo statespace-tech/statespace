@@ -2,7 +2,10 @@
 
 use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
-use crate::gateway::types::{DeployResult, Environment, EnvironmentFile, Token, TokenCreateResult};
+use crate::gateway::types::{
+    DeployResult, DeviceCodeResponse, DeviceTokenResponse, Environment, EnvironmentFile, Token,
+    TokenCreateResult,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::Client;
 use serde::Serialize;
@@ -119,6 +122,12 @@ impl GatewayClient {
             .await?;
 
         parse_api_list_response(resp).await
+    }
+
+    /// Find an environment by name. Returns None if not found.
+    pub(crate) async fn find_environment_by_name(&self, name: &str) -> Result<Option<Environment>> {
+        let environments = self.list_environments().await?;
+        Ok(environments.into_iter().find(|env| env.name == name))
     }
 
     pub(crate) async fn update_environment(
@@ -420,5 +429,59 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
             message: format!("failed to parse item: {e}"),
         })?;
         Ok(vec![single])
+    }
+}
+
+/// Client for device authorization flow (RFC 8628). Unlike `GatewayClient`,
+/// this doesn't require an existing API key since it's used to obtain one.
+pub(crate) struct AuthClient {
+    base_url: String,
+    http: Client,
+}
+
+impl AuthClient {
+    /// Create a new auth client with the given API URL.
+    pub(crate) fn with_url(base_url: &str) -> Result<Self> {
+        let http = Client::builder()
+            .user_agent(USER_AGENT)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| GatewayError::ClientBuild(e.to_string()))?;
+
+        Ok(Self {
+            base_url: base_url.to_string(),
+            http,
+        })
+    }
+
+    /// Request a device code for the authorization flow.
+    ///
+    /// Returns a device code and user code. Display the user code and
+    /// verification URL to the user, then poll `poll_device_token`.
+    pub(crate) async fn request_device_code(&self) -> Result<DeviceCodeResponse> {
+        let url = format!("{}/api/v1/auth/device/code", self.base_url);
+        let resp = self.http.post(&url).send().await?;
+        parse_api_response(resp).await
+    }
+
+    /// Poll for device authorization completion.
+    ///
+    /// Returns `Pending` while waiting, `Authorized` when user completes auth,
+    /// or `Expired` if the code timed out.
+    pub(crate) async fn poll_device_token(&self, device_code: &str) -> Result<DeviceTokenResponse> {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            device_code: &'a str,
+        }
+
+        let url = format!("{}/api/v1/auth/device/token", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .json(&Payload { device_code })
+            .send()
+            .await?;
+
+        parse_api_response(resp).await
     }
 }

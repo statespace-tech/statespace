@@ -42,6 +42,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: TokensCommands,
     },
+
+    /// Authenticate with Statespace
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommands,
+    },
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -55,11 +61,15 @@ pub(crate) enum AppCommands {
     /// List deployed apps
     List,
 
-    /// Update an existing app with new content
-    Update(AppUpdateArgs),
-
     /// Delete a deployed app
     Delete(AppDeleteArgs),
+
+    /// Sync local directory to cloud (create or update)
+    ///
+    /// Declarative sync: creates a new deployment if none exists,
+    /// or updates the existing one. Caches deployment ID locally
+    /// in `.statespace/state.json` for subsequent syncs.
+    Sync(AppSyncArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -105,17 +115,6 @@ pub(crate) struct AppDeployArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-pub(crate) struct AppUpdateArgs {
-    /// App ID to update
-    #[arg(value_name = "ID")]
-    pub id: String,
-
-    /// Path to the tool site directory
-    #[arg(value_name = "PATH", default_value = ".")]
-    pub path: PathBuf,
-}
-
-#[derive(Debug, Clone, Args)]
 pub(crate) struct AppDeleteArgs {
     /// App ID to delete
     #[arg(value_name = "ID")]
@@ -124,6 +123,25 @@ pub(crate) struct AppDeleteArgs {
     /// Skip confirmation prompt
     #[arg(long, short)]
     pub yes: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct AppSyncArgs {
+    /// Path to the tool site directory
+    #[arg(value_name = "PATH", default_value = ".")]
+    pub path: PathBuf,
+
+    /// App name (defaults to directory name or cached name)
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Force fresh deployment (ignore cached state)
+    #[arg(long)]
+    pub force: bool,
+
+    /// Wait for the app to be ready after sync
+    #[arg(long)]
+    pub verify: bool,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -214,4 +232,38 @@ pub(crate) struct TokenRevokeArgs {
     /// Skip confirmation prompt
     #[arg(long, short)]
     pub yes: bool,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub(crate) enum AuthCommands {
+    /// Log in to Statespace via browser
+    ///
+    /// Opens your browser to authenticate with GitHub or Google.
+    /// After authentication, credentials are saved locally.
+    Login,
+
+    /// Log out and clear saved credentials
+    Logout,
+
+    /// Show current authentication status
+    Status,
+
+    /// Print access token for scripting
+    ///
+    /// Outputs the current access token to stdout for use in scripts
+    /// or piping to other commands.
+    Token {
+        /// Output format
+        #[arg(long, value_enum, default_value = "plain")]
+        format: TokenOutputFormat,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, clap::ValueEnum)]
+pub(crate) enum TokenOutputFormat {
+    /// Plain text token
+    #[default]
+    Plain,
+    /// JSON with token and metadata
+    Json,
 }

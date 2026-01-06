@@ -3,4 +3,5 @@
 mod client;
 mod types;
 
-pub(crate) use client::GatewayClient;
+pub(crate) use client::{AuthClient, GatewayClient};
+pub(crate) use types::{AuthorizedUser, DeployResult, DeviceTokenResponse};

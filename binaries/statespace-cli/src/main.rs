@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod error;
 mod gateway;
+mod state;
 
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

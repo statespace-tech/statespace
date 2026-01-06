@@ -3,7 +3,8 @@
 //! Precedence: CLI flags > config file > environment variables > defaults.
 
 use crate::error::{ConfigError, Result};
-use serde::Deserialize;
+use crate::gateway::AuthorizedUser;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -105,6 +106,106 @@ pub(crate) fn resolve_credentials(
     })
 }
 
+pub(crate) fn credentials_path() -> PathBuf {
+    config_dir().join("credentials.json")
+}
+
+fn config_dir() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return PathBuf::from(xdg).join("statespace");
+    }
+
+    let base = if cfg!(target_os = "windows") {
+        dirs::home_dir()
+            .map(|h| h.join("AppData").join("Roaming"))
+            .unwrap_or_else(|| PathBuf::from("."))
+    } else {
+        dirs::home_dir()
+            .map(|h| h.join(".config"))
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    base.join("statespace")
+}
+
+/// Credentials stored locally after `auth login`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredCredentials {
+    pub access_token: String,
+    pub email: String,
+    pub name: Option<String>,
+    pub user_id: String,
+    pub expires_at: Option<String>,
+    pub api_url: String,
+}
+
+impl StoredCredentials {
+    pub(crate) fn from_auth(user: AuthorizedUser, api_url: String) -> Self {
+        Self {
+            access_token: user.access_token,
+            email: user.email,
+            name: user.name,
+            user_id: user.user_id,
+            expires_at: user.expires_at,
+            api_url,
+        }
+    }
+}
+
+pub(crate) fn load_stored_credentials() -> Result<Option<StoredCredentials>> {
+    let path = credentials_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&path).map_err(|e| {
+        ConfigError::Invalid(format!("Failed to read credentials: {e}"))
+    })?;
+
+    let creds: StoredCredentials = serde_json::from_str(&content).map_err(|e| {
+        ConfigError::Invalid(format!("Failed to parse credentials: {e}"))
+    })?;
+
+    Ok(Some(creds))
+}
+
+pub(crate) fn save_stored_credentials(creds: &StoredCredentials) -> Result<()> {
+    let dir = config_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            ConfigError::Invalid(format!("Failed to create config directory: {e}"))
+        })?;
+    }
+
+    let path = credentials_path();
+    let content = serde_json::to_string_pretty(creds).map_err(|e| {
+        ConfigError::Invalid(format!("Failed to serialize credentials: {e}"))
+    })?;
+
+    std::fs::write(&path, content).map_err(|e| {
+        ConfigError::Invalid(format!("Failed to write credentials: {e}"))
+    })?;
+
+    // Set restrictive permissions on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        let _ = std::fs::set_permissions(&path, perms);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn delete_stored_credentials() -> Result<()> {
+    let path = credentials_path();
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|e| {
+            ConfigError::Invalid(format!("Failed to delete credentials: {e}"))
+        })?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +215,12 @@ mod tests {
         let path = config_path();
         assert!(path.to_string_lossy().contains("statespace"));
         assert!(path.to_string_lossy().ends_with("config.toml"));
+    }
+
+    #[test]
+    fn test_credentials_path() {
+        let path = credentials_path();
+        assert!(path.to_string_lossy().contains("statespace"));
+        assert!(path.to_string_lossy().ends_with("credentials.json"));
     }
 }

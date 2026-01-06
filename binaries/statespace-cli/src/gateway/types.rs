@@ -56,3 +56,42 @@ pub(crate) struct TokenCreateResult {
     pub created_at: String,
     pub expires_at: Option<String>,
 }
+
+/// Response from `POST /api/v1/auth/device/code` (RFC 8628).
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct DeviceCodeResponse {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_url: String,
+    #[serde(default = "default_interval")]
+    pub interval: u64,
+    #[serde(default = "default_expires_in")]
+    pub expires_in: u64,
+}
+
+fn default_interval() -> u64 {
+    5
+}
+
+fn default_expires_in() -> u64 {
+    900
+}
+
+/// Response from `POST /api/v1/auth/device/token` polling endpoint.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub(crate) enum DeviceTokenResponse {
+    Pending,
+    Authorized(AuthorizedUser),
+    Expired,
+}
+
+/// User info returned after successful device authorization.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub(crate) struct AuthorizedUser {
+    pub access_token: String,
+    pub email: String,
+    pub name: Option<String>,
+    pub user_id: String,
+    pub expires_at: Option<String>,
+}
