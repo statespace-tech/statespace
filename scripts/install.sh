@@ -222,6 +222,9 @@ main() {
     mv "$extracted_binary" "$BIN_DIR/$BINARY_NAME"
     chmod 755 "$BIN_DIR/$BINARY_NAME"
 
+    # Create s2 alias symlink
+    ln -sf "$BINARY_NAME" "$BIN_DIR/s2"
+
     info "installed to $BIN_DIR/$BINARY_NAME"
 
     setup_path
