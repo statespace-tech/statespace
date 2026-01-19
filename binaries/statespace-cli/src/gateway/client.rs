@@ -54,6 +54,16 @@ impl GatewayClient {
             .ok_or_else(|| GatewayError::MissingOrgId.into())
     }
 
+    /// Add standard headers (auth + org context) to a request builder.
+    fn with_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let builder = builder.header("Authorization", self.auth_header());
+        if let Some(ref org_id) = self.org_id {
+            builder.header("X-Statespace-Org-Id", org_id)
+        } else {
+            builder
+        }
+    }
+
     pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<EnvironmentFile>> {
         let mut files = Vec::new();
 
@@ -102,9 +112,7 @@ impl GatewayClient {
 
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.post(&url))
             .json(&Payload { name, files })
             .send()
             .await?;
@@ -115,9 +123,7 @@ impl GatewayClient {
     pub(crate) async fn list_environments(&self) -> Result<Vec<Environment>> {
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self
-            .http
-            .get(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.get(&url))
             .send()
             .await?;
 
@@ -145,9 +151,7 @@ impl GatewayClient {
             urlencoding::encode(name)
         );
         let resp = self
-            .http
-            .put(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.put(&url))
             .json(&Payload { files })
             .send()
             .await?;
@@ -158,9 +162,7 @@ impl GatewayClient {
     pub(crate) async fn delete_environment(&self, environment_id: &str) -> Result<()> {
         let url = format!("{}/api/v1/environments/{}", self.base_url, environment_id);
         let resp = self
-            .http
-            .delete(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.delete(&url))
             .send()
             .await?;
 
@@ -210,9 +212,7 @@ impl GatewayClient {
 
         let url = format!("{}/api/v1/tokens", self.base_url);
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.post(&url))
             .json(&Payload {
                 organization_id: org_id,
                 name,
@@ -236,9 +236,7 @@ impl GatewayClient {
 
         let url = format!("{}/api/v1/tokens", self.base_url);
         let resp = self
-            .http
-            .get(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.get(&url))
             .query(&[
                 ("organization_id", org_id),
                 ("only_active", if only_active { "true" } else { "false" }),
@@ -254,9 +252,7 @@ impl GatewayClient {
     pub(crate) async fn get_token(&self, token_id: &str) -> Result<Token> {
         let url = format!("{}/api/v1/tokens/{}", self.base_url, token_id);
         let resp = self
-            .http
-            .get(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.get(&url))
             .send()
             .await?;
 
@@ -292,9 +288,7 @@ impl GatewayClient {
 
         let url = format!("{}/api/v1/tokens/{}/rotate", self.base_url, token_id);
         let resp = self
-            .http
-            .post(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.post(&url))
             .json(&Payload {
                 name,
                 scope: scope.map(|s| format!("environments:{s}")),
@@ -319,9 +313,7 @@ impl GatewayClient {
 
         let url = format!("{}/api/v1/tokens/{}", self.base_url, token_id);
         let resp = self
-            .http
-            .delete(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.delete(&url))
             .json(&Payload { reason })
             .send()
             .await?;
@@ -332,9 +324,7 @@ impl GatewayClient {
     pub(crate) async fn list_organizations(&self) -> Result<Vec<Organization>> {
         let url = format!("{}/api/v1/user/organizations", self.base_url);
         let resp = self
-            .http
-            .get(&url)
-            .header("Authorization", self.auth_header())
+            .with_headers(self.http.get(&url))
             .send()
             .await?;
         parse_api_list_response(resp).await
