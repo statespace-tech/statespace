@@ -183,14 +183,13 @@ main() {
     info "installing version: $version"
 
     # Create secure temp directory (mode 700)
-    local tmp_dir
-    tmp_dir=$(mktemp -d) || error "failed to create temp directory"
-    chmod 700 "$tmp_dir"
-    trap 'rm -rf "$tmp_dir"' EXIT
+    TMP_DIR=$(mktemp -d) || error "failed to create temp directory"
+    chmod 700 "$TMP_DIR"
+    trap 'rm -rf "$TMP_DIR"' EXIT
 
     local archive_name="${BINARY_NAME}-v${version}-${target}.tar.gz"
-    local archive_path="$tmp_dir/$archive_name"
-    local checksum_path="$tmp_dir/${archive_name}.sha256"
+    local archive_path="$TMP_DIR/$archive_name"
+    local checksum_path="$TMP_DIR/${archive_name}.sha256"
     local base_url="${GITHUB_RELEASES}/cli-v${version}"
 
     # Download checksum first
@@ -211,9 +210,9 @@ main() {
 
     # Extract to temp directory
     info "extracting..."
-    tar -xzf "$archive_path" -C "$tmp_dir" || error "failed to extract archive"
+    tar -xzf "$archive_path" -C "$TMP_DIR" || error "failed to extract archive"
 
-    local extracted_binary="$tmp_dir/${BINARY_NAME}-v${version}-${target}/${BINARY_NAME}"
+    local extracted_binary="$TMP_DIR/${BINARY_NAME}-v${version}-${target}/${BINARY_NAME}"
     [[ -f "$extracted_binary" ]] || error "binary not found in archive"
 
     # Install
