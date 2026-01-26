@@ -4,9 +4,9 @@ use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
 use crate::gateway::types::{
     DeployResult, DeviceCodeResponse, DeviceTokenResponse, Environment, EnvironmentFile,
-    Organization, Token, TokenCreateResult, UpsertResult,
+    Organization, SshConnectionConfig, Token, TokenCreateResult, UpsertResult,
 };
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
@@ -122,10 +122,7 @@ impl GatewayClient {
 
     pub(crate) async fn list_environments(&self) -> Result<Vec<Environment>> {
         let url = format!("{}/api/v1/environments", self.base_url);
-        let resp = self
-            .with_headers(self.http.get(&url))
-            .send()
-            .await?;
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
 
         parse_api_list_response(resp).await
     }
@@ -161,10 +158,7 @@ impl GatewayClient {
 
     pub(crate) async fn delete_environment(&self, environment_id: &str) -> Result<()> {
         let url = format!("{}/api/v1/environments/{}", self.base_url, environment_id);
-        let resp = self
-            .with_headers(self.http.delete(&url))
-            .send()
-            .await?;
+        let resp = self.with_headers(self.http.delete(&url)).send().await?;
 
         check_api_response(resp).await
     }
@@ -183,7 +177,10 @@ impl GatewayClient {
             }
 
             if attempt < VERIFY_MAX_ATTEMPTS {
-                let wait = std::cmp::min(VERIFY_BASE_DELAY_SECS * u64::from(attempt), VERIFY_MAX_DELAY_SECS);
+                let wait = std::cmp::min(
+                    VERIFY_BASE_DELAY_SECS * u64::from(attempt),
+                    VERIFY_MAX_DELAY_SECS,
+                );
                 tokio::time::sleep(Duration::from_secs(wait)).await;
             }
         }
@@ -251,10 +248,7 @@ impl GatewayClient {
 
     pub(crate) async fn get_token(&self, token_id: &str) -> Result<Token> {
         let url = format!("{}/api/v1/tokens/{}", self.base_url, token_id);
-        let resp = self
-            .with_headers(self.http.get(&url))
-            .send()
-            .await?;
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
 
         parse_api_response(resp).await
     }
@@ -323,11 +317,21 @@ impl GatewayClient {
 
     pub(crate) async fn list_organizations(&self) -> Result<Vec<Organization>> {
         let url = format!("{}/api/v1/user/organizations", self.base_url);
-        let resp = self
-            .with_headers(self.http.get(&url))
-            .send()
-            .await?;
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
         parse_api_list_response(resp).await
+    }
+
+    /// Get SSH connection config for an environment.
+    ///
+    /// Returns the sprite name, Sprites API URL, and token needed to
+    /// establish an SSH connection through the Sprites WebSocket proxy.
+    pub(crate) async fn get_ssh_config(&self, app_id_or_name: &str) -> Result<SshConnectionConfig> {
+        let url = format!(
+            "{}/api/v1/environments/{}/ssh-config",
+            self.base_url, app_id_or_name
+        );
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
+        parse_api_response(resp).await
     }
 }
 

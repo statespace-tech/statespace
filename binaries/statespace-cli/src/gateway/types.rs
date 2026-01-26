@@ -125,3 +125,14 @@ pub(crate) struct Organization {
     pub name: String,
     pub tier: Option<String>,
 }
+
+/// SSH connection configuration for sprites
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct SshConnectionConfig {
+    /// Sprite name (e.g., env-{uuid})
+    pub sprite_name: String,
+    /// Sprites API URL (e.g., https://api.sprites.dev)
+    pub sprites_api_url: String,
+    /// Sprites API token for authentication
+    pub sprites_token: String,
+}

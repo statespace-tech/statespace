@@ -3,6 +3,7 @@
 mod app;
 mod auth;
 mod org;
+pub(crate) mod ssh;
 mod tokens;
 
 use crate::args::{AppCommands, Cli, Commands};

@@ -76,6 +76,47 @@ pub(crate) enum AppCommands {
     /// or updates the existing one. Caches deployment ID locally
     /// in `.statespace/state.json` for subsequent syncs.
     Sync(AppSyncArgs),
+
+    /// SSH into an app's environment
+    ///
+    /// Opens an interactive SSH session to the app's underlying
+    /// sprite VM. Requires sshd to be installed in the sprite.
+    Ssh(AppSshArgs),
+
+    /// Internal: raw SSH proxy for ProxyCommand
+    #[command(hide = true)]
+    SshProxy(AppSshProxyArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct AppSshArgs {
+    /// App ID or name to SSH into
+    #[arg(value_name = "APP")]
+    pub app: String,
+
+    /// SSH user (default: ubuntu)
+    #[arg(short, long, default_value = "ubuntu")]
+    pub user: String,
+
+    /// Port to connect to (default: 22)
+    #[arg(short, long, default_value_t = 22)]
+    pub port: u16,
+}
+
+/// Internal proxy command - used by SSH's ProxyCommand
+#[derive(Debug, Clone, Args)]
+pub(crate) struct AppSshProxyArgs {
+    /// App ID
+    #[arg(value_name = "APP")]
+    pub app: String,
+
+    /// Port (default: 22)
+    #[arg(short, long, default_value_t = 22)]
+    pub port: u16,
+
+    /// Host inside sprite (default: localhost)
+    #[arg(long, default_value = "localhost")]
+    pub host: String,
 }
 
 #[derive(Debug, Clone, Args)]

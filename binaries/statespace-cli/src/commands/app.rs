@@ -1,10 +1,10 @@
 //! App subcommand handlers
 
-use crate::args::{AppCommands, AppDeleteArgs, AppDeployArgs, AppServeArgs, AppSyncArgs};
+use crate::args::{AppCommands, AppDeleteArgs, AppDeployArgs, AppServeArgs, AppSshArgs, AppSshProxyArgs, AppSyncArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
 use crate::state::{self, SyncState};
-use statespace_server::{build_router, initialize_templates, ExecutionLimits, ServerConfig};
+use statespace_server::{ExecutionLimits, ServerConfig, build_router, initialize_templates};
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::Path;
@@ -17,7 +17,17 @@ pub(crate) async fn run(cmd: AppCommands, gateway: GatewayClient) -> Result<()> 
         AppCommands::List => run_list(gateway).await,
         AppCommands::Delete(args) => run_delete(args, gateway).await,
         AppCommands::Sync(args) => run_sync(args, gateway).await,
+        AppCommands::Ssh(args) => run_ssh(args, gateway).await,
+        AppCommands::SshProxy(args) => run_ssh_proxy(args, gateway).await,
     }
+}
+
+async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
+    crate::commands::ssh::run_ssh(args, gateway).await
+}
+
+async fn run_ssh_proxy(args: AppSshProxyArgs, gateway: GatewayClient) -> Result<()> {
+    crate::commands::ssh::run_ssh_proxy(args, gateway).await
 }
 
 pub(crate) async fn run_serve(args: AppServeArgs) -> Result<()> {
@@ -211,7 +221,9 @@ async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Result<()> {
     println!("Found {} file(s)", files.len());
     println!("\nSyncing '{target_name}'...");
 
-    let result = gateway.upsert_environment(&target_name, files.clone()).await?;
+    let result = gateway
+        .upsert_environment(&target_name, files.clone())
+        .await?;
 
     print_upsert_result(&result);
 
@@ -231,14 +243,23 @@ async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Result<()> {
     state::save_state(&dir_path, &new_state)?;
 
     if args.verify {
-        verify_deployment(&gateway, result.url.as_deref(), result.auth_token.as_deref()).await;
+        verify_deployment(
+            &gateway,
+            result.url.as_deref(),
+            result.auth_token.as_deref(),
+        )
+        .await;
     }
 
     Ok(())
 }
 
 /// Resolve the target deployment name from args, cache, or directory name.
-fn resolve_target_name(args: &AppSyncArgs, dir_path: &Path, cached_state: Option<&SyncState>) -> String {
+fn resolve_target_name(
+    args: &AppSyncArgs,
+    dir_path: &Path,
+    cached_state: Option<&SyncState>,
+) -> String {
     // Priority: --name flag > cached name > directory name
     args.name
         .clone()
@@ -270,11 +291,7 @@ fn print_upsert_result(result: &crate::gateway::UpsertResult) {
     }
 }
 
-async fn verify_deployment(
-    gateway: &GatewayClient,
-    url: Option<&str>,
-    auth_token: Option<&str>,
-) {
+async fn verify_deployment(gateway: &GatewayClient, url: Option<&str>, auth_token: Option<&str>) {
     if let (Some(url), Some(token)) = (url, auth_token) {
         println!("\nWaiting for app to be ready...");
         match gateway.verify_environment(url, token).await {

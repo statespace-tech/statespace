@@ -30,6 +30,10 @@ tokio.workspace = true
 # HTTP client (for gateway API)
 reqwest.workspace = true
 
+# WebSocket (for SSH proxy)
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+futures-util = "0.3"
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
