@@ -1,4 +1,7 @@
-//! SSH tunnel to environments via WebSocket proxy.
+//! SSH to environments via stable SSH ingress (RFD 023).
+//!
+//! Users connect to ssh.statespace.com with env-{short_id} as username.
+//! SSHPiper on the gateway handles routing and wake-on-connect.
 
 use crate::args::{AppSshArgs, AppSshProxyArgs};
 use crate::config::resolve_credentials;
@@ -11,24 +14,39 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
-    let exe = std::env::current_exe()
-        .map_err(|e| Error::cli(format!("Failed to get executable path: {e}")))?;
+/// Derive SSH host from API URL
+/// api.statespace.com -> ssh.statespace.com
+/// api.staging.statespace.com -> ssh.staging.statespace.com
+fn ssh_host_from_api_url(api_url: &str) -> String {
+    let url = api_url
+        .trim_end_matches('/')
+        .replace("https://", "")
+        .replace("http://", "");
 
-    let proxy_cmd = format!(
-        "env STATESPACE_API_URL={} STATESPACE_API_KEY={} {} app ssh-proxy {} --port {}",
-        gateway.base_url(),
-        gateway.api_key(),
-        exe.display(),
-        args.app,
-        args.port
-    );
+    if url.starts_with("api.staging.") {
+        url.replace("api.staging.", "ssh.staging.")
+    } else if url.starts_with("api.") {
+        url.replace("api.", "ssh.")
+    } else {
+        // Fallback for local dev or custom URLs
+        format!("ssh.{url}")
+    }
+}
+
+pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
+    // Get environment to find its short_id
+    let env = gateway.get_environment(&args.app).await?;
+
+    // short_id is first 8 chars of UUID
+    let short_id: String = env.id.chars().take(8).collect();
+    let ssh_host = ssh_host_from_api_url(gateway.base_url());
+
+    eprintln!("Connecting to env-{short_id}@{ssh_host}");
 
     let status = Command::new("ssh")
-        .args(["-o", &format!("ProxyCommand={proxy_cmd}")])
         .args(["-o", "StrictHostKeyChecking=no"])
         .args(["-o", "UserKnownHostsFile=/dev/null"])
-        .arg(format!("{}@env", args.user))
+        .arg(format!("env-{short_id}@{ssh_host}"))
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
