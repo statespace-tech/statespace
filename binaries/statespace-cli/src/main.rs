@@ -47,7 +47,6 @@ async fn run() -> Result<()> {
                 let gateway = GatewayClient::new(creds)?;
                 commands::ssh::run_ssh(args, gateway).await
             }
-            AppCommands::SshProxy(args) => commands::ssh::run_ssh_proxy(args).await,
         },
 
         Commands::SshKey { command } => {

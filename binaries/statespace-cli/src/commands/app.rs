@@ -1,6 +1,6 @@
 //! App subcommand handlers
 
-use crate::args::{AppCommands, AppDeleteArgs, AppDeployArgs, AppServeArgs, AppSshArgs, AppSshProxyArgs, AppSyncArgs};
+use crate::args::{AppCommands, AppDeleteArgs, AppDeployArgs, AppServeArgs, AppSshArgs, AppSyncArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
 use crate::state::{self, SyncState};
@@ -18,16 +18,11 @@ pub(crate) async fn run(cmd: AppCommands, gateway: GatewayClient) -> Result<()> 
         AppCommands::Delete(args) => run_delete(args, gateway).await,
         AppCommands::Sync(args) => run_sync(args, gateway).await,
         AppCommands::Ssh(args) => run_ssh(args, gateway).await,
-        AppCommands::SshProxy(args) => run_ssh_proxy(args, gateway).await,
     }
 }
 
 async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
     crate::commands::ssh::run_ssh(args, gateway).await
-}
-
-async fn run_ssh_proxy(args: AppSshProxyArgs, gateway: GatewayClient) -> Result<()> {
-    crate::commands::ssh::run_ssh_proxy(args, gateway).await
 }
 
 pub(crate) async fn run_serve(args: AppServeArgs) -> Result<()> {

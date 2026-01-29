@@ -18,10 +18,6 @@ dirs = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
-futures-util = { version = "0.3", features = ["sink"] }
-
-# WebSocket
-tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 
 # HTTP client
 reqwest = { workspace = true }

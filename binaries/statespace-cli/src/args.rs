@@ -102,10 +102,6 @@ pub(crate) enum OrgCommands {
 pub(crate) enum AppCommands {
     /// SSH into an environment
     Ssh(AppSshArgs),
-
-    /// Internal: SSH proxy command (used by ProxyCommand)
-    #[command(name = "ssh-proxy", hide = true)]
-    SshProxy(AppSshProxyArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -118,20 +114,6 @@ pub(crate) struct AppSshArgs {
     pub user: String,
 
     /// SSH port (default: 22)
-    #[arg(long, short, default_value = "22")]
-    pub port: u16,
-}
-
-#[derive(Debug, Parser)]
-pub(crate) struct AppSshProxyArgs {
-    /// Environment ID or name
-    pub app: String,
-
-    /// Target host within the environment
-    #[arg(long, default_value = "localhost")]
-    pub host: String,
-
-    /// Target port within the environment
     #[arg(long, short, default_value = "22")]
     pub port: u16,
 }
