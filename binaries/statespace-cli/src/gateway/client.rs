@@ -279,35 +279,26 @@ impl GatewayClient {
         expires_at: Option<&str>,
     ) -> Result<TokenCreateResult> {
         #[derive(Serialize)]
+        #[allow(clippy::struct_field_names)] // field names must match gateway API contract
         struct Payload<'a> {
             #[serde(skip_serializing_if = "Option::is_none")]
-            name: Option<&'a str>,
+            new_name: Option<&'a str>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            scope: Option<String>,
+            new_scope: Option<String>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            environment_scope: Option<EnvironmentScope<'a>>,
+            new_allowed_environment_ids: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            expires_at: Option<&'a str>,
-        }
-
-        #[derive(Serialize)]
-        struct EnvironmentScope<'a> {
-            #[serde(rename = "type")]
-            scope_type: &'a str,
-            environment_ids: &'a [String],
+            new_expires_at: Option<&'a str>,
         }
 
         let url = format!("{}/api/v1/tokens/{}/rotate", self.base_url, token_id);
         let resp = self
             .with_headers(self.http.post(&url))
             .json(&Payload {
-                name,
-                scope: scope.map(|s| format!("environments:{s}")),
-                environment_scope: environment_ids.map(|ids| EnvironmentScope {
-                    scope_type: "restricted",
-                    environment_ids: ids,
-                }),
-                expires_at,
+                new_name: name,
+                new_scope: scope.map(|s| format!("environments:{s}")),
+                new_allowed_environment_ids: environment_ids,
+                new_expires_at: expires_at,
             })
             .send()
             .await?;

@@ -136,8 +136,8 @@ pub(crate) enum SshKeyCommands {
 
     /// Remove an SSH public key
     Remove {
-        /// Key ID to remove
-        id: String,
+        /// Key fingerprint to remove
+        fingerprint: String,
     },
 }
 

@@ -10,18 +10,20 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        isDarwin = pkgs.stdenv.isDarwin;
       in
       {
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
-            cairo
             pkg-config
+          ] ++ pkgs.lib.optionals isDarwin [
             libiconv
+            darwin.apple_sdk.frameworks.Security
+            darwin.apple_sdk.frameworks.SystemConfiguration
           ];
 
           shellHook = ''
-            export DYLD_FALLBACK_LIBRARY_PATH="${pkgs.cairo}/lib:${pkgs.libiconv}/lib"
-            export LIBRARY_PATH="${pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"
+            ${pkgs.lib.optionalString isDarwin ''export LIBRARY_PATH="${pkgs.libiconv}/lib''${LIBRARY_PATH:+:$LIBRARY_PATH}"''}
             
             # Preserve proxy settings from parent shell
             export HTTP_PROXY="''${HTTP_PROXY:-}"

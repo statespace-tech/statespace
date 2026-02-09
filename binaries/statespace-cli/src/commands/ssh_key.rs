@@ -9,7 +9,7 @@ pub(crate) async fn run(cmd: SshKeyCommands, gateway: GatewayClient) -> Result<(
     match cmd {
         SshKeyCommands::List => run_list(gateway).await,
         SshKeyCommands::Add { file, name } => run_add(file, name, gateway).await,
-        SshKeyCommands::Remove { id } => run_remove(&id, gateway).await,
+        SshKeyCommands::Remove { fingerprint } => run_remove(&fingerprint, gateway).await,
     }
 }
 
@@ -71,9 +71,9 @@ async fn run_add(file: Option<String>, name: Option<String>, gateway: GatewayCli
     Ok(())
 }
 
-async fn run_remove(id: &str, gateway: GatewayClient) -> Result<()> {
-    gateway.remove_ssh_key(id).await?;
-    println!("✓ Removed SSH key: {id}");
+async fn run_remove(fingerprint: &str, gateway: GatewayClient) -> Result<()> {
+    gateway.remove_ssh_key(fingerprint).await?;
+    println!("✓ Removed SSH key: {fingerprint}");
     Ok(())
 }
 
