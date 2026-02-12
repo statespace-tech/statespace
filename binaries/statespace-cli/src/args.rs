@@ -99,11 +99,27 @@ pub(crate) enum OrgCommands {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AppCommands {
+    /// Create a new environment
+    Create(AppCreateArgs),
+
+    /// Create a new environment (alias for create)
+    #[command(hide = true)]
+    Deploy(AppCreateArgs),
+
+    /// List all environments
+    List,
+
+    /// Show details for an environment
+    Get(AppGetArgs),
+
+    /// Delete an environment
+    Delete(AppDeleteArgs),
+
+    /// Sync markdown files to an environment (create-or-update)
+    Sync(AppSyncArgs),
+
     /// SSH into an environment
     Ssh(AppSshArgs),
-
-    /// Sync markdown files to an environment
-    Sync(AppSyncArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -129,6 +145,47 @@ pub(crate) struct AppSyncArgs {
     /// Environment name (default: directory name)
     #[arg(long, short)]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub(crate) enum VisibilityArg {
+    #[default]
+    Public,
+    Private,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct AppCreateArgs {
+    /// Directory containing markdown files (optional — omit to create an empty environment)
+    pub path: Option<PathBuf>,
+
+    /// Environment name (default: directory name, or required if no path given)
+    #[arg(long, short)]
+    pub name: Option<String>,
+
+    /// Environment visibility
+    #[arg(long, default_value = "public")]
+    pub visibility: VisibilityArg,
+
+    /// Wait for the environment to become ready
+    #[arg(long)]
+    pub verify: bool,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct AppGetArgs {
+    /// Environment ID or name
+    pub id: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct AppDeleteArgs {
+    /// Environment ID or name
+    pub id: String,
+
+    /// Skip confirmation prompt
+    #[arg(long, short)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Subcommand)]

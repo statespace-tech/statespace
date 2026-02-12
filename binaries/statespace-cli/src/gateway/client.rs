@@ -1,6 +1,3 @@
-#![allow(dead_code)] // API methods for upcoming commands (deploy, sync, tokens)
-#![allow(clippy::items_after_statements)] // Inline Payload structs kept near their method
-
 use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
 use crate::gateway::types::{
@@ -53,6 +50,7 @@ impl GatewayClient {
         &self.base_url
     }
 
+    #[allow(dead_code)]
     pub(crate) fn api_key(&self) -> &str {
         &self.api_key
     }
@@ -75,7 +73,7 @@ impl GatewayClient {
     pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<EnvironmentFile>> {
         let mut files = Vec::new();
 
-        for path in walkdir(dir)? {
+        for path in collect_files(dir)? {
             if !path.is_file() {
                 continue;
             }
@@ -107,21 +105,32 @@ impl GatewayClient {
         Ok(files)
     }
 
-    pub(crate) async fn deploy_environment(
+    pub(crate) async fn create_environment(
         &self,
         name: &str,
         files: Vec<EnvironmentFile>,
+        visibility: crate::args::VisibilityArg,
     ) -> Result<DeployResult> {
         #[derive(Serialize)]
         struct Payload<'a> {
             name: &'a str,
             files: Vec<EnvironmentFile>,
+            visibility: &'a str,
         }
+
+        let visibility_str = match visibility {
+            crate::args::VisibilityArg::Public => "public",
+            crate::args::VisibilityArg::Private => "private",
+        };
 
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self
             .with_headers(self.http.post(&url))
-            .json(&Payload { name, files })
+            .json(&Payload {
+                name,
+                files,
+                visibility: visibility_str,
+            })
             .send()
             .await?;
 
@@ -197,6 +206,7 @@ impl GatewayClient {
         Ok(false)
     }
 
+    #[allow(dead_code, clippy::items_after_statements)]
     pub(crate) async fn create_token(
         &self,
         name: &str,
@@ -233,6 +243,7 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list_tokens(
         &self,
         only_active: bool,
@@ -256,6 +267,7 @@ impl GatewayClient {
         parse_api_list_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn get_token(&self, token_id: &str) -> Result<Token> {
         let url = format!("{}/api/v1/tokens/{}", self.base_url, token_id);
         let resp = self.with_headers(self.http.get(&url)).send().await?;
@@ -263,6 +275,7 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn rotate_token(
         &self,
         token_id: &str,
@@ -299,6 +312,7 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn revoke_token(&self, token_id: &str, reason: Option<&str>) -> Result<()> {
         #[derive(Serialize)]
         struct Payload<'a> {
@@ -322,6 +336,7 @@ impl GatewayClient {
         parse_api_list_response(resp).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn get_ssh_config(&self, app_id_or_name: &str) -> Result<SshConnectionConfig> {
         let url = format!(
             "{}/api/v1/environments/{}/ssh-config",
@@ -365,26 +380,16 @@ impl GatewayClient {
     }
 }
 
-fn walkdir(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut results = Vec::new();
-    walk_recursive(dir, &mut results)?;
-    Ok(results)
-}
-
-fn walk_recursive(dir: &Path, results: &mut Vec<std::path::PathBuf>) -> Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            walk_recursive(&path, results)?;
-        } else {
-            results.push(path);
+    for entry in walkdir::WalkDir::new(dir) {
+        let entry = entry
+            .map_err(|e| crate::error::Error::cli(format!("Failed to walk directory: {e}")))?;
+        if entry.file_type().is_file() {
+            results.push(entry.into_path());
         }
     }
-    Ok(())
+    Ok(results)
 }
 
 async fn check_api_response(resp: reqwest::Response) -> Result<()> {

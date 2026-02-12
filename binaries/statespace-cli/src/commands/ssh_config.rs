@@ -161,8 +161,7 @@ pub(crate) async fn setup_ssh_full(gateway: &GatewayClient, skip_prompt: bool) -
         }
         Ok(false) => println!("✓ SSH key already registered"),
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("402") || msg.contains("Payment Required") {
+            if is_payment_required(&e) {
                 eprintln!("Note: SSH access requires a paid plan.");
                 eprintln!("Upgrade at https://statespace.dev/settings/billing");
             } else {
@@ -273,6 +272,13 @@ fn add_include_to_config(path: &Path) -> Result<()> {
     set_file_permissions(path);
 
     Ok(())
+}
+
+fn is_payment_required(err: &crate::error::Error) -> bool {
+    matches!(
+        err,
+        crate::error::Error::Gateway(crate::error::GatewayError::Api { status: 402, .. })
+    )
 }
 
 fn uninstall(skip_prompt: bool) -> Result<()> {

@@ -13,11 +13,7 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Resul
     let name = args
         .name
         .or_else(|| cached.as_ref().map(|s| s.name.clone()))
-        .or_else(|| {
-            dir.file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-        })
+        .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(String::from))
         .ok_or_else(|| crate::error::Error::cli("Could not determine environment name"))?;
 
     let files = GatewayClient::scan_markdown_files(&dir)?;
@@ -67,13 +63,8 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Resul
         eprintln!("URL: {url}");
     }
 
-    let state = SyncState::new(
-        result.id,
-        result.name,
-        result.url,
-        result.auth_token,
-    )
-    .with_checksums(&checksums);
+    let state = SyncState::new(result.id, result.name, result.url, result.auth_token)
+        .with_checksums(&checksums);
 
     save_state(&dir, &state)?;
 

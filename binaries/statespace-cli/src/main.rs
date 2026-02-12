@@ -43,8 +43,14 @@ async fn run() -> Result<()> {
             )?;
             let gateway = GatewayClient::new(creds)?;
             match command {
-                AppCommands::Ssh(args) => commands::ssh::run_ssh(args, gateway).await,
+                AppCommands::Create(args) | AppCommands::Deploy(args) => {
+                    commands::app::run_create(args, gateway).await
+                }
+                AppCommands::List => commands::app::run_list(gateway).await,
+                AppCommands::Get(args) => commands::app::run_get(args, gateway).await,
+                AppCommands::Delete(args) => commands::app::run_delete(args, gateway).await,
                 AppCommands::Sync(args) => commands::sync::run_sync(args, gateway).await,
+                AppCommands::Ssh(args) => commands::ssh::run_ssh(args, gateway).await,
             }
         }
 
