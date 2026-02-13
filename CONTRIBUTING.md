@@ -1,46 +1,64 @@
 # Contributing to Statespace
 
-Contributions are welcome. This document covers the basics.
+Thanks for your interest in contributing. This repo is 100% open-source Rust. This guide covers how to build, test, and submit changes in a way that keeps the codebase tight and reliable.
 
-## Getting Started
+## Requirements
 
-1. Fork and clone the repository:
-   ```
+- Rust **1.85+** (MSRV) with `rustfmt` and `clippy` components
+- Optional: `direnv` (for macOS linker env), `just` (release helper)
+
+To install MSRV explicitly:
+
+```bash
+rustup toolchain install 1.85.0
+rustup override set 1.85.0
+```
+
+## Getting started
+
+1. Fork and clone:
+   ```bash
    git clone https://github.com/<your-username>/statespace.git
    cd statespace
    ```
-2. Build the project:
-   ```
+2. Build:
+   ```bash
    cargo build
    ```
-   The CLI binary is located in `binaries/statespace-cli`.
+   The CLI binary lives in `binaries/statespace-cli`.
 
-## Development
+## Development workflow
 
-Before submitting changes, ensure your code passes all checks:
+Run these before opening a PR:
 
-```
+```bash
 cargo fmt --all -- --check
-cargo clippy --workspace -- -D warnings
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The project uses strict Clippy lints. Calls to `unwrap()`, `expect()`, and `panic!()` are denied. Handle errors explicitly using `Result` or `Option` combinators.
+Pre-commit hooks (format + clippy):
 
-## Submitting Changes
+```bash
+git config core.hooksPath .githooks
+```
+
+## Code standards
+
+- No `unwrap()`, `expect()`, or `panic!()` in library code (tests are fine).
+- Prefer explicit error handling with `Result` and typed enums.
+- Keep public APIs documented and test new behavior.
+- Follow existing module boundaries and naming conventions.
+
+## Changelog
+
+If your change is user-facing, add a short entry under `## Unreleased` in `CHANGELOG.md`.
+
+## Submitting changes
 
 1. Create a branch from `main`.
-2. Make your changes in small, focused commits.
-3. Ensure all checks listed above pass.
-4. Open a pull request against `main` with a clear description of the change.
-5. Address review feedback.
-
-## Code Style
-
-- Run `cargo fmt` before committing.
-- Follow existing conventions in the codebase.
-- No `unwrap()`, `expect()`, or `panic!()`.
-- Write tests for new functionality.
+2. Keep commits focused and scoped.
+3. Open a PR with a clear description, motivation, and test notes.
 
 ## License
 

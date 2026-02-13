@@ -102,4 +102,4 @@ let router = build_router(config);
 
 ## License
 
-MIT OR Apache-2.0
+MIT

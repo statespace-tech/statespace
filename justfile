@@ -9,6 +9,7 @@ release-cli version:
 
     echo "Release cli-v{{version}}:"
     echo "  - Update Cargo.toml workspace version"
+    echo "  - Update CHANGELOG.md"
     echo "  - Commit, tag, push"
     read -p "Continue? [y/N] " c && [[ "$c" =~ ^[Yy]$ ]] || exit 0
 
@@ -20,7 +21,7 @@ release-cli version:
 
     cargo check -p statespace-cli
 
-    git add Cargo.toml
+    git add Cargo.toml CHANGELOG.md
     git commit -m "chore(cli): release v{{version}}"
     git tag "cli-v{{version}}"
     git push origin HEAD "cli-v{{version}}"

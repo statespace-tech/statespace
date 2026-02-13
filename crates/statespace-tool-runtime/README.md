@@ -33,4 +33,4 @@ This crate follows FP-Rust patterns:
 
 ## License
 
-MIT OR Apache-2.0
+MIT
