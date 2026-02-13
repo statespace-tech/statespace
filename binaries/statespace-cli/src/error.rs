@@ -30,7 +30,7 @@ impl Error {
 #[derive(Debug, Error)]
 pub(crate) enum ConfigError {
     #[error(
-        "API key not found. Set STATESPACE_API_KEY or run `statespace auth login`.\nConfig file: {config_path}"
+        "API key not found. Run `statespace auth login` or set it in the config file.\nConfig file: {config_path}"
     )]
     MissingApiKey { config_path: String },
 

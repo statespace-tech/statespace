@@ -6,16 +6,12 @@ use std::path::PathBuf;
 #[command(about = "Statespace CLI - deploy and manage environments")]
 #[command(version)]
 pub(crate) struct Cli {
-    /// API URL override
-    #[arg(long, global = true, env = "STATESPACE_API_URL")]
-    pub api_url: Option<String>,
-
     /// API key override
-    #[arg(long, global = true, env = "STATESPACE_API_KEY")]
+    #[arg(long, global = true)]
     pub api_key: Option<String>,
 
     /// Organization ID override
-    #[arg(long, global = true, env = "STATESPACE_ORG_ID")]
+    #[arg(long, global = true)]
     pub org_id: Option<String>,
 
     #[command(subcommand)]
@@ -42,12 +38,8 @@ pub(crate) enum Commands {
         command: AppCommands,
     },
 
-    /// SSH key management
-    #[command(name = "ssh-key")]
-    SshKey {
-        #[command(subcommand)]
-        command: SshKeyCommands,
-    },
+    /// Serve a local app (no account required)
+    Serve(ServeArgs),
 
     /// SSH configuration management
     Ssh {
@@ -147,6 +139,21 @@ pub(crate) struct AppSyncArgs {
     pub name: Option<String>,
 }
 
+#[derive(Debug, Parser)]
+pub(crate) struct ServeArgs {
+    /// Directory to serve (default: current directory)
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
+
+    /// Host to bind the server to
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Port to bind the server to
+    #[arg(long, default_value = "8000")]
+    pub port: u16,
+}
+
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub(crate) enum VisibilityArg {
     #[default]
@@ -224,5 +231,10 @@ pub(crate) enum SshCommands {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+    },
+    /// SSH key management
+    Keys {
+        #[command(subcommand)]
+        command: SshKeyCommands,
     },
 }

@@ -17,7 +17,7 @@ async fn run_list(gateway: GatewayClient) -> Result<()> {
     if keys.is_empty() {
         println!("No SSH keys found.");
         println!();
-        println!("Add a key with: statespace ssh-key add");
+        println!("Add a key with: statespace ssh keys add");
         return Ok(());
     }
 

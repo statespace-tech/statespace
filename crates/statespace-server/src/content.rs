@@ -45,7 +45,7 @@ impl LocalContentResolver {
         Ok(target)
     }
 
-    async fn resolve_to_file(&self, target: &Path, original: &str) -> Result<PathBuf, Error> {
+    fn resolve_to_file(target: &Path, original: &str) -> Result<PathBuf, Error> {
         if target.is_file() {
             return Ok(target.to_path_buf());
         }
@@ -72,11 +72,11 @@ impl LocalContentResolver {
 impl ContentResolver for LocalContentResolver {
     async fn resolve(&self, path: &str) -> Result<String, Error> {
         let target = self.validate_path(path)?;
-        let resolved = self.resolve_to_file(&target, path).await?;
+        let resolved = Self::resolve_to_file(&target, path)?;
 
         let resolved = resolved
             .canonicalize()
-            .map_err(|_| Error::NotFound(path.to_string()))?;
+            .map_err(|_err| Error::NotFound(path.to_string()))?;
         if !resolved.starts_with(&self.root) {
             return Err(Error::PathTraversal {
                 attempted: path.to_string(),
@@ -89,11 +89,11 @@ impl ContentResolver for LocalContentResolver {
 
     async fn resolve_path(&self, path: &str) -> Result<PathBuf, Error> {
         let target = self.validate_path(path)?;
-        let resolved = self.resolve_to_file(&target, path).await?;
+        let resolved = Self::resolve_to_file(&target, path)?;
 
         let resolved = resolved
             .canonicalize()
-            .map_err(|_| Error::NotFound(path.to_string()))?;
+            .map_err(|_err| Error::NotFound(path.to_string()))?;
         if !resolved.starts_with(&self.root) {
             return Err(Error::PathTraversal {
                 attempted: path.to_string(),
@@ -106,6 +106,7 @@ impl ContentResolver for LocalContentResolver {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs::write;

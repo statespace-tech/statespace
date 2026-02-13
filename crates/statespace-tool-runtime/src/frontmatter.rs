@@ -49,6 +49,9 @@ impl Frontmatter {
     }
 }
 
+/// # Errors
+///
+/// Returns errors when frontmatter is missing or malformed.
 pub fn parse_frontmatter(content: &str) -> Result<Frontmatter, Error> {
     if let Some(yaml_content) = extract_yaml_frontmatter(content) {
         return parse_yaml(&yaml_content);
@@ -61,7 +64,7 @@ pub fn parse_frontmatter(content: &str) -> Result<Frontmatter, Error> {
     Err(Error::NoFrontmatter)
 }
 
-fn convert_raw(raw: RawFrontmatter) -> Result<Frontmatter, Error> {
+fn convert_raw(raw: &RawFrontmatter) -> Result<Frontmatter, Error> {
     let mut specs = Vec::new();
     let mut tools = Vec::new();
 
@@ -117,16 +120,17 @@ fn extract_toml_frontmatter(content: &str) -> Option<String> {
 fn parse_yaml(content: &str) -> Result<Frontmatter, Error> {
     let raw: RawFrontmatter = serde_yaml::from_str(content)
         .map_err(|e| Error::FrontmatterParse(format!("YAML parse error: {e}")))?;
-    convert_raw(raw)
+    convert_raw(&raw)
 }
 
 fn parse_toml(content: &str) -> Result<Frontmatter, Error> {
     let raw: RawFrontmatter = toml::from_str(content)
         .map_err(|e| Error::FrontmatterParse(format!("TOML parse error: {e}")))?;
-    convert_raw(raw)
+    convert_raw(&raw)
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::spec::is_valid_tool_call;

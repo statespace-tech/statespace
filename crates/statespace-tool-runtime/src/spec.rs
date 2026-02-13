@@ -50,6 +50,9 @@ pub enum SpecError {
 pub type SpecResult<T> = Result<T, SpecError>;
 
 impl ToolSpec {
+    /// # Errors
+    ///
+    /// Returns `SpecError` when the tool specification is empty or invalid.
     pub fn parse(raw: &[serde_json::Value]) -> SpecResult<Self> {
         if raw.is_empty() {
             return Err(SpecError::EmptySpec);
@@ -149,6 +152,7 @@ fn matches_spec(command: &[String], spec: &ToolSpec) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

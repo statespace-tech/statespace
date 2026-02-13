@@ -1,6 +1,7 @@
 use crate::args::AppSshArgs;
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
+use crate::identifiers::normalize_environment_reference;
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -20,10 +21,9 @@ fn ssh_host_from_api_url(api_url: &str) -> String {
 }
 
 pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
-    // Get environment to find its short_id
-    let env = gateway.get_environment(&args.app).await?;
+    let reference = normalize_environment_reference(&args.app).map_err(Error::cli)?;
+    let env = gateway.get_environment(reference.value()).await?;
 
-    // short_id is first 8 chars of UUID
     let short_id: String = env.id.chars().take(8).collect();
     let ssh_host = ssh_host_from_api_url(gateway.base_url());
 

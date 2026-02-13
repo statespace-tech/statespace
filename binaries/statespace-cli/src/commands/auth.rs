@@ -2,26 +2,24 @@ use crate::args::{AuthCommands, TokenOutputFormat};
 use crate::commands::ssh_config;
 use crate::config::{
     Credentials, StoredCredentials, credentials_path, delete_stored_credentials,
-    load_stored_credentials, save_stored_credentials,
+    load_stored_credentials, resolve_api_url, save_stored_credentials,
 };
 use crate::error::Result;
 use crate::gateway::{AuthClient, DeviceTokenResponse, GatewayClient};
 use std::io::{self, Write};
 use std::time::Duration;
 
-const DEFAULT_API_URL: &str = "https://api.statespace.com";
-
-pub(crate) async fn run(cmd: AuthCommands, api_url: Option<&str>) -> Result<()> {
+pub(crate) async fn run(cmd: AuthCommands) -> Result<()> {
     match cmd {
-        AuthCommands::Login => run_login(api_url).await,
+        AuthCommands::Login => run_login().await,
         AuthCommands::Logout => run_logout(),
         AuthCommands::Status => run_status(),
         AuthCommands::Token { format } => run_token(format),
     }
 }
 
-async fn run_login(api_url: Option<&str>) -> Result<()> {
-    let api_url = api_url.unwrap_or(DEFAULT_API_URL);
+async fn run_login() -> Result<()> {
+    let api_url = resolve_api_url();
 
     if let Some(creds) = load_stored_credentials()? {
         println!("Already logged in as {}", creds.email);
@@ -39,7 +37,7 @@ async fn run_login(api_url: Option<&str>) -> Result<()> {
         delete_stored_credentials()?;
     }
 
-    let client = AuthClient::with_url(api_url)?;
+    let client = AuthClient::with_url(&api_url)?;
 
     println!("Requesting authorization...");
     let device_code = client.request_device_code().await?;
@@ -84,7 +82,7 @@ async fn run_login(api_url: Option<&str>) -> Result<()> {
                 let exchange_result = client.exchange_token(&user.access_token).await?;
 
                 let creds =
-                    StoredCredentials::from_exchange(user, exchange_result, api_url.to_string());
+                    StoredCredentials::from_exchange(user, exchange_result, api_url.clone());
                 save_stored_credentials(&creds)?;
 
                 println!("✓ Logged in as {}", creds.email);

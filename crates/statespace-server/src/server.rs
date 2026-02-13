@@ -96,8 +96,8 @@ impl ServerState {
     }
 }
 
-pub fn build_router(config: ServerConfig) -> Router {
-    let state = ServerState::from_config(&config);
+pub fn build_router(config: &ServerConfig) -> Router {
+    let state = ServerState::from_config(config);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -184,7 +184,7 @@ async fn action_handler(
     execute_action(&path, &state, request).await
 }
 
-fn error_to_action_response(e: statespace_tool_runtime::Error) -> Response {
+fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
     let status = e.status_code();
     let response = ActionResponse::error(e.user_message());
     (status, Json(response)).into_response()
@@ -197,17 +197,17 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
-        Err(e) => return error_to_action_response(e),
+        Err(e) => return error_to_action_response(&e),
     };
 
     let content = match state.content_resolver.resolve(path).await {
         Ok(c) => c,
-        Err(e) => return error_to_action_response(e),
+        Err(e) => return error_to_action_response(&e),
     };
 
     let frontmatter = match parse_frontmatter(&content) {
         Ok(fm) => fm,
-        Err(e) => return error_to_action_response(e),
+        Err(e) => return error_to_action_response(&e),
     };
 
     let expanded_command = expand_placeholders(&request.command, &request.args);
@@ -218,14 +218,14 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
             "Command not allowed by frontmatter: {:?} (file: {})",
             expanded_command, path
         );
-        return error_to_action_response(e);
+        return error_to_action_response(&e);
     }
 
     let tool = match BuiltinTool::from_command(&expanded_command) {
         Ok(t) => t,
         Err(e) => {
             warn!("Unknown tool: {}", e);
-            return error_to_action_response(e);
+            return error_to_action_response(&e);
         }
     };
 

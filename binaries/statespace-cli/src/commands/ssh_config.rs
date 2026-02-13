@@ -1,4 +1,3 @@
-use crate::args::SshCommands;
 use crate::config::{Credentials, load_stored_credentials};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
@@ -22,25 +21,24 @@ Host *.statespace
 # --- END STATESPACE MANAGED ---
 ";
 
-pub(crate) async fn run(command: SshCommands) -> Result<()> {
-    match command {
-        SshCommands::Setup { yes } => {
-            let Some(stored) = load_stored_credentials()? else {
-                eprintln!("Not logged in. Run 'statespace auth login' first.");
-                std::process::exit(1);
-            };
+pub(crate) async fn run_setup(yes: bool) -> Result<()> {
+    let Some(stored) = load_stored_credentials()? else {
+        eprintln!("Not logged in. Run 'statespace auth login' first.");
+        std::process::exit(1);
+    };
 
-            let credentials = Credentials {
-                api_url: stored.api_url,
-                api_key: stored.api_key,
-                org_id: Some(stored.org_id),
-            };
+    let credentials = Credentials {
+        api_url: stored.api_url,
+        api_key: stored.api_key,
+        org_id: Some(stored.org_id),
+    };
 
-            let gateway = GatewayClient::new(credentials)?;
-            setup_ssh_full(&gateway, yes).await
-        }
-        SshCommands::Uninstall { yes } => uninstall(yes),
-    }
+    let gateway = GatewayClient::new(credentials)?;
+    setup_ssh_full(&gateway, yes).await
+}
+
+pub(crate) fn run_uninstall(yes: bool) -> Result<()> {
+    uninstall(yes)
 }
 
 fn ssh_dir() -> Result<std::path::PathBuf> {

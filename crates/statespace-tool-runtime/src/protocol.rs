@@ -13,6 +13,9 @@ pub struct ActionRequest {
 }
 
 impl ActionRequest {
+    /// # Errors
+    ///
+    /// Returns an error when the command is empty.
     pub fn validate(&self) -> Result<(), String> {
         if self.command.is_empty() {
             return Err("command cannot be empty".to_string());

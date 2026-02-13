@@ -14,7 +14,6 @@ pub(crate) struct DeployResult {
     pub id: String,
     pub auth_token: Option<String>,
     pub url: Option<String>,
-    pub fly_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -32,7 +31,6 @@ pub(crate) struct Environment {
     pub name: String,
     pub status: String,
     pub url: Option<String>,
-    pub fly_url: Option<String>,
     pub created_at: String,
     pub auth_token: Option<String>,
 }

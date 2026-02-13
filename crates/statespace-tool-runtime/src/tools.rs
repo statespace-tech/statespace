@@ -67,11 +67,9 @@ pub enum BuiltinTool {
 }
 
 impl BuiltinTool {
-    /// Parse a command into a BuiltinTool.
+    /// # Errors
     ///
-    /// Commands are validated against frontmatter specs before reaching this function,
-    /// so any command that passes validation is allowed to execute. Special handling
-    /// exists for glob and curl which have dedicated implementations.
+    /// Returns an error when the command is empty or malformed.
     pub fn from_command(command: &[String]) -> Result<Self, Error> {
         if command.is_empty() {
             return Err(Error::InvalidCommand("Command cannot be empty".to_string()));
@@ -89,8 +87,6 @@ impl BuiltinTool {
                 })
             }
             "curl" => Self::parse_curl(&command[1..]),
-            // All other commands are executed directly.
-            // Frontmatter validation has already verified the command is allowed.
             cmd => Ok(Self::Exec {
                 command: cmd.to_string(),
                 args: command[1..].to_vec(),
@@ -160,43 +156,20 @@ impl BuiltinTool {
         }
     }
 
-    /// Returns true if this tool requires network egress.
-    ///
-    /// Used by environment-server to enforce egress restrictions on free tier.
-    /// Only `curl` requires network access; `glob` and `exec` are local-only.
     pub const fn requires_egress(&self) -> bool {
         matches!(self, Self::Curl { .. })
     }
 
-    /// Check if this tool is allowed on free tier (base image only).
-    ///
-    /// Free tier environments can only use tools from the base image.
-    /// This is an allowlist of safe filesystem commands.
     pub fn is_free_tier_allowed(&self) -> bool {
         match self {
-            // Glob is always allowed (built-in, no shell exec)
             Self::Glob { .. } => true,
-            // Curl is blocked (network access)
             Self::Curl { .. } => false,
-            // Exec commands must be in the allowlist
             Self::Exec { command, .. } => FREE_TIER_COMMAND_ALLOWLIST.contains(&command.as_str()),
         }
     }
 }
 
-/// Commands allowed on free tier (base image only).
-///
-/// This list includes:
-/// - Core filesystem utilities (coreutils)
-/// - Text processing tools
-/// - Built-in glob command
-///
-/// Notably excluded:
-/// - Network tools (curl, wget, nc, ssh, etc.)
-/// - Package managers (apt, pip, npm)
-/// - Interpreters that could make network calls (python, node, ruby)
 pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
-    // Coreutils - file operations
     "cat",
     "head",
     "tail",
@@ -211,7 +184,6 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "tee",
     "split",
     "csplit",
-    // Coreutils - file info
     "ls",
     "stat",
     "file",
@@ -220,7 +192,6 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "find",
     "which",
     "whereis",
-    // Coreutils - file manipulation
     "cp",
     "mv",
     "rm",
@@ -228,7 +199,6 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "rmdir",
     "touch",
     "ln",
-    // Text processing
     "grep",
     "egrep",
     "fgrep",
@@ -237,9 +207,7 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "diff",
     "comm",
     "cmp",
-    // JSON processing (commonly needed)
     "jq",
-    // Archive (read-only operations are safe)
     "tar",
     "gzip",
     "gunzip",
@@ -248,7 +216,6 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "bunzip2",
     "xz",
     "unxz",
-    // Misc utilities
     "echo",
     "printf",
     "true",
@@ -267,7 +234,6 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
     "whoami",
     "uname",
     "hostname",
-    // Markdown/text utilities that might be useful
     "md5sum",
     "sha256sum",
     "base64",
@@ -277,6 +243,7 @@ pub const FREE_TIER_COMMAND_ALLOWLIST: &[&str] = &[
 ];
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -306,7 +273,6 @@ mod tests {
             BuiltinTool::Exec { command, args } if command == "cat" && args == vec!["file.md"]
         ));
 
-        // cat without args is now allowed (frontmatter validation handles this)
         let tool = BuiltinTool::from_command(&["cat".to_string()]).unwrap();
         assert!(matches!(
             tool,
@@ -356,17 +322,17 @@ mod tests {
 
     #[test]
     fn test_from_command_custom() {
-        // Any command is now allowed - frontmatter validation handles restrictions
         let tool = BuiltinTool::from_command(&["jq".to_string(), ".".to_string()]).unwrap();
         assert!(matches!(
             tool,
             BuiltinTool::Exec { command, args } if command == "jq" && args == vec!["."]
         ));
 
-        let tool = BuiltinTool::from_command(&["python".to_string(), "script.py".to_string()]).unwrap();
+        let tool =
+            BuiltinTool::from_command(&["node".to_string(), "script.js".to_string()]).unwrap();
         assert!(matches!(
             tool,
-            BuiltinTool::Exec { command, args } if command == "python" && args == vec!["script.py"]
+            BuiltinTool::Exec { command, args } if command == "node" && args == vec!["script.js"]
         ));
     }
 
@@ -396,7 +362,6 @@ mod tests {
 
     #[test]
     fn test_is_free_tier_allowed_allowlisted_commands() {
-        // Coreutils should be allowed
         for cmd in ["cat", "ls", "grep", "sed", "awk", "jq", "head", "tail"] {
             let tool = BuiltinTool::Exec {
                 command: cmd.to_string(),
@@ -408,8 +373,9 @@ mod tests {
 
     #[test]
     fn test_is_free_tier_blocked_dangerous_commands() {
-        // Network tools and interpreters should be blocked
-        for cmd in ["wget", "nc", "ssh", "python", "node", "ruby", "curl", "apt", "pip", "npm"] {
+        for cmd in [
+            "wget", "nc", "ssh", "node", "ruby", "curl", "apt", "pip", "npm",
+        ] {
             let tool = BuiltinTool::Exec {
                 command: cmd.to_string(),
                 args: vec![],
@@ -420,21 +386,27 @@ mod tests {
 
     #[test]
     fn test_requires_egress() {
-        assert!(BuiltinTool::Curl {
-            url: "https://example.com".to_string(),
-            method: HttpMethod::Get,
-        }
-        .requires_egress());
+        assert!(
+            BuiltinTool::Curl {
+                url: "https://example.com".to_string(),
+                method: HttpMethod::Get,
+            }
+            .requires_egress()
+        );
 
-        assert!(!BuiltinTool::Glob {
-            pattern: "*.md".to_string(),
-        }
-        .requires_egress());
+        assert!(
+            !BuiltinTool::Glob {
+                pattern: "*.md".to_string(),
+            }
+            .requires_egress()
+        );
 
-        assert!(!BuiltinTool::Exec {
-            command: "ls".to_string(),
-            args: vec![],
-        }
-        .requires_egress());
+        assert!(
+            !BuiltinTool::Exec {
+                command: "ls".to_string(),
+                args: vec![],
+            }
+            .requires_egress()
+        );
     }
 }

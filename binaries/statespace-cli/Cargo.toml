@@ -12,31 +12,26 @@ name = "statespace"
 path = "src/main.rs"
 
 [dependencies]
-# CLI
 clap = { workspace = true }
 dirs = { workspace = true }
 
-# Async runtime
+axum = { workspace = true }
+statespace-server = { workspace = true }
+
 tokio = { workspace = true }
 
-# HTTP client
 reqwest = { workspace = true }
 
-# Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 
-# Time
 chrono = { workspace = true }
 
-# Error handling
 thiserror = { workspace = true }
 
-# Browser opening
 open = "5"
 
-# Interactive prompts
 inquire = "0.7"
 base64.workspace = true
 sha2 = "0.10.9"

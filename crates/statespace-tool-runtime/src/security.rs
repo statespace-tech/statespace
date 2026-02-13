@@ -5,6 +5,9 @@
 use crate::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+/// # Errors
+///
+/// Returns errors for invalid URLs or restricted destinations.
 pub fn validate_url_initial(url: &str) -> Result<reqwest::Url, Error> {
     let parsed =
         reqwest::Url::parse(url).map_err(|e| Error::InvalidCommand(format!("Invalid URL: {e}")))?;
@@ -57,12 +60,12 @@ fn is_metadata_service(host: &str) -> bool {
 #[must_use]
 pub fn is_private_or_restricted_ip(ip: &IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ipv4) => is_private_ipv4(ipv4),
+        IpAddr::V4(ipv4) => is_private_ipv4(*ipv4),
         IpAddr::V6(ipv6) => is_private_ipv6(ipv6),
     }
 }
 
-const fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
+const fn is_private_ipv4(ip: Ipv4Addr) -> bool {
     ip.is_private()
         || ip.is_loopback()
         || ip.is_link_local()
@@ -72,10 +75,6 @@ const fn is_private_ipv4(ip: &Ipv4Addr) -> bool {
 }
 
 fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
-    if is_fly_6pn(ip) {
-        return false;
-    }
-
     ip.is_loopback()
         || ip.is_unspecified()
         || ip.is_unique_local()
@@ -85,10 +84,6 @@ fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
         || is_ipv4_mapped_private(ip)
 }
 
-const fn is_fly_6pn(ip: &Ipv6Addr) -> bool {
-    ip.segments()[0] == 0xfdaa
-}
-
 fn is_ipv6_site_local(ip: &Ipv6Addr) -> bool {
     let s0 = ip.segments()[0];
     (0xfec0..=0xfeff).contains(&s0)
@@ -96,13 +91,14 @@ fn is_ipv6_site_local(ip: &Ipv6Addr) -> bool {
 
 const fn is_ipv4_mapped_private(ip: &Ipv6Addr) -> bool {
     if let Some(mapped) = ip.to_ipv4_mapped() {
-        is_private_ipv4(&mapped)
+        is_private_ipv4(mapped)
     } else {
         false
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -155,22 +151,16 @@ mod tests {
 
     #[test]
     fn test_ipv4_blocks_private() {
-        assert!(is_private_ipv4(&"10.0.0.1".parse().unwrap()));
-        assert!(is_private_ipv4(&"172.16.0.1".parse().unwrap()));
-        assert!(is_private_ipv4(&"192.168.1.1".parse().unwrap()));
-        assert!(is_private_ipv4(&"127.0.0.1".parse().unwrap()));
+        assert!(is_private_ipv4("10.0.0.1".parse().unwrap()));
+        assert!(is_private_ipv4("172.16.0.1".parse().unwrap()));
+        assert!(is_private_ipv4("192.168.1.1".parse().unwrap()));
+        assert!(is_private_ipv4("127.0.0.1".parse().unwrap()));
     }
 
     #[test]
     fn test_ipv4_allows_public() {
-        assert!(!is_private_ipv4(&"1.1.1.1".parse().unwrap()));
-        assert!(!is_private_ipv4(&"8.8.8.8".parse().unwrap()));
-    }
-
-    #[test]
-    fn test_ipv6_allows_fly_6pn() {
-        assert!(!is_private_ipv6(&"fdaa::1".parse().unwrap()));
-        assert!(!is_private_ipv6(&"fdaa:0:18:a7b::1".parse().unwrap()));
+        assert!(!is_private_ipv4("1.1.1.1".parse().unwrap()));
+        assert!(!is_private_ipv4("8.8.8.8".parse().unwrap()));
     }
 
     #[test]

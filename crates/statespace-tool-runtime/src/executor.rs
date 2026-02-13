@@ -66,6 +66,9 @@ impl ToolExecutor {
         Self { root, limits }
     }
 
+    /// # Errors
+    ///
+    /// Returns errors for timeouts, invalid commands, or execution failures.
     #[instrument(skip(self), fields(tool = ?tool))]
     pub async fn execute(&self, tool: &BuiltinTool) -> Result<ToolOutput, Error> {
         let execution = async {
@@ -78,7 +81,7 @@ impl ToolExecutor {
 
         timeout(self.limits.timeout, execution)
             .await
-            .map_err(|_| Error::Timeout)?
+            .map_err(|_err| Error::Timeout)?
     }
 
     async fn execute_exec(&self, command: &str, args: &[String]) -> Result<ToolOutput, Error> {
@@ -150,11 +153,10 @@ impl ToolExecutor {
                         .into_owned();
 
                     let metadata = std::fs::metadata(&path).ok();
-                    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+                    let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
                     let last_modified = metadata
                         .and_then(|m| m.modified().ok())
-                        .map(chrono::DateTime::<chrono::Utc>::from)
-                        .unwrap_or_else(chrono::Utc::now);
+                        .map_or_else(chrono::Utc::now, chrono::DateTime::<chrono::Utc>::from);
 
                     files.push(FileInfo {
                         key: relative,

@@ -46,7 +46,7 @@ pub const FAVICON_SVG: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
   </g>
 </svg>"##;
 
-const INDEX_HTML_TEMPLATE: &str = r##"<!DOCTYPE html>
+const INDEX_HTML_TEMPLATE: &str = r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -112,7 +112,7 @@ For complete instructions and available tools, check out /README
         }
     </script>
 </body>
-</html>"##;
+</html>"#;
 
 #[must_use]
 pub fn render_index_html(base_url: &str, agents_md: &str) -> String {

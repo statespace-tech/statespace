@@ -29,6 +29,9 @@ pub enum InitResult {
     AlreadyExists,
 }
 
+/// # Errors
+///
+/// Returns I/O errors when template files cannot be created or read.
 pub async fn initialize_templates(
     content_root: &Path,
     base_url: &str,
@@ -92,6 +95,7 @@ async fn read_or_default(root: &Path, filename: &str, default: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::TempDir;

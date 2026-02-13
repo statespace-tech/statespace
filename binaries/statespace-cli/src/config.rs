@@ -53,11 +53,7 @@ fn get_current_context(config: &ConfigFile) -> Option<&Context> {
     config.contexts.as_ref()?.get(name)
 }
 
-/// Resolve credentials from CLI flags, stored credentials, config file, and env vars.
-///
-/// Priority: CLI flags > stored credentials > config file > env vars > defaults.
 pub(crate) fn resolve_credentials(
-    cli_api_url: Option<&str>,
     cli_api_key: Option<&str>,
     cli_org_id: Option<&str>,
 ) -> Result<Credentials> {
@@ -85,37 +81,38 @@ pub(crate) fn resolve_credentials(
     let cfg_key = context.and_then(|c| c.api_key.clone());
     let cfg_org = context.and_then(|c| c.org_id.clone());
 
-    let env_url = std::env::var("STATESPACE_API_URL").ok();
-    let env_key = std::env::var("STATESPACE_API_KEY").ok();
-    let env_org = std::env::var("STATESPACE_ORG_ID").ok();
-
-    let api_url = cli_api_url
-        .map(String::from)
-        .or(stored_url)
+    let api_url = stored_url
         .or(cfg_url)
-        .or(env_url)
         .unwrap_or_else(|| DEFAULT_API_URL.to_string());
 
     let api_key = cli_api_key
         .map(String::from)
         .or(stored_key)
         .or(cfg_key)
-        .or(env_key)
         .ok_or_else(|| ConfigError::MissingApiKey {
             config_path: config_path().display().to_string(),
         })?;
 
-    let org_id = cli_org_id
-        .map(String::from)
-        .or(stored_org)
-        .or(cfg_org)
-        .or(env_org);
+    let org_id = cli_org_id.map(String::from).or(stored_org).or(cfg_org);
 
     Ok(Credentials {
         api_url,
         api_key,
         org_id,
     })
+}
+
+pub(crate) fn resolve_api_url() -> String {
+    let stored = load_stored_credentials().ok().flatten();
+    let stored_url = stored.as_ref().map(|c| c.api_url.clone());
+
+    let config = load_config_file();
+    let context = config.as_ref().and_then(get_current_context);
+    let cfg_url = context.and_then(|c| c.api_url.clone());
+
+    stored_url
+        .or(cfg_url)
+        .unwrap_or_else(|| DEFAULT_API_URL.to_string())
 }
 
 pub(crate) fn credentials_path() -> PathBuf {
