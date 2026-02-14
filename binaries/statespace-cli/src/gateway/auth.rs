@@ -37,11 +37,12 @@ pub(crate) struct AuthorizedUser {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct ExchangeTokenResponse {
     pub api_key: String,
+    #[allow(dead_code)]
     pub key_prefix: String,
     pub organization_id: String,
     pub expires_at: Option<String>,
+    #[allow(dead_code)]
     pub name: String,
 }

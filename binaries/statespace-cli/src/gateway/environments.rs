@@ -24,12 +24,12 @@ pub(crate) struct UpsertResult {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct Environment {
     pub id: String,
     pub name: String,
     pub status: String,
     pub url: Option<String>,
     pub created_at: String,
+    #[allow(dead_code)]
     pub auth_token: Option<String>,
 }

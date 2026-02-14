@@ -3,7 +3,7 @@ use crate::error::{GatewayError, Result};
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 use crate::gateway::environments::{DeployResult, Environment, EnvironmentFile, UpsertResult};
 use crate::gateway::organizations::Organization;
-use crate::gateway::ssh::{SshConnectionConfig, SshKey};
+use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use reqwest::Client;
@@ -335,16 +335,6 @@ impl GatewayClient {
         let url = format!("{}/api/v1/user/organizations", self.base_url);
         let resp = self.with_headers(self.http.get(&url)).send().await?;
         parse_api_list_response(resp).await
-    }
-
-    #[allow(dead_code)]
-    pub(crate) async fn get_ssh_config(&self, app_id_or_name: &str) -> Result<SshConnectionConfig> {
-        let url = format!(
-            "{}/api/v1/environments/{}/ssh-config",
-            self.base_url, app_id_or_name
-        );
-        let resp = self.with_headers(self.http.get(&url)).send().await?;
-        parse_api_response(resp).await
     }
 
     pub(crate) async fn add_ssh_key(&self, name: &str, public_key: &str) -> Result<SshKey> {
