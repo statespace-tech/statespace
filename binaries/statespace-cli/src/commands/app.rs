@@ -2,6 +2,7 @@ use crate::args::{AppCreateArgs, AppDeleteArgs, AppGetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
 use crate::identifiers::normalize_environment_reference;
+use crate::names::generate_name;
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -19,9 +20,7 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
         let files = GatewayClient::scan_markdown_files(&dir)?;
         (name, files)
     } else {
-        let name = args
-            .name
-            .ok_or_else(|| Error::cli("--name is required when no directory path is provided"))?;
+        let name = args.name.unwrap_or_else(generate_name);
         (name, Vec::new())
     };
 
@@ -135,5 +134,5 @@ fn resolve_name(explicit: Option<&str>, dir: &Path) -> String {
     explicit
         .map(String::from)
         .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(String::from))
-        .unwrap_or_else(|| "app".to_string())
+        .unwrap_or_else(generate_name)
 }

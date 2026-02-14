@@ -172,7 +172,7 @@ pub(crate) struct AppCreateArgs {
     /// Directory containing markdown files (optional — omit to create an empty environment)
     pub path: Option<PathBuf>,
 
-    /// Environment name (default: directory name, or required if no path given)
+    /// Environment name (default: directory name, or randomly generated)
     #[arg(long, short)]
     pub name: Option<String>,
 
