@@ -12,8 +12,6 @@
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
-[![Crate: statespace-tool-runtime](https://img.shields.io/crates/v/statespace-tool-runtime?style=flat-square)](https://crates.io/crates/statespace-tool-runtime)
-[![Crate: statespace-server](https://img.shields.io/crates/v/statespace-server?style=flat-square)](https://crates.io/crates/statespace-server)
 [![Discord](https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/rRyM7zkZTf)
 [![X](https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white)](https://x.com/statespace_tech)
 
@@ -40,11 +38,6 @@ Install the CLI with the same script used on the landing page:
 ```bash
 curl -fsSL https://statespace.com/install.sh | bash
 ```
-
-## Published crates
-
-- `statespace-tool-runtime`: https://crates.io/crates/statespace-tool-runtime
-- `statespace-server`: https://crates.io/crates/statespace-server
 
 ## Example
 
