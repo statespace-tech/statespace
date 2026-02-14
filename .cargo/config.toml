@@ -1,0 +1,9 @@
+# macOS: libiconv is required by reqwest/rustls but isn't on the default linker path.
+# This points to the standard Xcode Command Line Tools SDK location.
+# If you have full Xcode without CLT, you may need to adjust or run:
+#   export LIBRARY_PATH="$(xcrun --show-sdk-path)/usr/lib"
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "native=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-L", "native=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib"]

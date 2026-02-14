@@ -66,13 +66,34 @@ statespace/
 
 ## Architecture
 
-Follows FP-Rust patterns aligned with gateway principles:
-- **Pure modules** (no I/O): `frontmatter`, `spec`, `security`, `protocol`, `validation`, `templates`
-- **Effectful edge**: `executor`, `content`, `server`, `init`
-- **Type-driven design**: prefer validated enums/newtypes to make invalid states unrepresentable
-- **Explicit dependencies**: pass config and clients explicitly; avoid hidden global state
-- **Effects at the edges**: isolate I/O and side effects from domain logic
+This is a **stateless CLI** — the gateway's actor model, sagas, and stateful lifecycle management do **not** apply here. There are no long-lived processes, no message passing, no state machines.
 
+**What DOES apply from gateway philosophy:**
+- **Type-driven design** — validated enums, newtypes, sum types. Make invalid states unrepresentable.
+- **Effects at the edges** — the `gateway/` module inside `statespace-cli` is the effect boundary (HTTP calls to the Statespace API). Commands are orchestration. Pure logic (validation, slugify, config parsing) must have no I/O.
+- **Explicit dependencies** — pass config and clients explicitly; no globals, no `lazy_static!`, no hidden env var reads.
+- **One file per concept** — not `models.rs` dumping grounds.
+- **Immutable data with methods** — domain structs are values with pure business logic methods.
+
+**Module roles:**
+- **Pure modules** (no I/O): `frontmatter`, `spec`, `security`, `protocol`, `validation`, `templates`
+- **Effectful edge**: `executor`, `content`, `server`, `init`, `gateway/`
+- **Commands**: thin orchestration — parse args, call gateway, format output
+
+### Code Organization
+
+- **One file per domain** in `gateway/`: `environments.rs`, `auth.rs`, `tokens.rs`, `organizations.rs`, `ssh.rs` — each file owns the types and API calls for that domain
+- **No `#![allow(dead_code)]` file-level suppression** — if code is dead, delete it. Mark individual items with `#[allow(dead_code)]` only with a comment explaining why.
+- **Pure functions in dedicated modules** — validation, parsing, slug generation go in their own modules, not inline in command handlers
+- **Types live with their domain** — an `Environment` struct belongs in `gateway/environments.rs`, not in a shared `types.rs`
+
+### Anti-Patterns
+
+- ❌ `types.rs` / `models.rs` dumping grounds — split types by domain, co-locate with their API calls
+- ❌ `status: String` when the server defines a proper enum — use typed enums (`EnvironmentState`, `Tier`, `Visibility`) client-side too
+- ❌ `#![allow(dead_code)]` to hide unused code — delete it, or annotate individual items with a justification
+- ❌ Inline validation/parsing in command handlers — extract to pure functions that can be unit tested
+- ❌ Hidden I/O in "pure" modules — if it touches the network or filesystem, it belongs at the edge
 
 ### Dependency Graph
 
