@@ -1499,6 +1499,7 @@ dependencies = [
  "dirs",
  "inquire",
  "open",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",
