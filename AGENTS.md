@@ -94,6 +94,13 @@ This is a **stateless CLI** — the gateway's actor model, sagas, and stateful l
 - ❌ `#![allow(dead_code)]` to hide unused code — delete it, or annotate individual items with a justification
 - ❌ Inline validation/parsing in command handlers — extract to pure functions that can be unit tested
 - ❌ Hidden I/O in "pure" modules — if it touches the network or filesystem, it belongs at the edge
+- ❌ Edit Cargo.toml use `cargo add`
+- ❌ Skip `cargo fmt`
+- ❌ Merge without running clippy
+- ❌ Comment self-evident operations (`// Initialize`, `// Return result`), getters/setters, constructors, or standard Rust idioms
+- ❌ Add comments that restate what code does
+- ❌ Make things optional that don't need to be - the compiler will enforce
+- ❌ Add error context that doesn't add anything useful information (e.g., `.context("Failed to X")` when error already says it failed)
 
 ### Dependency Graph
 
@@ -112,6 +119,23 @@ statespace-cli ──► statespace-server ──► statespace-tool-runtime
 - Avoid using `pub use` on imports unless you are re-exposing a dependency so downstream consumers do not have to depend on it directly.
 
 - Skip global state via `lazy_static!`, `Once`, or similar; prefer passing explicit context structs for any shared state.
+
+- Write self-documenting code - prefer clear names over comments
+
+- Only comment for complex algorithms, non-obvious business logic, or "why" not "what"
+
+- Booleans should default to false, not be optional
+
+- Clean up existing logs, don't add more unless for errors or security events
+
+- Avoid overly defensive code - trust Rust's type system
+
+- Clean up existing logs, don't add more unless for errors or security events
+
+## Entry Points
+- CLI: binaries/statespace-cli/src/main.rs
+- Server: crates/statespace-server/src/lib.rs
+- Tool Runtime: crates/statespace-tool-runtime/src/lib.rs
 
 ## Design Documents
 
