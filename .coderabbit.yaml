@@ -1,0 +1,102 @@
+# CodeRabbit Configuration
+# https://docs.coderabbit.ai/reference/configuration
+
+language: en-US
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_instructions:
+    - path: "crates/**/security.rs"
+      instructions: |
+        Security-critical code. Thoroughly review for:
+        - SSRF vulnerabilities (private IP bypass, DNS rebinding)
+        - Path traversal attacks
+        - URL validation bypasses
+        - Any changes to allowlists or blocklists
+
+    - path: "crates/statespace-tool-runtime/src/executor.rs"
+      instructions: |
+        Tool execution engine. Check for:
+        - Command injection vulnerabilities
+        - Path traversal in file operations
+        - Proper sandboxing of executed commands
+        - Resource exhaustion attacks
+
+    - path: "crates/statespace-tool-runtime/src/validation.rs"
+      instructions: |
+        Input validation logic. Verify:
+        - All user inputs are validated before use
+        - Regex patterns are safe (no ReDoS)
+        - Placeholder expansion cannot be exploited
+
+    - path: "binaries/statespace-cli/src/commands/**"
+      instructions: |
+        CLI commands currently lack test coverage. Flag PRs that:
+        - Add new commands without corresponding unit tests
+        - Modify command logic without updating tests
+        - Introduce error handling that isn't tested
+
+    - path: "binaries/statespace-cli/src/gateway/**"
+      instructions: |
+        Gateway client code handles authentication and API communication.
+        Check for:
+        - Credential leakage in logs or error messages
+        - Proper error handling for network failures
+        - No secrets hardcoded or exposed
+
+    - path: "crates/statespace-server/src/server.rs"
+      instructions: |
+        HTTP server handlers. Review for:
+        - Input validation on all request parameters
+        - Proper error responses (no internal details leaked)
+        - CORS and security header configuration
+
+    - path: "**/*.toml"
+      instructions: |
+        Cargo configuration. Verify:
+        - New dependencies are justified and actively maintained
+        - No features enabled that aren't needed
+        - Version constraints are appropriate
+
+  instructions: |
+    Follow the project conventions documented in AGENTS.md.
+
+    This is a Rust project with strict linting requirements:
+    - REJECT any use of unwrap(), expect(), or panic!() in non-test code
+    - REJECT any unsafe code blocks
+    - Verify all Result and Option types are handled properly with ? or explicit matching
+    - Check that errors include appropriate context via .context() or .with_context()
+
+    Code style requirements:
+    - No println! for logging - use tracing macros
+    - No lazy_static! or global state
+    - No #![allow(...)] file-level suppressions
+    - Prefer crate:: over super:: for imports
+
+    Flag these anti-patterns:
+    - types.rs or models.rs dumping grounds
+    - String types where enums should be used
+    - Comments that restate what code does
+    - Overly defensive code that doesn't trust Rust's type system
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
+  pull_requests:
+    scope: auto
