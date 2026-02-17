@@ -2,17 +2,15 @@
 icon: lucide/globe
 ---
 
-# HTTP API
+# REST API
 
 REST API endpoints for interacting with running applications
 
-## GET /{path}
+## `GET /{path}`
 
 <div class="grid" markdown>
 
 <div markdown>
-
-<span class="param-tag http-get">GET</span> **`/{path}`**
 
 Read a file from the application directory.
 
@@ -61,19 +59,13 @@ You are an AI agent.
 
 </div>
 
-## POST /{path}
+## `POST /{path}`
 
 <div class="grid" markdown>
 
 <div markdown>
 
-<span class="param-tag http-post">POST</span> **`/{path}`**
-
 Execute a tool defined in a Markdown file's frontmatter.
-
-**Path parameters**
-
-`path` <span class="param-tag param-type">string</span> <span class="param-tag param-required">required</span>
 
 : Path to Markdown file containing the tool definition
 
@@ -117,7 +109,6 @@ Execute a tool defined in a Markdown file's frontmatter.
 curl -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer token" \
-  https://127.0.0.1:8000/README.md \
   -d '{
     "command": ["echo", "hello"]
   }'
@@ -136,33 +127,3 @@ curl -X POST \
 </div>
 
 </div>
-
-## Path resolution
-
-The server resolves paths using three strategies for both GET and POST requests.
-
-**Strict lookup**
-
-Exact path to a file with extension:
-
-```bash
-curl https://your-app.app.statespace.com/file.md
-```
-
-**Implicit extension**
-
-Path without `.md` automatically appends it:
-
-```bash
-curl https://your-app.app.statespace.com/path/file
-```
-> Maps to `path/file.md`
-
-**Directory default**
-
-Directory path defaults to `index.md` (for human-readable navigation):
-
-```bash
-curl https://your-app.app.statespace.com/path/
-```
-> Maps to `path/index.md`

@@ -1,7 +1,7 @@
 [project]
-site_name = "Statespace"
-site_description = "Build and share LLM apps in pure Markdown"
-site_url = "https://docs.statespace.com"
+site_name = "STATESPACE"
+site_description = "Build AI applications in Markdown"
+site_url = "https://docs.statespace.ai"
 repo_url = "https://github.com/statespace-tech/statespace"
 repo_name = "statespace-tech/statespace"
 extra_css = [
@@ -12,26 +12,25 @@ extra_javascript = [
 ]
 nav = [
   {"Get started" = "index.md"},
+  {"Install" = "install.md"},
   {"Develop" = [
-    {"Instructions" = "pages/develop/instructions.md"},
-    {"CLI tools" = "pages/develop/tools.md"},
-    {"Apps" = "pages/develop/apps.md"},
+    {"Pages" = "pages/develop/pages.md"},
+    {"Tools" = "pages/develop/tools.md"},
+    {"Components" = "pages/develop/components.md"},
   ]},
   {"Deploy" = [
     {"Cloud deployment" = "pages/deploy/cloud.md"},
     {"Self-hosting" = "pages/deploy/self_hosting.md"},
-    {"Access tokens" = "pages/deploy/tokens.md"},
-  ]},  
+    {"Security" = "pages/deploy/security.md"},
+  ]},      
   {"Connect" = [
-    {"Coding agents" = "pages/connect/coding_agents.md"},
-    {"Custom agents" = "pages/connect/custom_agents.md"},
-    {"HTTP API" = "pages/connect/api.md"},
+    {"Agents" = "pages/connect/agents.md"},
+    {"SSH" = "pages/connect/ssh.md"},
   ]},
-  {"Community" = [
-    {"FAQ" = "pages/community/faq.md"},
-    {"Contributing" = "pages/community/contributing.md"},
-    {"License" = "pages/community/license.md"},
-  ]}
+  {"Reference" = [
+    {"CLI" = "pages/reference/cli.md"},
+    {"REST API" = "pages/reference/api.md"},
+  ]},
 ]
 copyright = "Copyright &copy; 2026 Statespace Technologies, Inc."
 
@@ -56,7 +55,7 @@ features = [
   "search.suggest",
   "announce.dismiss",
   "navigation.tracking",
-  "navigation.prune"
+  "navigation.prune",
 ]
 
 [project.extra]
@@ -66,6 +65,11 @@ generator = false
   icon = "fontawesome/brands/github"
   link = "https://github.com/statespace-tech/statespace/"
   name = "Star us on GitHub"
+
+[[project.extra.social]]
+  icon = "fontawesome/brands/python"
+  link = "https://pypi.org/project/statespace/"
+  name = "Install from PyPI"
 
 [[project.extra.social]]
   icon = "fontawesome/brands/discord"
