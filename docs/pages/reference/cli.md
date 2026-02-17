@@ -1,158 +1,63 @@
 ---
-icon: lucide/code
+icon: lucide/terminal
 ---
 
-# Cloud deployment
+# CLI Reference
 
-Deploy and manage applications with Statespace's CLI.
+The Statespace CLI (`statespace`) lets you deploy, manage, and connect to environments.
 
-## Quick start
+## Global Options
 
-```console
-$ toolfront app deploy ./project --private
-```
+These options apply to all commands:
 
-## CLI usage
+`--api-key`
+: API key override (uses stored credentials by default)
 
-### `toolfront app deploy`
+`--org-id`
+: Organization ID override
 
-Deploy your application to the cloud and get a shareable URL.
+## Local Development
 
-**Usage:**
+### `statespace serve`
+
+Serve a local app for development. No account required.
 
 ```bash
-toolfront app deploy [OPTIONS] PATH
+statespace serve [OPTIONS] [PATH]
 ```
 
 **Arguments:**
 
 `PATH`
-
-: Path to application repository
+: Directory to serve (default: current directory)
 
 **Options:**
 
-`--name`
+`--host`
+: Host to bind to (default: `127.0.0.1`)
 
-: Custom environment name (defaults to directory name)
+`--port`
+: Port to bind to (default: `8000`)
 
-`--api-key`
-
-: Gateway API key (overrides config)
-
-`--gateway-url`
-
-: Gateway base URL (overrides config)
-
-`--verify`
-
-: Wait and verify environment is accessible after deployment
-
-### `toolfront app list`
-
-View all your deployed applications.
-
-**Usage:**
+**Example:**
 
 ```bash
-toolfront app list [OPTIONS]
+statespace serve ./my-app --port 3000
 ```
-
-**Options:**
-
-`--api-key`
-
-: Gateway API key (overrides config)
-
-`--gateway-url`
-
-: Gateway base URL (overrides config)
-
-### `toolfront app update`
-
-Update an existing deployment with new markdown files.
-
-**Usage:**
-
-```bash
-toolfront app update [OPTIONS] DEPLOYMENT_ID PATH
-```
-
-**Arguments:**
-
-`DEPLOYMENT_ID`
-
-: ID of app to update
-
-`PATH`
-
-: Path to application repository
-
-**Options:**
-
-`--api-key`
-
-: Gateway API key (overrides config)
-
-`--gateway-url`
-
-: Gateway base URL (overrides config)
-
-### `toolfront app delete`
-
-Remove a deployment from the cloud.
-
-**Usage:**
-
-```bash
-toolfront app delete [OPTIONS] DEPLOYMENT_ID
-```
-
-**Arguments:**
-
-`DEPLOYMENT_ID`
-
-: ID of app to delete
-
-**Options:**
-
-`--api-key`
-
-: Gateway API key (overrides config)
-
-`--gateway-url`
-
-: Gateway base URL (overrides config)
-
-`--yes, -y`
-
-: Skip confirmation prompt
 
 ## Authentication
 
 ### `statespace auth login`
 
-Authenticate with Statespace using device authorization flow. Opens a browser for login and saves credentials locally.
-
-**Usage:**
+Log in via browser using device authorization flow. Opens a browser, waits for authorization, and saves credentials locally. Also sets up SSH access automatically.
 
 ```bash
 statespace auth login
 ```
 
-The command will:
-- Open your browser to the authorization page
-- Display a user code to enter
-- Wait for authorization
-- Exchange the token for an API key
-- Save credentials to `~/.config/statespace/credentials.json`
-- Automatically set up SSH access
-
 ### `statespace auth logout`
 
-Log out and remove stored credentials.
-
-**Usage:**
+Log out and clear stored credentials.
 
 ```bash
 statespace auth logout
@@ -160,15 +65,14 @@ statespace auth logout
 
 ### `statespace auth status`
 
-Display current authentication status and credentials information.
-
-**Usage:**
+Show current authentication status.
 
 ```bash
 statespace auth status
 ```
 
-Shows:
+Displays:
+
 - Email and name
 - User ID
 - API URL
@@ -177,9 +81,7 @@ Shows:
 
 ### `statespace auth token`
 
-Output the API token for use in scripts or CI/CD.
-
-**Usage:**
+Print the current API token for use in scripts or CI/CD.
 
 ```bash
 statespace auth token [OPTIONS]
@@ -187,8 +89,7 @@ statespace auth token [OPTIONS]
 
 **Options:**
 
-`--format`
-
+`--format, -f`
 : Output format: `plain` (default) or `json`
 
 **Examples:**
@@ -207,8 +108,6 @@ statespace auth token --format json
 
 List all organizations you have access to. Current organization is marked with `*`.
 
-**Usage:**
-
 ```bash
 statespace org list
 ```
@@ -216,8 +115,6 @@ statespace org list
 ### `statespace org current`
 
 Display the currently selected organization.
-
-**Usage:**
 
 ```bash
 statespace org current
@@ -227,8 +124,6 @@ statespace org current
 
 Switch to a different organization.
 
-**Usage:**
-
 ```bash
 statespace org use [ORG]
 ```
@@ -236,8 +131,7 @@ statespace org use [ORG]
 **Arguments:**
 
 `ORG`
-
-: Organization ID or name (optional - will prompt interactively if not provided)
+: Organization name or ID (optional — prompts interactively if omitted)
 
 **Examples:**
 
@@ -249,16 +143,140 @@ statespace org use
 statespace org use my-organization
 ```
 
-## SSH Access
+## App Management
+
+### `statespace app create`
+
+Create a new environment, optionally with markdown files.
+
+```bash
+statespace app create [OPTIONS] [PATH]
+```
+
+**Arguments:**
+
+`PATH`
+: Directory containing markdown files (optional — omit to create an empty environment)
+
+**Options:**
+
+`--name, -n`
+: Environment name (default: directory name, or randomly generated)
+
+`--visibility`
+: Environment visibility: `public` (default) or `private`
+
+`--verify`
+: Wait for the environment to become ready
+
+**Examples:**
+
+```bash
+# Create from a directory
+statespace app create ./my-docs --name production
+
+# Create empty environment
+statespace app create --name scratch-env
+
+# Create private environment
+statespace app create ./project --visibility private --verify
+```
+
+### `statespace app list`
+
+List all environments in the current organization.
+
+```bash
+statespace app list
+```
+
+### `statespace app get`
+
+Show details for an environment.
+
+```bash
+statespace app get <ID>
+```
+
+**Arguments:**
+
+`ID`
+: Environment ID or name
+
+### `statespace app delete`
+
+Delete an environment.
+
+```bash
+statespace app delete [OPTIONS] <ID>
+```
+
+**Arguments:**
+
+`ID`
+: Environment ID or name
+
+**Options:**
+
+`--yes, -y`
+: Skip confirmation prompt
+
+### `statespace app sync`
+
+Sync markdown files to an environment. Creates the environment if it doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
+
+```bash
+statespace app sync [OPTIONS] [PATH]
+```
+
+**Arguments:**
+
+`PATH`
+: Directory to sync (default: current directory)
+
+**Options:**
+
+`--name, -n`
+: Environment name (default: directory name or previously synced name)
+
+**Examples:**
+
+```bash
+# Sync current directory
+statespace app sync
+
+# Sync specific directory with custom name
+statespace app sync ./docs --name my-docs
+```
+
+### `statespace app ssh`
+
+Connect to an environment via SSH.
+
+```bash
+statespace app ssh <APP>
+```
+
+**Arguments:**
+
+`APP`
+: Environment name or ID
+
+**Examples:**
+
+```bash
+statespace app ssh my-project
+```
+
+## SSH Configuration
 
 ### `statespace ssh setup`
 
-Configure SSH access for connecting to environments. This command:
+Configure SSH for native `ssh`, `scp`, and `rsync` access. This command:
+
 - Finds or generates an SSH key
 - Uploads the key to Statespace
 - Configures `~/.ssh/config` with Statespace settings
-
-**Usage:**
 
 ```bash
 statespace ssh setup [OPTIONS]
@@ -267,14 +285,19 @@ statespace ssh setup [OPTIONS]
 **Options:**
 
 `--yes`
-
 : Skip confirmation prompts
+
+After setup, you can use:
+
+```bash
+ssh env@<environment>.statespace
+scp file.txt env@<environment>.statespace:~
+rsync -av ./dir env@<environment>.statespace:~
+```
 
 ### `statespace ssh uninstall`
 
 Remove Statespace SSH configuration from your system.
-
-**Usage:**
 
 ```bash
 statespace ssh uninstall [OPTIONS]
@@ -283,134 +306,180 @@ statespace ssh uninstall [OPTIONS]
 **Options:**
 
 `--yes`
-
 : Skip confirmation prompt
 
 This removes:
+
 - `~/.ssh/statespace_config` file
 - Include directive from `~/.ssh/config`
 
-## SSH Keys
-
-### `statespace ssh-key list`
+### `statespace ssh keys list`
 
 List all SSH public keys registered with your account.
 
-**Usage:**
-
 ```bash
-statespace ssh-key list
+statespace ssh keys list
 ```
 
 Shows for each key:
+
 - Key name and ID
 - Fingerprint
 - Creation date
 
-### `statespace ssh-key add`
+### `statespace ssh keys add`
 
 Register a new SSH public key with your account.
 
-**Usage:**
-
 ```bash
-statespace ssh-key add [OPTIONS]
+statespace ssh keys add [OPTIONS]
 ```
 
 **Options:**
 
-`--file`
+`--file, -f`
+: Path to public key file (default: `~/.ssh/id_ed25519.pub`, `~/.ssh/id_rsa.pub`, or `~/.ssh/id_ecdsa.pub`)
 
-: Path to public key file (defaults to `~/.ssh/id_ed25519.pub`, `~/.ssh/id_rsa.pub`, or `~/.ssh/id_ecdsa.pub`)
-
-`--name`
-
-: Custom name for the key (defaults to filename)
+`--name, -n`
+: Custom name for the key (default: derived from key comment or filename)
 
 **Examples:**
 
 ```bash
 # Add default key
-statespace ssh-key add
+statespace ssh keys add
 
 # Add specific key with custom name
-statespace ssh-key add --file ~/.ssh/custom_key.pub --name "Work Laptop"
+statespace ssh keys add --file ~/.ssh/work_key.pub --name "Work Laptop"
 ```
 
-### `statespace ssh-key remove`
+### `statespace ssh keys remove`
 
 Remove an SSH key from your account.
 
-**Usage:**
-
 ```bash
-statespace ssh-key remove FINGERPRINT
+statespace ssh keys remove <FINGERPRINT>
 ```
 
 **Arguments:**
 
 `FINGERPRINT`
+: SSH key fingerprint (from `ssh keys list`)
 
-: SSH key fingerprint (from `ssh-key list`)
+## Token Management
 
-## App Management
+Personal access tokens for API authentication and CI/CD integrations.
 
-### `statespace app ssh`
+### `statespace tokens create`
 
-Connect to an environment via SSH.
-
-**Usage:**
+Create a new personal access token.
 
 ```bash
-statespace app ssh APP
+statespace tokens create [OPTIONS] <NAME>
 ```
 
 **Arguments:**
 
-`APP`
+`NAME`
+: Token name
 
-: Environment name or ID to connect to
+**Options:**
+
+`--scope, -s`
+: Token scope: `read` (default) or `admin`
+
+`--app-id`
+: Restrict token to specific environment IDs (can be specified multiple times)
+
+`--expires`
+: Expiration datetime (ISO 8601 format, e.g., `2026-12-31T00:00:00Z`)
 
 **Examples:**
 
 ```bash
-statespace app ssh my-project
+# Create a read-only token
+statespace tokens create ci-readonly
+
+# Create an admin token for specific apps
+statespace tokens create deploy-token --scope admin --app-id abc123 --app-id def456
+
+# Create a token with expiration
+statespace tokens create temp-access --expires 2026-06-01T00:00:00Z
 ```
 
-### `statespace app sync`
+### `statespace tokens list`
 
-Sync markdown files from a local directory to a Statespace environment. Creates or updates the environment with the latest files.
-
-**Usage:**
+List personal access tokens.
 
 ```bash
-statespace app sync [OPTIONS] PATH
+statespace tokens list [OPTIONS]
+```
+
+**Options:**
+
+`--all, -a`
+: Show all tokens including revoked
+
+`--limit, -l`
+: Maximum number of tokens to return (default: 100)
+
+### `statespace tokens get`
+
+Show details for a token.
+
+```bash
+statespace tokens get <TOKEN_ID>
 ```
 
 **Arguments:**
 
-`PATH`
+`TOKEN_ID`
+: Token ID
 
-: Path to directory containing markdown files
+### `statespace tokens rotate`
+
+Rotate a token (revoke old, issue new). The new token inherits properties from the old one unless overridden.
+
+```bash
+statespace tokens rotate [OPTIONS] <TOKEN_ID>
+```
+
+**Arguments:**
+
+`TOKEN_ID`
+: Token ID to rotate
 
 **Options:**
 
 `--name`
+: New name
 
-: Custom environment name (defaults to directory name or previously synced name)
+`--scope`
+: New scope (`read` or `admin`)
 
-**Examples:**
+`--app-id`
+: Restrict to specific environment IDs
+
+`--expires`
+: New expiration (ISO 8601 datetime)
+
+### `statespace tokens revoke`
+
+Revoke a token.
 
 ```bash
-# Sync current directory
-statespace app sync .
-
-# Sync specific directory with custom name
-statespace app sync ./my-docs --name "production-docs"
+statespace tokens revoke [OPTIONS] <TOKEN_ID>
 ```
 
-The command:
-- Scans for `.md` files in the directory
-- Detects changes using checksums
-- Creates or updates the environment
-- Saves sync state for future incremental updates
+**Arguments:**
+
+`TOKEN_ID`
+: Token ID to revoke
+
+**Options:**
+
+`--reason, -r`
+: Revocation reason
+
+`--yes, -y`
+: Skip confirmation prompt
