@@ -13,6 +13,7 @@ extra_javascript = [
 nav = [
   {"Get started" = "index.md"},
   {"Install" = "install.md"},
+  {"FAQ" = "faq.md"},
   {"Develop" = [
     {"Pages" = "pages/develop/pages.md"},
     {"Tools" = "pages/develop/tools.md"},
