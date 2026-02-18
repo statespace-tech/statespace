@@ -50,13 +50,7 @@ release version:
     echo ""
     read -p "Continue? [y/N] " c && [[ "$c" =~ ^[Yy]$ ]] || exit 0
 
-    if [[ "$OSTYPE" == darwin* ]]; then
-        sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-    else
-        sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
-    fi
-
-    cargo check --workspace --quiet
+    cargo set-version --workspace "${VERSION}"
 
     git add Cargo.toml Cargo.lock
     git commit -m "chore: release v${VERSION}"
