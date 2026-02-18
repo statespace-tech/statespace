@@ -15,8 +15,8 @@ license = "MIT"
 repository = "https://github.com/statespace-tech/statespace"
 
 [workspace.dependencies]
-statespace-tool-runtime = { path = "crates/statespace-tool-runtime" }
-statespace-server = { path = "crates/statespace-server" }
+statespace-tool-runtime = { path = "crates/statespace-tool-runtime", version = "0.1.1" }
+statespace-server = { path = "crates/statespace-server", version = "0.1.1" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
