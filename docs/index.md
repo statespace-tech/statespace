@@ -13,7 +13,7 @@ With just a few Markdown files, build RAG pipelines, text-to-SQL interfaces, kno
 
 ## Example
 
-The following app is running on [https://demo.app.statespace.com](http://demo.app.statespace.com):
+The following app is running on [https://demo.app.statespace.com](https://demo.app.statespace.com):
 
 ````yaml title="README.md"
 ---

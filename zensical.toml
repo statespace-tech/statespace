@@ -23,7 +23,7 @@ nav = [
     {"Cloud deployment" = "pages/deploy/cloud.md"},
     {"Self-hosting" = "pages/deploy/self_hosting.md"},
     {"Security" = "pages/deploy/security.md"},
-  ]},      
+  ]},
   {"Connect" = [
     {"Agents" = "pages/connect/agents.md"},
     {"SSH" = "pages/connect/ssh.md"},

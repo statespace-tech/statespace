@@ -42,7 +42,7 @@ Every app has two base pages:
 
 Split larger applications into multiple pages:
 
-```
+```console
 app/
 ├── AGENTS.md
 ├── README.md

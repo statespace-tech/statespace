@@ -59,7 +59,7 @@ $ rsync -avz myapp@ssh.statespace.com:./data/ ./backup/
 
 ## Run commands
 
-Execute a single command without an interactive session
++Execute a single command without an interactive session:
 
 ```console
 $ ssh myapp@ssh.statespace.com "cat README.md"

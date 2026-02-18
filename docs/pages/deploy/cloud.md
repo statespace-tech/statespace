@@ -50,7 +50,7 @@ $ statespace delete <app-id>
 
 Optionally, include a `Dockerfile` to customize the environment for your [tools](../develop/tools.md) and [components](../develop/components.md).
 
-```
+```console
 myapp/
 ├── app.md
 ├── Dockerfile  # optional

@@ -72,7 +72,7 @@ Custom agents need a simple HTTP request tool to interact with Statespace apps:
 
 ## Authentication
 
-For apps protected with [access tokens](../deploy/security.md#personal-access-tokens), include the `Authorization` header:
+For apps protected with [access tokens](../deploy/security.md#access-tokens), include the `Authorization` header:
 
 ```bash
 curl -H "Authorization: Bearer <token>" https://myapp.statespace.app

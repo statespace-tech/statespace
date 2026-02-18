@@ -31,7 +31,7 @@ Create a `Dockerfile` to containerize your app:
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://statespace.dev/install.sh | sh
+    curl -fsSL https://statespace.com/install.sh | sh
 
 WORKDIR /app
 COPY . .

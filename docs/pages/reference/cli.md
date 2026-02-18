@@ -386,7 +386,7 @@ statespace tokens create [OPTIONS] <NAME>
 **Options:**
 
 `--scope, -s`
-: Token scope: `read` (default) or `admin`
+: Token scope: `read`, `execute` (default), or `admin`
 
 `--app-id`
 : Restrict token to specific environment IDs (can be specified multiple times)

@@ -20,8 +20,6 @@ They're complementary. Agent frameworks help you build agents; Statespace lets y
 
 ## Can I use Statespace with any AI agent?
 
-Yes! Most coding agents (e.g. Claude Code, Cursor, Codex) work out of the box with Statespace. Custom agents just need a `curl` tool to interact with apps. See the [agents](../pages/connect/agents.md) page for details.
+Yes! Most coding agents (e.g. Claude Code, Cursor, Codex) work out of the box with Statespace. Custom agents just need a `curl` tool to interact with apps. See the [agents](pages/connect/agents.md) page for details.
 
-
-[^1]: Loading all tool definitions upfront slows down agents and increases costs. See Anthropic's blog post. ↩
-
+[^1]: Loading all tool definitions upfront slows down agents and increases costs. See [Anthropic's blog post](https://www.anthropic.com/engineering/code-execution-with-mcp).
