@@ -1,0 +1,145 @@
+# Build statespace binaries for all release targets using Nix + FlakeHub cache.
+#
+# Called from release.yml. Produces archives + checksums in the format
+# cargo-dist expects so the host job can upload them to the GitHub Release.
+#
+# Targets:
+#   Linux x86_64:  x86_64-unknown-linux-gnu, x86_64-unknown-linux-musl
+#   Linux aarch64: aarch64-unknown-linux-gnu, aarch64-unknown-linux-musl
+#   macOS aarch64: aarch64-apple-darwin
+
+name: Build release binaries
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+jobs:
+  build-linux-x86:
+    name: Build Linux x86_64
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      id-token: write # required for FlakeHub cache OIDC auth
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+
+      - name: Build x86_64-unknown-linux-gnu
+        run: nix build .#statespace --out-link result-gnu
+
+      - name: Build x86_64-unknown-linux-musl
+        run: nix build .#statespace-musl --out-link result-musl
+
+      - name: Package
+        run: |
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+
+          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
+            ARCHIVE="statespace-v${VERSION}-${target}"
+            mkdir -p "dist/${ARCHIVE}"
+            if [ "$target" = "x86_64-unknown-linux-gnu" ]; then
+              cp result-gnu/bin/statespace "dist/${ARCHIVE}/statespace"
+            else
+              cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
+            fi
+            tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
+            shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
+            rm -rf "dist/${ARCHIVE}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-linux-x86
+          path: dist/*.tar.gz*
+
+  build-linux-arm:
+    name: Build Linux aarch64
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
+    permissions:
+      id-token: write # required for FlakeHub cache OIDC auth
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+
+      - name: Build aarch64-unknown-linux-gnu
+        run: nix build .#statespace --out-link result-gnu
+
+      - name: Build aarch64-unknown-linux-musl
+        run: nix build .#statespace-musl --out-link result-musl
+
+      - name: Package
+        run: |
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+          mkdir -p dist
+
+          for target in aarch64-unknown-linux-gnu aarch64-unknown-linux-musl; do
+            ARCHIVE="statespace-v${VERSION}-${target}"
+            mkdir -p "dist/${ARCHIVE}"
+            if [ "$target" = "aarch64-unknown-linux-gnu" ]; then
+              cp result-gnu/bin/statespace "dist/${ARCHIVE}/statespace"
+            else
+              cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
+            fi
+            tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
+            shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
+            rm -rf "dist/${ARCHIVE}"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-linux-arm
+          path: dist/*.tar.gz*
+
+  build-macos:
+    name: Build macOS aarch64
+    runs-on: macos-14
+    permissions:
+      id-token: write # required for FlakeHub cache OIDC auth
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - uses: DeterminateSystems/determinate-nix-action@v3
+
+      - uses: DeterminateSystems/flakehub-cache-action@main
+
+      - name: Build aarch64-apple-darwin
+        run: nix build .#statespace --out-link result
+
+      - name: Package
+        run: |
+          VERSION="${{ inputs.tag }}"
+          VERSION="${VERSION#v}"
+          ARCHIVE="statespace-v${VERSION}-aarch64-apple-darwin"
+          mkdir -p "dist/${ARCHIVE}"
+          cp result/bin/statespace "dist/${ARCHIVE}/statespace"
+          tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
+          shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-macos
+          path: dist/*.tar.gz*

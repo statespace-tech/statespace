@@ -1,192 +1,168 @@
+# Release workflow for statespace.
+#
+# Trigger via workflow_dispatch (from the GitHub UI or `just release <tag>`).
+# cargo-dist handles: plan → host → announce (GitHub Release creation).
+# Nix handles: binary builds (see build-release-binaries.yml).
+# publish-crates: runs after host, skipped for prerelease tags.
+
 name: Release
 
-on:
-  push:
-    tags:
-      - "v*"
+permissions:
+  contents: write
 
-env:
-  CARGO_TERM_COLOR: always
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.2.0 or v0.2.0-rc.1)"
+        required: true
+        type: string
 
 jobs:
+  # Run 'dist plan' to determine what needs to be done and whether this is a prerelease
+  plan:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      val: ${{ steps.plan.outputs.manifest }}
+      tag: ${{ inputs.tag }}
+      publishing: "true"
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Install dist
+        shell: bash
+        run: "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.30.4/cargo-dist-installer.sh | sh"
+
+      - name: Cache dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-dist-cache
+          path: ~/.cargo/bin/dist
+
+      - id: plan
+        run: |
+          dist host --steps=create --tag=${{ inputs.tag }} --output-format=json > plan-dist-manifest.json
+          echo "dist ran successfully"
+          cat plan-dist-manifest.json
+          echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dist-manifest.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-plan-dist-manifest
+          path: plan-dist-manifest.json
+
+  # Build binaries for all targets using Nix + FlakeHub cache
+  build-release-binaries:
+    needs: [plan]
+    uses: ./.github/workflows/build-release-binaries.yml
+    with:
+      tag: ${{ inputs.tag }}
+    secrets: inherit
+
+  # Collect artifacts, upload to the GitHub Release draft created by plan
+  host:
+    needs: [plan, build-release-binaries]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      val: ${{ steps.host.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Install cached dist
+        uses: actions/download-artifact@v4
+        with:
+          name: cargo-dist-cache
+          path: ~/.cargo/bin/
+
+      - run: chmod +x ~/.cargo/bin/dist
+
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+
+      - id: host
+        shell: bash
+        run: |
+          dist host --tag=${{ inputs.tag }} --steps=upload --steps=release --output-format=json > dist-manifest.json
+          echo "artifacts uploaded and released successfully"
+          cat dist-manifest.json
+          echo "manifest=$(jq -c "." dist-manifest.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dist-manifest.json
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-dist-manifest
+          path: dist-manifest.json
+
+  # Publish crates to crates.io — skipped for prerelease tags
   publish-crates:
-    name: Publish crates
+    needs: [plan, host]
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
       - uses: dtolnay/rust-toolchain@stable
+
       - name: Install cargo-release
         run: cargo install cargo-release
+
       - name: Publish crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo release publish --workspace --no-confirm --no-verify --allow-branch HEAD --execute
 
-  build-linux-x86:
-    name: Build Linux x86_64
+  # Create the final GitHub Release
+  announce:
+    needs: [plan, host, publish-crates]
+    # Always run if host succeeded; publish-crates may be skipped for prereleases
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-crates.result == 'skipped' || needs.publish-crates.result == 'success') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      id-token: write # required for FlakeHub cache OIDC auth
-      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
-
-      - name: Build x86_64-unknown-linux-gnu
-        run: |
-          nix build .#statespace --out-link result-gnu
-          mkdir -p dist
-          cp result-gnu/bin/statespace dist/statespace-gnu
-
-      - name: Build x86_64-unknown-linux-musl
-        run: |
-          nix build .#statespace-musl --out-link result-musl
-          cp result-musl/bin/statespace dist/statespace-musl
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd dist
-
-          for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
-            ARCHIVE="statespace-v${VERSION}-${target}"
-            mkdir -p "${ARCHIVE}"
-            if [ "$target" = "x86_64-unknown-linux-gnu" ]; then
-              cp statespace-gnu "${ARCHIVE}/statespace"
-            else
-              cp statespace-musl "${ARCHIVE}/statespace"
-            fi
-            tar -czvf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
-            shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
-            rm -rf "${ARCHIVE}"
-          done
-
-      - uses: actions/upload-artifact@v4
         with:
-          name: linux-x86
-          path: dist/*.tar.gz*
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
 
-  build-linux-arm:
-    name: Build Linux aarch64
-    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
-    permissions:
-      id-token: write # required for FlakeHub cache OIDC auth
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
-
-      - name: Build aarch64-unknown-linux-gnu
-        run: |
-          nix build .#statespace --out-link result-gnu
-          mkdir -p dist
-          cp result-gnu/bin/statespace dist/statespace-gnu
-
-      - name: Build aarch64-unknown-linux-musl
-        run: |
-          nix build .#statespace-musl --out-link result-musl
-          cp result-musl/bin/statespace dist/statespace-musl
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd dist
-
-          for target in aarch64-unknown-linux-gnu aarch64-unknown-linux-musl; do
-            ARCHIVE="statespace-v${VERSION}-${target}"
-            mkdir -p "${ARCHIVE}"
-            if [ "$target" = "aarch64-unknown-linux-gnu" ]; then
-              cp statespace-gnu "${ARCHIVE}/statespace"
-            else
-              cp statespace-musl "${ARCHIVE}/statespace"
-            fi
-            tar -czvf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
-            shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
-            rm -rf "${ARCHIVE}"
-          done
-
-      - uses: actions/upload-artifact@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: linux-arm
-          path: dist/*.tar.gz*
-
-  build-macos:
-    name: Build macOS aarch64
-    runs-on: macos-14
-    permissions:
-      id-token: write # required for FlakeHub cache OIDC auth
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: DeterminateSystems/determinate-nix-action@v3
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
-
-      - name: Build aarch64-apple-darwin
-        run: |
-          nix build .#statespace --out-link result
-          mkdir -p dist
-          cp result/bin/statespace dist/statespace
-
-      - name: Package
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          ARCHIVE="statespace-v${VERSION}-aarch64-apple-darwin"
-          mkdir -p "dist/${ARCHIVE}"
-          cp dist/statespace "dist/${ARCHIVE}/statespace"
-          cd dist
-          tar -czvf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
-          shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos
-          path: dist/*.tar.gz*
-
-  release:
-    name: Create release
-    needs: [publish-crates, build-linux-x86, build-linux-arm, build-macos]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
+          pattern: artifacts-*
           path: artifacts
+          merge-multiple: true
 
-      - name: Prepare assets
+      - name: Cleanup manifests
+        run: rm -f artifacts/*-dist-manifest.json
+
+      - name: Create GitHub Release
+        env:
+          PRERELEASE_FLAG: "${{ fromJson(needs.host.outputs.val).announcement_is_prerelease && '--prerelease' || '' }}"
+          ANNOUNCEMENT_TITLE: "${{ fromJson(needs.host.outputs.val).announcement_title }}"
+          ANNOUNCEMENT_BODY: "${{ fromJson(needs.host.outputs.val).announcement_github_body }}"
         run: |
-          mkdir -p release
-          find artifacts -name "*.tar.gz*" -exec mv {} release/ \;
-
-      - name: Generate manifest
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd release
-
-          echo "{\"version\":\"${VERSION}\",\"binaries\":{" > manifest.json
-          first=true
-          for sha_file in *.sha256; do
-            [ "$first" = false ] && echo "," >> manifest.json
-            first=false
-            archive="${sha_file%.sha256}"
-            checksum=$(cut -d' ' -f1 "$sha_file")
-            target="${archive#statespace-v${VERSION}-}"
-            target="${target%.tar.gz}"
-            printf '"%s":{"archive":"%s","sha256":"%s"}' "$target" "$archive" "$checksum" >> manifest.json
-          done
-          echo "}}" >> manifest.json
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
-          generate_release_notes: true
-          draft: false
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          echo "$ANNOUNCEMENT_BODY" > $RUNNER_TEMP/notes.txt
+          gh release create "${{ inputs.tag }}" \
+            --target "${{ github.sha }}" \
+            $PRERELEASE_FLAG \
+            --title "$ANNOUNCEMENT_TITLE" \
+            --notes-file "$RUNNER_TEMP/notes.txt" \
+            artifacts/*
