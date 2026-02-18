@@ -36,3 +36,6 @@ github-custom-job-permissions = { "build-release-binaries" = { id-token = "write
 
 # Don't run on PRs
 pr-run-mode = "skip"
+
+# Allow manual edits to the generated release.yml (e.g. passing tag input to custom jobs)
+allow-dirty = ["ci"]
