@@ -13,7 +13,7 @@ name: Build release binaries
 on:
   workflow_call:
     inputs:
-      tag:
+      plan:
         required: true
         type: string
 
@@ -25,9 +25,19 @@ jobs:
       id-token: write # required for FlakeHub cache OIDC auth
       contents: read
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="dry-run"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
       - uses: DeterminateSystems/determinate-nix-action@v3
@@ -42,8 +52,7 @@ jobs:
 
       - name: Package
         run: |
-          VERSION="${{ inputs.tag }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ steps.tag.outputs.version }}"
           mkdir -p dist
 
           for target in x86_64-unknown-linux-gnu x86_64-unknown-linux-musl; do
@@ -71,9 +80,19 @@ jobs:
       id-token: write # required for FlakeHub cache OIDC auth
       contents: read
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="dry-run"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
       - uses: DeterminateSystems/determinate-nix-action@v3
@@ -88,8 +107,7 @@ jobs:
 
       - name: Package
         run: |
-          VERSION="${{ inputs.tag }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ steps.tag.outputs.version }}"
           mkdir -p dist
 
           for target in aarch64-unknown-linux-gnu aarch64-unknown-linux-musl; do
@@ -116,9 +134,19 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            TAG="dry-run"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
 
       - uses: DeterminateSystems/determinate-nix-action@v3
@@ -131,8 +159,7 @@ jobs:
 
       - name: Package
         run: |
-          VERSION="${{ inputs.tag }}"
-          VERSION="${VERSION#v}"
+          VERSION="${{ steps.tag.outputs.version }}"
           ARCHIVE="statespace-v${VERSION}-aarch64-apple-darwin"
           mkdir -p "dist/${ARCHIVE}"
           cp result/bin/statespace "dist/${ARCHIVE}/statespace"

@@ -20,3 +20,19 @@ targets = [
 ]
 # Where to host releases
 hosting = "github"
+
+# Use manual workflow_dispatch releases instead of tag pushes
+dispatch-releases = true
+
+# Do not use cargo-dist's default build matrix; use custom Nix build job instead
+build-local-artifacts = false
+local-artifacts-jobs = ["./build-release-binaries"]
+
+# Publish crates via a custom job after hosting
+publish-jobs = ["./publish-crates"]
+
+# Permissions needed by custom jobs in GitHub Actions
+github-custom-job-permissions = { "build-release-binaries" = { id-token = "write", contents = "read" }, "publish-crates" = { contents = "read" } }
+
+# Don't run on PRs
+pr-run-mode = "skip"
