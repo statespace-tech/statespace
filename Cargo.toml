@@ -18,6 +18,7 @@ repository = "https://github.com/statespace-tech/statespace"
 shared-version = true
 tag-name = "v{{version}}"
 pre-release-commit-message = "chore: release v{{version}}"
+allow-branch = ["main"]
 
 [workspace.dependencies]
 statespace-tool-runtime = { path = "crates/statespace-tool-runtime", version = "0.1.1" }
