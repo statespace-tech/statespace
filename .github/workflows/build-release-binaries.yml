@@ -114,7 +114,6 @@ jobs:
     name: Build macOS aarch64
     runs-on: macos-14
     permissions:
-      id-token: write # required for FlakeHub cache OIDC auth
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -123,8 +122,9 @@ jobs:
           persist-credentials: false
 
       - uses: DeterminateSystems/determinate-nix-action@v3
-
-      - uses: DeterminateSystems/flakehub-cache-action@main
+      # Note: flakehub-cache-action is intentionally omitted on macOS —
+      # the magic-nix-cache binary has a libc++ compatibility issue on
+      # GitHub-hosted macos-14 runners.
 
       - name: Build aarch64-apple-darwin
         run: nix build .#statespace --out-link result

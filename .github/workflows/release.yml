@@ -65,7 +65,7 @@ jobs:
       tag: ${{ inputs.tag }}
     secrets: inherit
     permissions:
-      id-token: write # propagate to nested jobs for FlakeHub cache OIDC
+      id-token: write # required by Linux build jobs for FlakeHub cache OIDC
       contents: read
 
   # Collect artifacts, upload to the GitHub Release draft created by plan
