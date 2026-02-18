@@ -97,6 +97,7 @@ jobs:
     uses: ./.github/workflows/build-release-binaries.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
+      tag: ${{ needs.plan.outputs.tag }}
     secrets: inherit
     permissions:
       "contents": "read"

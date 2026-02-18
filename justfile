@@ -16,7 +16,7 @@ release level:
     git push origin main --follow-tags
 
     echo "Triggering release workflow for ${TAG}..."
-    gh workflow run release.yml --ref main -f tag="${TAG}"
+    gh workflow run release.yml --ref "${TAG}" -f tag="${TAG}"
     echo "Monitor: gh run list --workflow=release.yml"
 
 # Trigger a dry-run build of the release workflow (no publish, no GitHub release)

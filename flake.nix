@@ -52,10 +52,12 @@
           pkgs.libiconv
         ];
 
+        workspaceVersion = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).workspace.package.version;
+
         commonArgs = {
           inherit src;
           pname = "statespace-workspace";
-          version = "0.1.3";
+          version = workspaceVersion;
           strictDeps = true;
           inherit buildInputs;
           nativeBuildInputs = [ rustToolchain ];
@@ -113,7 +115,7 @@
           if isLinux then {
             inherit src;
             pname = "statespace-workspace-musl";
-            version = "0.1.3";
+            version = workspaceVersion;
             strictDeps = true;
             doCheck = false;
 

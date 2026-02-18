@@ -16,6 +16,10 @@ on:
       plan:
         required: true
         type: string
+      tag:
+        required: false
+        type: string
+        default: ''
 
 jobs:
   build-linux-x86:
@@ -28,8 +32,8 @@ jobs:
       - name: Resolve tag
         id: tag
         run: |
-          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
             TAG="dry-run"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -70,7 +74,7 @@ jobs:
               cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
             fi
             tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
-            shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
+            sha256sum "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
             rm -rf "dist/${ARCHIVE}"
           done
 
@@ -89,8 +93,8 @@ jobs:
       - name: Resolve tag
         id: tag
         run: |
-          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
             TAG="dry-run"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -131,7 +135,7 @@ jobs:
               cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
             fi
             tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
-            shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
+            sha256sum "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
             rm -rf "dist/${ARCHIVE}"
           done
 
@@ -149,8 +153,8 @@ jobs:
       - name: Resolve tag
         id: tag
         run: |
-          TAG=$(echo '${{ inputs.plan }}' | jq -r '.announcement_tag // .tag // empty')
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+          TAG="${{ inputs.tag }}"
+          if [ -z "$TAG" ]; then
             TAG="dry-run"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
