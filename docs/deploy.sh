@@ -5,19 +5,14 @@ set -e
 
 echo "Preparing deployment files..."
 
-# Copy necessary files from parent directory
-cp ../pyproject.toml .
-cp ../uv.lock . 2>/dev/null || true  # uv.lock might not exist
-cp -r ../src .
+# Copy zensical.toml from parent directory
 cp ../zensical.toml .
 
 # Deploy to Fly
 echo "Deploying to Fly.io..."
 flyctl deploy
 
-# Clean up copied files
 echo "Cleaning up..."
-rm -f pyproject.toml uv.lock zensical.toml
-rm -rf src
+rm -f zensical.toml
 
 echo "Deployment complete!"

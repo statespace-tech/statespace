@@ -12,20 +12,15 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install uv
+RUN pip install uv && uv pip install --system zensical
 
 WORKDIR /app
-
-COPY pyproject.toml uv.lock* ./
-COPY src ./src
-
-RUN uv pip install --system -e . zensical
 
 COPY zensical.toml ./
 
 COPY pages ./docs/pages
 COPY assets ./docs/assets
-COPY index.md ./docs/
+COPY index.md faq.md install.md ./docs/
 
 EXPOSE 8080
 
