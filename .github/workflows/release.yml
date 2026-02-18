@@ -1,20 +1,24 @@
-name: Release CLI
+name: Release
 
 on:
   push:
     tags:
-      - "cli-v*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to release (e.g., 0.1.0)"
-        required: true
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: statespace
 
 jobs:
+  publish-crates:
+    name: Publish crates
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: katyo/publish-crates@v2
+        with:
+          registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -28,13 +32,9 @@ jobs:
           - { target: aarch64-unknown-linux-gnu, os: blacksmith-4vcpu-ubuntu-2204, cross: true }
           - { target: x86_64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2204 }
           - { target: aarch64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2204, cross: true }
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
@@ -46,82 +46,64 @@ jobs:
         if: contains(matrix.target, 'musl') && !matrix.cross
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Build binary
+      - name: Build
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }} -p statespace-cli
+            cross build --release --target ${{ matrix.target }} -p statespace
           else
-            cargo build --release --target ${{ matrix.target }} -p statespace-cli
+            cargo build --release --target ${{ matrix.target }} -p statespace
           fi
 
-      - name: Package binary
+      - name: Package
         run: |
-          VERSION="${GITHUB_REF_NAME#cli-v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-
-          ARCHIVE="${BINARY_NAME}-v${VERSION}-${{ matrix.target }}"
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="statespace-v${VERSION}-${{ matrix.target }}"
           mkdir -p "dist/${ARCHIVE}"
-          cp "target/${{ matrix.target }}/release/${BINARY_NAME}" "dist/${ARCHIVE}/"
+          cp "target/${{ matrix.target }}/release/statespace" "dist/${ARCHIVE}/"
           cd dist
           tar -czvf "${ARCHIVE}.tar.gz" "${ARCHIVE}"
-          if command -v sha256sum &>/dev/null; then
-            sha256sum "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
-          else
-            shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
-          fi
+          shasum -a 256 "${ARCHIVE}.tar.gz" > "${ARCHIVE}.tar.gz.sha256"
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
           path: dist/*.tar.gz*
 
   release:
-    name: Create Release
-    needs: build
+    name: Create release
+    needs: [publish-crates, build]
     runs-on: blacksmith-4vcpu-ubuntu-2204
     permissions:
       contents: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
 
-      - name: Prepare release assets
+      - name: Prepare assets
         run: |
           mkdir -p release
           find artifacts -name "*.tar.gz*" -exec mv {} release/ \;
 
       - name: Generate manifest
         run: |
-          VERSION="${GITHUB_REF_NAME#cli-v}"
-          [ -n "${{ inputs.version }}" ] && VERSION="${{ inputs.version }}"
-
+          VERSION="${GITHUB_REF_NAME#v}"
           cd release
+          
           echo "{\"version\":\"${VERSION}\",\"binaries\":{" > manifest.json
-
           first=true
           for sha_file in *.sha256; do
             [ "$first" = false ] && echo "," >> manifest.json
             first=false
-
             archive="${sha_file%.sha256}"
             checksum=$(cut -d' ' -f1 "$sha_file")
             target="${archive#statespace-v${VERSION}-}"
             target="${target%.tar.gz}"
-
             printf '"%s":{"archive":"%s","sha256":"%s"}' "$target" "$archive" "$checksum" >> manifest.json
           done
-
           echo "}}" >> manifest.json
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
           files: release/*
           generate_release_notes: true
