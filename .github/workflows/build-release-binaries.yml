@@ -36,6 +36,12 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag == 'dry-run' }}
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag != 'dry-run' }}
         with:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
@@ -91,6 +97,12 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag == 'dry-run' }}
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag != 'dry-run' }}
         with:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
@@ -145,6 +157,12 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag == 'dry-run' }}
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        if: ${{ steps.tag.outputs.tag != 'dry-run' }}
         with:
           ref: ${{ steps.tag.outputs.tag }}
           persist-credentials: false
