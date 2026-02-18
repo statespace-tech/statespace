@@ -89,10 +89,10 @@ get_latest_version() {
     local response
     response=$(fetch "$GITHUB_API") || error "failed to fetch releases from GitHub API"
 
-    # Find the first cli-v* tag (releases are sorted by date, newest first)
+    # Find the first v* tag (releases are sorted by date, newest first)
     local version
-    version=$(printf '%s' "$response" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"cli-v[^"]*"' | head -1 | \
-        sed 's/.*"cli-v\([^"]*\)".*/\1/')
+    version=$(printf '%s' "$response" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"v[^"]*"' | head -1 | \
+        sed 's/.*"v\([^"]*\)".*/\1/')
 
     [[ -n "$version" ]] || error "no CLI releases found"
     printf '%s' "$version"
@@ -191,7 +191,7 @@ main() {
     local archive_name="${BINARY_NAME}-v${version}-${target}.tar.gz"
     local archive_path="$TMP_DIR/$archive_name"
     local checksum_path="$TMP_DIR/${archive_name}.sha256"
-    local base_url="${GITHUB_RELEASES}/cli-v${version}"
+    local base_url="${GITHUB_RELEASES}/v${version}"
 
     # Download checksum first
     info "fetching checksum..."
