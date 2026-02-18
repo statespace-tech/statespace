@@ -50,10 +50,6 @@ git config core.hooksPath .githooks
 - Keep public APIs documented and test new behavior.
 - Follow existing module boundaries and naming conventions.
 
-## Changelog
-
-If your change is user-facing, add a short entry under `## Unreleased` in `CHANGELOG.md`.
-
 ## Submitting changes
 
 1. Create a branch from `main`.
