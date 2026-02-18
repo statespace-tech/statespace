@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Open-source AI tool execution runtime - HTTP server library"
 readme = "README.md"
 keywords = ["ai", "tools", "mcp", "agents"]
