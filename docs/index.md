@@ -2,49 +2,136 @@
 icon: lucide/home
 ---
 
-# Statespace documentation
 
-Build and share LLM apps in pure Markdown. This site covers the CLI, app structure, and the HTTP API.
+# Get started with Statespace
 
-## Quickstart
+Build interactive web apps for AI agents in Markdown.
 
-Install the CLI:
+Statespace is a declarative framework that turns your Markdown files into shareable web apps that any AI agent can interact with.
+Build and share RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots, agent skills, and more.
 
-```bash
-curl -fsSL https://statespace.com/install.sh | bash
-```
+## Example
 
-Create a minimal app:
+The following app is running on [https://demo.statespace.app](https://demo.statespace.app):
 
-```yaml title="README.md"
+````yaml title="README.md"
 ---
 tools:
-  - [date]
+  - [expr, { }]
 ---
 
+```component
+echo "Random number: $RANDOM"
+```
+
 # Instructions
-- Run `date` to check today's date
-```
+- The component loads a random number when the page loads
+- Use the `expr` tool to multiply it
+````
 
-Serve it locally:
+Pass the app URL to your coding agent to check it out:
 
-```console
-$ statespace serve .
-```
+=== ":simple-claude: &nbsp; Claude Code"
 
-## What to read next
+    ```console
+    $ claude "Multiply the random number in https://demo.app.statespace.com by 256"
+    ```
 
-- [Instructions](pages/develop/instructions.md)
-- [CLI tools](pages/develop/tools.md)
-- [Apps](pages/develop/apps.md)
-- [Cloud deployment](pages/deploy/cloud.md)
-- [Self-hosting](pages/deploy/self_hosting.md)
-- [Access tokens](pages/deploy/tokens.md)
-- [HTTP API](pages/connect/api.md)
-- [Coding agents](pages/connect/coding_agents.md)
-- [Custom agents](pages/connect/custom_agents.md)
+=== ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
-## Community
+    ```console
+    $ copilot -p "Multiply the random number in https://demo.app.statespace.com by 256"
+    ```
 
-- [GitHub](https://github.com/statespace-tech/statespace)
-- [Discord](https://discord.gg/rRyM7zkZTf)
+=== ":simple-cursor: &nbsp; Cursor"
+
+    ```console
+    $ agent "Multiply the random number in https://demo.app.statespace.com by 256"
+    ```
+
+
+Alternatively, try it locally: 
+
+1. Save the example above as `myapp/README.md`
+2. Run `statespace serve myapp/`
+3. Point your agent to [`http://127.0.0.1:8000`](http://127.0.0.1:8000)
+
+> **Note**: Statespace apps work with any agent that can `curl` URLs.
+
+## Concepts
+
+<div class="grid cards concept-cards" markdown style="grid-template-columns: repeat(1, 1fr);">
+
+-   :lucide-file:{ .md .middle } &nbsp; [__Pages__](pages/develop/pages.md#overview)
+
+    ---
+
+    Markdown files served over HTTP. Write instructions, documentation, and context to guide agents.
+
+-   :lucide-wrench:{ .md .middle } &nbsp; [__Tools__](pages/develop/tools.md#overview)
+
+    ---
+
+    CLI commands that agents can call via HTTP. Query databases, call APIs, run scripts, or execute any shell command.
+
+-   :lucide-sparkles:{ .md .middle } &nbsp; [__Components__](pages/develop/components.md#overview)
+
+    ---
+
+    Shell commands embedded in pages that run when the page loads. Render live data like query results or system status.
+
+</div>
+
+## Features
+
+**Lightweight** - Just Markdown files and a single Rust binary. No dependencies.
+
+**Universal** - Works immediately with [any agent](pages/connect/agents.md) that can make HTTP requests.
+
+**Portable** - [Deploy to the cloud](pages/deploy/cloud.md) for a public URL, or [run locally](pages/deploy/self_hosting.md) with `statespace serve`.
+
+**Secure** - Restrict access to your private apps with [token-based authentication](pages/deploy/security.md).
+
+**Debuggable** - [Tunnel via SSH](pages/connect/ssh.md) to debug and patch deployed applications.
+
+## Use cases
+
+<div class="grid cards" markdown style="grid-template-columns: repeat(3, 1fr);">
+
+-   :lucide-file-stack:{ .md .middle .jade } &nbsp; **RAG**
+
+    ---
+
+    Search documents with `grep`, `cat`, or your APIs.
+
+-   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
+
+    ---
+
+    Query databases with read-only access.
+
+-   :lucide-bot-message-square:{ .md .middle .jade } &nbsp; **Chatbots**
+
+    ---
+
+    Build multi-turn conversational flows.
+
+-   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
+
+    ---
+
+    Organize records for structured queries.
+
+-   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
+
+    ---
+
+    Package tools into reusable skills.
+
+-   :lucide-workflow:{ .md .middle .jade } &nbsp; **Workflows**
+
+    ---
+
+    Chain actions into multi-step flows.
+
+</div>

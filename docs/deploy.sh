@@ -3,6 +3,12 @@
 
 set -e
 
+cleanup() {
+    echo "Cleaning up..."
+    rm -f zensical.toml
+}
+trap cleanup EXIT
+
 echo "Preparing deployment files..."
 
 # Copy zensical.toml from parent directory
@@ -11,8 +17,5 @@ cp ../zensical.toml .
 # Deploy to Fly
 echo "Deploying to Fly.io..."
 flyctl deploy
-
-echo "Cleaning up..."
-rm -f zensical.toml
 
 echo "Deployment complete!"
