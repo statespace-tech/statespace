@@ -7,12 +7,12 @@ icon: lucide/home
 
 Build interactive web apps for AI agents in Markdown.
 
-Statespace is a declarative framework turns your Markdown files into shareable web apps that any AI agent can interact with.
+Statespace is a declarative framework that turns your Markdown files into shareable web apps that any AI agent can interact with.
 Build and share RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots, agent skills, and more.
 
 ## Example
 
-The following app is running on [https://demo.statespace.app](https://demo.app.statespace.com):
+The following app is running on [https://demo.statespace.app](https://demo.statespace.app):
 
 ````yaml title="README.md"
 ---
@@ -40,7 +40,7 @@ Pass the app URL to your coding agent to check it out:
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
     ```console
-    $ copilot -[] "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ copilot -p "Multiply the random number in http://demo.app.statespace.com by 256"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
@@ -56,7 +56,7 @@ Alternatively, try it locally:
 2. Run `statespace serve myapp/`
 3. Point your agent to [`http://127.0.0.1:8000`](http://127.0.0.1:8000)
 
-> **Note**: Statespace apps work with any agent that that can `curl` URLs.
+> **Note**: Statespace apps work with any agent that can `curl` URLs.
 
 ## Concepts
 

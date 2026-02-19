@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv==0.5.14 && uv pip install --system zensical
+RUN pip install --no-cache-dir uv==0.5.14 && uv pip install --system zensical==0.0.23
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ COPY zensical.toml ./
 
 COPY pages ./docs/pages
 COPY assets ./docs/assets
-COPY index.md faq.md install.md ./docs/
+COPY index.md install.md ./docs/
 
 EXPOSE 8080
 

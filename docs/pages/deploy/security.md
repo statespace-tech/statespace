@@ -20,7 +20,7 @@ Generate an API key from your account:
 
 ```console
 $ statespace auth
-API key: ss_key_abc123
+API key: <your-api-key>
 ```
 
 ### Usage

@@ -26,7 +26,7 @@ Deploying 'myapp'...
 
 !!! info "Learn more"
 
-    Authenticate requests to your deployed app with [access tokens](tokens.md).
+    Authenticate requests to your deployed app with [access tokens](security.md).
 
 ## Update
 
@@ -50,7 +50,7 @@ $ statespace delete <app-id>
 
 Optionally, include a `Dockerfile` to customize the environment for your [tools](../develop/tools.md) and [components](../develop/components.md).
 
-```console
+```text
 myapp/
 ├── app.md
 ├── Dockerfile  # optional
