@@ -34,19 +34,19 @@ Pass the app URL to your coding agent to check it out:
 === ":simple-claude: &nbsp; Claude Code"
 
     ```console
-    $ claude "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ claude "Multiply the random number in https://demo.app.statespace.com by 256"
     ```
 
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
     ```console
-    $ copilot -p "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ copilot -p "Multiply the random number in https://demo.app.statespace.com by 256"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
 
     ```console
-    $ agent "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ agent "Multiply the random number in https://demo.app.statespace.com by 256"
     ```
 
 
