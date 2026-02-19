@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install uv && uv pip install --system zensical
+RUN pip install --no-cache-dir uv==0.5.14 && uv pip install --system zensical
 
 WORKDIR /app
 

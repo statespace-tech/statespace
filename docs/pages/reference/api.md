@@ -18,7 +18,7 @@ Read a file from the application directory.
 
 `path` <span class="param-tag param-type">string</span> <span class="param-tag param-required">required</span>
 
-: Path to file (e.g., `README.md` or `src/tools.md`)
+: Path to file (e.g.,`src/file.md`)
 
 **Headers**
 
@@ -39,7 +39,7 @@ Read a file from the application directory.
 ```bash
 curl -X GET \
   -H "Authorization: Bearer token" \
-  https://127.0.0.1:8000/README.md
+  https://127.0.0.1:8000/src/file.md
 ```
 
 **Example Response**
@@ -66,8 +66,6 @@ You are an AI agent.
 <div markdown>
 
 Execute a tool defined in a Markdown file's frontmatter.
-
-: Path to Markdown file containing the tool definition
 
 **Request body (JSON)**
 
@@ -106,7 +104,7 @@ Execute a tool defined in a Markdown file's frontmatter.
 **Example**
 
 ```bash
-curl -X POST \
+curl -X POST https://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer token" \
   -d '{

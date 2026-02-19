@@ -27,7 +27,7 @@ Changes take effect immediately without redeploying.
 
 !!! warning "Warning"
 
-    Hotfixes are overwritten when running `statespace update`. Commit changes locally before redeploying.
+    Hotfixes are overwritten when running `statespace app sync`. Commit changes locally before redeploying.
 
 ## File transfer
 
@@ -59,7 +59,7 @@ $ rsync -avz myapp@ssh.statespace.com:./data/ ./backup/
 
 ## Run commands
 
-+Execute a single command without an interactive session:
+Execute a single command without an interactive session.
 
 ```console
 $ ssh myapp@ssh.statespace.com "cat README.md"

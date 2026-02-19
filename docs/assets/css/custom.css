@@ -1,3 +1,5 @@
+@import "https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&display=swap";
+
 /* Custom color scheme */
 :root {
     --md-primary-fg-color: #00bb77;
@@ -76,12 +78,14 @@
   color: var(--md-code-fg-color) !important;
 }
 
-/* Import Montserrat font */
-@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@500;600;700&display=swap');
-
 /* STATESPACE header topic styling */
 .md-header__title .md-header__topic:first-child .md-ellipsis {
-    font-family: 'Montserrat', monospace;
+    font-family: Montserrat, sans-serif;
     font-weight: 600;
     letter-spacing: 0.25em;
+}
+
+/* Jade green icon color */
+.jade {
+    color: #00bb77;
 }

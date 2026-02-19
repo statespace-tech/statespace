@@ -1,7 +1,7 @@
 // Add homepage class to body for conditional styling
 function checkHomepage() {
     var path = window.location.pathname;
-    var isHome = path === '/' || path === '' || path.match(/\/(index\.html?)?$/);
+    var isHome = path.match(/^\/(index\.html?)?$/);
     if (isHome) {
         document.body.classList.add('homepage');
     } else {
@@ -9,10 +9,7 @@ function checkHomepage() {
     }
 }
 
-// Run on initial load
-checkHomepage();
-
-// Run on DOM ready
+// Run on DOM ready (fallback for non-instant-navigation cold loads)
 document.addEventListener('DOMContentLoaded', checkHomepage);
 
 // Handle Material instant navigation

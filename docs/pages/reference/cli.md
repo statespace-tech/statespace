@@ -287,12 +287,12 @@ statespace ssh setup [OPTIONS]
 `--yes`
 : Skip confirmation prompts
 
-After setup, you can use:
+After setup, you can use native SSH commands:
 
 ```bash
-ssh env@<environment>.statespace
-scp file.txt env@<environment>.statespace:~
-rsync -av ./dir env@<environment>.statespace:~
+ssh <app-id>@ssh.statespace.com
+scp file.txt <app-id>@ssh.statespace.com:~
+rsync -av ./dir <app-id>@ssh.statespace.com:~
 ```
 
 ### `statespace ssh uninstall`

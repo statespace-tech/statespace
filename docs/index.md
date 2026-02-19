@@ -7,13 +7,12 @@ icon: lucide/home
 
 Build interactive web apps for AI agents in Markdown.
 
-Statespace turns your Markdown files into shareable web apps that any AI agent can interact with.
-With just a few Markdown files, build RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots, agent skills, and more.
-
+Statespace is a declarative framework turns your Markdown files into shareable web apps that any AI agent can interact with.
+Build and share RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots, agent skills, and more.
 
 ## Example
 
-The following app is running on [https://demo.app.statespace.com](https://demo.app.statespace.com):
+The following app is running on [https://demo.statespace.app](https://demo.app.statespace.com):
 
 ````yaml title="README.md"
 ---
@@ -41,7 +40,7 @@ Pass the app URL to your coding agent to check it out:
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
     ```console
-    $ copilot "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ copilot -[] "Multiply the random number in http://demo.app.statespace.com by 256"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
@@ -51,8 +50,13 @@ Pass the app URL to your coding agent to check it out:
     ```
 
 
-Alternatively, [run the app locally](pages/deploy/self_hosting.md#quick-start){ data-preview } and point your agent to [http://127.0.0.1](http://127.0.0.1).
+Alternatively, try it locally: 
 
+1. Save the example above as `myapp/README.md`
+2. Run `statespace serve myapp/`
+3. Point your agent to [`http://127.0.0.1:8000`](http://127.0.0.1:8000)
+
+> **Note**: Statespace apps work with any agent that that can `curl` URLs.
 
 ## Concepts
 
@@ -94,40 +98,40 @@ Alternatively, [run the app locally](pages/deploy/self_hosting.md#quick-start){ 
 
 <div class="grid cards" markdown style="grid-template-columns: repeat(3, 1fr);">
 
--   :lucide-file-stack:{ .md .middle } &nbsp; **RAG**
+-   :lucide-file-stack:{ .md .middle .jade } &nbsp; **RAG**
 
     ---
 
-    Search documents with `grep`, `cat`, or vector APIs.
+    Search documents with `grep`, `cat`, or your APIs.
 
--   :lucide-database:{ .md .middle } &nbsp; **Text-to-SQL**
-
-    ---
-
-    Give agents read-only database access.
-
--   :lucide-bot-message-square:{ .md .middle } &nbsp; **Chatbots**
+-   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
 
     ---
 
-    Build conversational flows across pages.
+    Query databases with read-only access.
 
--   :lucide-library:{ .md .middle } &nbsp; **Knowledge bases**
-
-    ---
-
-    Structured records agents can query.
-
--   :lucide-sprout:{ .md .middle } &nbsp; **Agent skills**
+-   :lucide-bot-message-square:{ .md .middle .jade } &nbsp; **Chatbots**
 
     ---
 
-    Package tools into reusable capabilities.
+    Build multi-turn conversational flows.
 
--   :lucide-workflow:{ .md .middle } &nbsp; **Workflows**
+-   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
 
     ---
 
-    Orchestrate multi-step processes.
+    Organize records for structured queries.
+
+-   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
+
+    ---
+
+    Package tools into reusable skills.
+
+-   :lucide-workflow:{ .md .middle .jade } &nbsp; **Workflows**
+
+    ---
+
+    Chain actions into multi-step flows.
 
 </div>

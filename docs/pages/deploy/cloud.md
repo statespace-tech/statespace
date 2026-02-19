@@ -2,13 +2,13 @@
 icon: lucide/cloud-upload
 ---
 
-!!! abstract "First time?"
-
-    Create a free [Statespace](https://statespace.com) account.
-
 # Cloud deployment
 
 Deploy your app to get a URL that agents can connect to.
+
+!!! abstract "First time?"
+
+    Create a free [Statespace](https://statespace.com) account.
 
 ## Deploy
 
@@ -19,7 +19,7 @@ $ statespace deploy <path>
 Deploying 'myapp'...
 
   URL:  https://myapp.statespace.app
-  Token:  sk_live_abc123
+  Token:  <your-access-token>
 
 ✓ Deployment complete
 ```
@@ -79,6 +79,7 @@ RUN pip install pandas numpy
 Use `ENV` to set environment variables.
 
 ```dockerfile title="Dockerfile"
-ENV DATABASE_URL=postgres://localhost:5432/mydb
+# Use an external hostname - localhost refers to the container itself
+ENV DATABASE_URL=postgres://db.example.com:5432/mydb
 ENV DEBUG=false
 ```

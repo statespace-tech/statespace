@@ -2,13 +2,13 @@
 icon: lucide/lock
 ---
 
-!!! abstract "First time?"
-
-    Create a free [Statespace](https://statespace.com) account.
-
 # Security
 
 Authenticate with the Statespace platform and restrict access to your deployed apps.
+
+!!! abstract "First time?"
+
+    Create a free [Statespace](https://statespace.com) account.
 
 ## API keys
 
@@ -47,8 +47,8 @@ PATs restrict agent access to your deployed apps.
 Generate a PAT for your app:
 
 ```console
-$ statespace token create <name>
-Token created: sk_live_abc123
+$ statespace tokens create <name>
+Token created: <your-access-token>
 ```
 
 ### Scopes
@@ -56,7 +56,7 @@ Token created: sk_live_abc123
 Restrict what a token can do with `--scope`:
 
 ```console
-$ statespace token create <name> --scope <scope>
+$ statespace tokens create <name> --scope <scope>
 ```
 
 | Scope     | Description                          |
@@ -80,7 +80,7 @@ $ curl -H "Authorization: Bearer <token>" https://myapp.statespace.app
 View all tokens associated with your account:
 
 ```console
-$ statespace token list
+$ statespace tokens list
 ```
 
 ### Revoke a token
@@ -88,7 +88,7 @@ $ statespace token list
 Remove a token to prevent further access:
 
 ```console
-$ statespace token revoke <token>
+$ statespace tokens revoke <token>
 ```
 
 !!! info "Learn more"

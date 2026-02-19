@@ -19,7 +19,7 @@ Coding agents can make HTTP requests natively, so include the app URL in your pr
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
     ```console
-    $ copilot "Multiply the random number in http://demo.app.statespace.com by 256"
+    $ copilot -p "Multiply the random number in http://demo.app.statespace.com by 256"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"

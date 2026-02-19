@@ -56,7 +56,7 @@ tail -5 /var/log/app.log
 
 ## Environment variables
 
-Components can reference environment variables:
+Components can reference environment `$VARIABLES`:
 
 ````markdown
 # Dashboard
