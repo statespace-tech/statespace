@@ -24,15 +24,15 @@ pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<
     let reference = normalize_environment_reference(&args.app).map_err(Error::cli)?;
     let env = gateway.get_environment(&reference).await?;
 
-    let short_id: String = env.id.chars().take(8).collect();
+    let slug = &env.name;
     let ssh_host = ssh_host_from_api_url(gateway.base_url());
 
-    eprintln!("Connecting to env-{short_id}@{ssh_host}");
+    eprintln!("Connecting to {slug}@{ssh_host}");
 
     let status = Command::new("ssh")
         .args(["-o", "StrictHostKeyChecking=no"])
         .args(["-o", "UserKnownHostsFile=/dev/null"])
-        .arg(format!("env-{short_id}@{ssh_host}"))
+        .arg(format!("{slug}@{ssh_host}"))
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
