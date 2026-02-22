@@ -11,8 +11,8 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, expand_env_vars,
-    expand_placeholders, parse_frontmatter, validate_command_with_specs,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
+    expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -165,13 +165,26 @@ async fn file_handler(Path(path): Path<String>, State(state): State<ServerState>
 }
 
 async fn serve_markdown(path: &str, state: &ServerState) -> Response {
-    match state.content_resolver.resolve(path).await {
-        Ok(content) => Html(content).into_response(),
+    let file_path = match state.content_resolver.resolve_path(path).await {
+        Ok(p) => p,
         Err(e) => {
             warn!("File not found: {} ({})", path, e);
-            (e.status_code(), e.user_message()).into_response()
+            return (e.status_code(), e.user_message()).into_response();
         }
-    }
+    };
+
+    let content = match fs::read_to_string(&file_path).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to read {}: {}", path, e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+        }
+    };
+
+    let working_dir = file_path.parent().unwrap_or(&state.content_root);
+    let rendered = eval::process_eval_blocks(&content, working_dir).await;
+
+    Html(rendered).into_response()
 }
 
 async fn action_handler_root(
