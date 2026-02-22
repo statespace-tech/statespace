@@ -12,6 +12,7 @@
 //! ```
 
 pub mod error;
+pub mod eval;
 pub mod executor;
 pub mod frontmatter;
 pub mod protocol;
