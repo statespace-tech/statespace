@@ -6,6 +6,7 @@ icon: lucide/wrench
 
 Tools are CLI commands that agents can call via [HTTP POST requests](../reference/api.md#post-path).
 
+Every environment includes standard Unix utilities (`ls`, `cat`, `grep`, `sed`, `awk`, `jq`, etc.). To make a command available to agents, declare it in your page's frontmatter. Need something beyond the basics? Add a [Dockerfile](../deploy/cloud.md#dependencies) to install additional packages.
 
 ## Overview
 

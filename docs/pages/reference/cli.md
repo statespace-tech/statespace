@@ -143,14 +143,14 @@ statespace org use
 statespace org use my-organization
 ```
 
-## App Management
+## Deployment
 
-### `statespace app create`
+### `statespace deploy`
 
-Create a new environment, optionally with markdown files.
+Deploy an app. Creates a new environment, optionally with markdown files.
 
 ```bash
-statespace app create [OPTIONS] [PATH]
+statespace deploy [OPTIONS] [PATH]
 ```
 
 **Arguments:**
@@ -172,15 +172,45 @@ statespace app create [OPTIONS] [PATH]
 **Examples:**
 
 ```bash
-# Create from a directory
-statespace app create ./my-docs --name production
+# Deploy from a directory
+statespace deploy ./my-docs --name production
 
-# Create empty environment
-statespace app create --name scratch-env
+# Deploy empty environment
+statespace deploy --name scratch-env
 
-# Create private environment
-statespace app create ./project --visibility private --verify
+# Deploy private environment
+statespace deploy ./project --visibility private --verify
 ```
+
+### `statespace sync`
+
+Sync markdown files to an environment. Creates the environment if it doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
+
+```bash
+statespace sync [OPTIONS] [PATH]
+```
+
+**Arguments:**
+
+`PATH`
+: Directory to sync (default: current directory)
+
+**Options:**
+
+`--name, -n`
+: Environment name (default: directory name or previously synced name)
+
+**Examples:**
+
+```bash
+# Sync current directory
+statespace sync
+
+# Sync specific directory with custom name
+statespace sync ./docs --name my-docs
+```
+
+## App Management
 
 ### `statespace app list`
 
@@ -221,34 +251,6 @@ statespace app delete [OPTIONS] <ID>
 `--yes, -y`
 : Skip confirmation prompt
 
-### `statespace app sync`
-
-Sync markdown files to an environment. Creates the environment if it doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
-
-```bash
-statespace app sync [OPTIONS] [PATH]
-```
-
-**Arguments:**
-
-`PATH`
-: Directory to sync (default: current directory)
-
-**Options:**
-
-`--name, -n`
-: Environment name (default: directory name or previously synced name)
-
-**Examples:**
-
-```bash
-# Sync current directory
-statespace app sync
-
-# Sync specific directory with custom name
-statespace app sync ./docs --name my-docs
-```
-
 ### `statespace app ssh`
 
 Connect to an environment via SSH.
@@ -261,6 +263,14 @@ statespace app ssh <APP>
 
 `APP`
 : Environment name or ID
+
+**Options:**
+
+`--user, -u`
+: SSH user (default: `env`)
+
+`--port, -p`
+: SSH port (default: `22`)
 
 **Examples:**
 
@@ -290,9 +300,9 @@ statespace ssh setup [OPTIONS]
 After setup, you can use native SSH commands:
 
 ```bash
-ssh <app-id>@ssh.statespace.com
-scp file.txt <app-id>@ssh.statespace.com:~
-rsync -av ./dir <app-id>@ssh.statespace.com:~
+ssh env@<environment>.statespace
+scp file.txt env@<environment>.statespace:~
+rsync -av ./dir env@<environment>.statespace:~
 ```
 
 ### `statespace ssh uninstall`
@@ -386,7 +396,7 @@ statespace tokens create [OPTIONS] <NAME>
 **Options:**
 
 `--scope, -s`
-: Token scope: `read`, `execute` (default), or `admin`
+: Token scope: `read` (default) or `admin`
 
 `--app-id`
 : Restrict token to specific environment IDs (can be specified multiple times)

@@ -14,13 +14,13 @@ Authenticate with the Statespace platform and restrict access to your deployed a
 
 API keys authenticate you with the Statespace platform for deploying and managing apps.
 
-### Create an API key
+### Log in
 
-Generate an API key from your account:
+Authenticate via the device authorization flow:
 
 ```console
-$ statespace auth
-API key: <your-api-key>
+$ statespace auth login
+Opening browser to authenticate...
 ```
 
 ### Usage
@@ -31,16 +31,19 @@ Include the API key when using the CLI:
 $ statespace deploy <path> --api-key <api-key>
 ```
 
-Or set it as an environment variable:
+## Visibility
+
+Apps are **public** by default — anyone with the URL can access them. Set an app to **private** to require an access token for all requests:
 
 ```console
-$ export STATESPACE_API_KEY=<api-key>
-$ statespace deploy <path>
+$ statespace deploy ./myapp --visibility private
 ```
+
+> **Note**: Private apps require a [Pro plan](https://statespace.com/pricing). Free-tier apps are always public.
 
 ## Access tokens
 
-PATs restrict agent access to your deployed apps.
+Access tokens restrict agent access to your deployed apps.
 
 ### Create a token
 
@@ -61,8 +64,8 @@ $ statespace tokens create <name> --scope <scope>
 
 | Scope     | Description                          |
 |-----------|--------------------------------------|
-| `read`    | Read pages only                      |
-| `execute` | Read pages and invoke tools (default)|
+| `read`    | Read pages only (default)            |
+| `execute` | Read pages and invoke tools          |
 | `admin`   | Full access                          |
 
 ### Usage

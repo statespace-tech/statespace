@@ -15,13 +15,14 @@ Deploy your app to get a URL that agents can connect to.
 Run `statespace deploy` to upload your app:
 
 ```console
-$ statespace deploy <path>
-Deploying 'myapp'...
+$ statespace deploy ./myapp
+Creating 'myapp'...
 
+  ID:  myapp
   URL:  https://myapp.statespace.app
   Token:  <your-access-token>
 
-✓ Deployment complete
+✓ Created 'myapp'
 ```
 
 !!! info "Learn more"
@@ -30,20 +31,20 @@ Deploying 'myapp'...
 
 ## Update
 
-Re-run `statespace deploy` to push changes:
+Run `statespace sync` to push changes:
 
 ```console
-$ statespace deploy <path>
+$ statespace sync
 ```
 
-> **Note**: The existing deployment updates in place.
+> **Note**: This creates the app if it doesn't exist, or updates it in place if it does.
 
 ## Delete
 
 Remove a deployment:
 
 ```console
-$ statespace delete <app-id>
+$ statespace app delete <app-name>
 ```
 
 ## Dependencies
@@ -61,7 +62,7 @@ myapp/
 
 ### Packages
 
-Use `RUN` to install CLI tools and libraries.
+Use `RUN` to install additional CLI tools. The Dockerfile is a snippet — just `RUN` and `ENV` lines, no `FROM` needed.
 
 ```dockerfile title="Dockerfile"
 # Install ripgrep for fast code search
@@ -70,8 +71,8 @@ RUN apt-get update && apt-get install -y ripgrep
 # Install jq for JSON processing
 RUN apt-get install -y --no-install-recommends jq
 
-# Install Python packages
-RUN pip install pandas numpy
+# Install figlet for ASCII art
+RUN apt-get install -y --no-install-recommends figlet
 ```
 
 ### Environment variables

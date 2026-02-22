@@ -73,6 +73,10 @@ Execute a tool defined in a Markdown file's frontmatter.
 
 : Command to execute as an array of strings (e.g., `["echo", "hello"]`)
 
+`args` <span class="param-tag param-type">object</span> <span class="param-tag param-optional">optional</span>
+
+: Placeholder values for tool argument expansion (e.g., `{"0": "hello"}`)
+
 `env` <span class="param-tag param-type">object</span> <span class="param-tag param-optional">optional</span>
 
 : Environment variables to pass to the command (e.g., `{"USER": "john"}`)
