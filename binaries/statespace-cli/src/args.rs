@@ -38,6 +38,12 @@ pub(crate) enum Commands {
         command: AppCommands,
     },
 
+    /// Deploy an app (shortcut for `app create`)
+    Deploy(AppCreateArgs),
+
+    /// Sync files to an app (shortcut for `app sync`)
+    Sync(AppSyncArgs),
+
     /// Serve a local app (no account required)
     Serve(ServeArgs),
 
