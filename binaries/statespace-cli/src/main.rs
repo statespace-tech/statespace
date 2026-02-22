@@ -27,18 +27,6 @@ async fn run() -> Result<()> {
     match cli.command {
         Commands::Auth { command } => commands::auth::run(command).await,
 
-        Commands::Deploy(args) => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
-            let gateway = GatewayClient::new(creds)?;
-            commands::app::run_create(args, gateway).await
-        }
-
-        Commands::Sync(args) => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
-            let gateway = GatewayClient::new(creds)?;
-            commands::sync::run_sync(args, gateway).await
-        }
-
         Commands::Serve(args) => commands::serve::run_serve(args).await,
 
         Commands::Org { command } => {
