@@ -161,7 +161,7 @@ pub async fn execute_eval_block(
                     stderr.trim_end().to_string()
                 };
                 if !combined.is_empty() {
-                    let mut detail = combined.clone();
+                    let mut detail = combined;
                     if detail.len() > 256 {
                         let mut limit = 256;
                         while !detail.is_char_boundary(limit) {
@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_component_blocks_truncated_at_limit() {
+    fn parse_finds_all_component_blocks_beyond_limit() {
         use std::fmt::Write;
         let mut md = String::new();
         for i in 0..25 {
