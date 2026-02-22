@@ -114,7 +114,8 @@ pub async fn execute_eval_block(
         .env_clear()
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
         .env("HOME", "/tmp")
-        .env("LANG", "C.UTF-8");
+        .env("LANG", "C.UTF-8")
+        .kill_on_drop(true);
 
     if let Some(dir) = scratch_dir {
         command.env("STATESPACE_SCRATCH", dir);
@@ -160,7 +161,16 @@ pub async fn execute_eval_block(
                     stderr.trim_end().to_string()
                 };
                 if !combined.is_empty() {
-                    let _ = write!(msg, " — {combined}");
+                    let mut detail = combined.clone();
+                    if detail.len() > 256 {
+                        let mut limit = 256;
+                        while !detail.is_char_boundary(limit) {
+                            limit -= 1;
+                        }
+                        detail.truncate(limit);
+                        detail.push('…');
+                    }
+                    let _ = write!(msg, " — {detail}");
                 }
                 msg.push(']');
                 warn!(exit_code = code, "Eval block failed");
@@ -180,11 +190,11 @@ pub async fn execute_eval_block(
     }
 }
 
-pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> (String, bool) {
+pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> String {
     let mut blocks = parse_eval_blocks(content);
 
     if blocks.is_empty() {
-        return (content.to_string(), false);
+        return content.to_string();
     }
 
     if blocks.len() > EVAL_MAX_BLOCKS_PER_DOCUMENT {
@@ -196,7 +206,12 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> (String, 
         blocks.truncate(EVAL_MAX_BLOCKS_PER_DOCUMENT);
     }
 
-    let block_count = blocks.len();
+    let block_ranges: Vec<(usize, (usize, usize))> = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (i, b.range))
+        .collect();
+
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
     let mut set = tokio::task::JoinSet::new();
 
@@ -219,13 +234,28 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> (String, 
         });
     }
 
-    let mut outputs: Vec<(usize, (usize, usize), EvalResult)> = Vec::with_capacity(block_count);
+    let mut outputs: Vec<(usize, (usize, usize), EvalResult)> =
+        Vec::with_capacity(block_ranges.len());
     while let Some(res) = set.join_next().await {
         match res {
             Ok(item) => outputs.push(item),
             Err(e) => {
                 warn!("eval block task panicked: {e}");
             }
+        }
+    }
+
+    let completed: std::collections::HashSet<usize> = outputs.iter().map(|(i, _, _)| *i).collect();
+    for (i, range) in &block_ranges {
+        if !completed.contains(i) {
+            outputs.push((
+                *i,
+                *range,
+                EvalResult {
+                    output: "[eval error: internal failure]".to_string(),
+                    success: false,
+                },
+            ));
         }
     }
 
@@ -236,13 +266,13 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> (String, 
         result.replace_range(*start..*end, &eval_result.output);
     }
 
-    (result, true)
+    result
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::{is_eval_info_string, parse_eval_blocks};
+    use crate::eval::{is_eval_info_string, parse_eval_blocks};
 
     #[test]
     fn info_string_component() {
@@ -311,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_eval_block_success() {
-        use super::{EvalBlock, execute_eval_block};
+        use crate::eval::{EvalBlock, execute_eval_block};
         let block = EvalBlock {
             range: (0, 0),
             code: "echo hello".to_string(),
@@ -323,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_eval_block_failure() {
-        use super::{EvalBlock, execute_eval_block};
+        use crate::eval::{EvalBlock, execute_eval_block};
         let block = EvalBlock {
             range: (0, 0),
             code: "exit 42".to_string(),
@@ -336,7 +366,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_eval_block_command_not_found() {
-        use super::{EvalBlock, execute_eval_block};
+        use crate::eval::{EvalBlock, execute_eval_block};
         let block = EvalBlock {
             range: (0, 0),
             code: "nonexistent_command_xyz_123".to_string(),
@@ -348,10 +378,9 @@ mod tests {
 
     #[tokio::test]
     async fn process_replaces_component_blocks() {
-        use super::process_eval_blocks;
+        use crate::eval::process_eval_blocks;
         let md = "# Title\n\n```component\necho 42\n```\n\nEnd\n";
-        let (result, has_eval) = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
-        assert!(has_eval);
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
         assert!(result.contains("42"));
         assert!(!result.contains("```component"));
         assert!(result.contains("# Title"));
@@ -360,19 +389,17 @@ mod tests {
 
     #[tokio::test]
     async fn process_no_component_blocks_returns_unchanged() {
-        use super::process_eval_blocks;
+        use crate::eval::process_eval_blocks;
         let md = "# Just text\n\n```json\n{}\n```\n";
-        let (result, has_eval) = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
-        assert!(!has_eval);
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
         assert_eq!(result, md);
     }
 
     #[tokio::test]
     async fn process_multiple_blocks_replaced_in_order() {
-        use super::process_eval_blocks;
+        use crate::eval::process_eval_blocks;
         let md = "A\n\n```component\necho first\n```\n\nB\n\n```component\necho second\n```\n\nC\n";
-        let (result, has_eval) = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
-        assert!(has_eval);
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
         let first_pos = result.find("first").expect("first should be present");
         let second_pos = result.find("second").expect("second should be present");
         assert!(first_pos < second_pos);
@@ -383,7 +410,7 @@ mod tests {
 
     #[tokio::test]
     async fn execute_eval_block_timeout() {
-        use super::{EvalBlock, execute_eval_block};
+        use crate::eval::{EvalBlock, execute_eval_block};
         let block = EvalBlock {
             range: (0, 0),
             code: "sleep 10".to_string(),

@@ -182,7 +182,7 @@ async fn serve_markdown(path: &str, state: &ServerState) -> Response {
     };
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
-    let (rendered, _has_eval) = eval::process_eval_blocks(&content, working_dir).await;
+    let rendered = eval::process_eval_blocks(&content, working_dir).await;
 
     Html(rendered).into_response()
 }
