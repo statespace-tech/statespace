@@ -2,13 +2,15 @@
 icon: lucide/wrench
 ---
 
-# CLI tools
+# Tools
 
-Give AI agents the ability to take actions by running CLI tools.
+Tools are CLI commands that agents can call via [HTTP POST requests](../reference/api.md#post-path).
 
-## Usage
+Every environment includes standard Unix utilities (`ls`, `cat`, `grep`, `sed`, `awk`, `jq`, etc.). To make a command available to agents, declare it in your page's frontmatter. Need something beyond the basics? Add a [Dockerfile](../deploy/cloud.md#dependencies) to install additional packages.
 
-Define CLI tools as lists in the YAML frontmatters of Markdown files.
+## Overview
+
+List tools in the YAML frontmatter of Markdown pages:
 
 ```yaml hl_lines="1-8"
 ---
@@ -17,35 +19,18 @@ tools:
   - [cat]
   - [grep, -r, "error", "logs/"]
   - [curl, -X, GET, "https://api.com/v1"]
+  - [python3, scripts/analyze.py]
 ---
 
 # Instructions
 - Use the provided tools to explore and analyze
 ```
 
-> **Note**: by default, agents can append additional arguments to tools (e.g., `ls -la` or `cat --help`)
-
-## Navigation
-
-Use navigation toolss to progressively discover more tools and instructions:
-
-```yaml
----
-tools:
-  - [ls]
-  - [cat]
-  - [tree]
-  - [grep]
-  - [find]
----
-
-# Instructions
-- Use the provided tools to find more tools
-```
+> **Note**: By default, agents can append additional arguments to tool calls (e.g., `grep --help`).
 
 ## Placeholders
 
-Use `{ }` to denote where agents can pass arguments to commands.
+Use `{ }` to mark where agents can provide arguments:
 
 ```yaml
 ---
@@ -56,12 +41,14 @@ tools:
 ---
 ```
 
+> **Note**: Tools run directly without shell interpretation, preventing command injection attacks.
+
 ## Regex constraints
 
-Restrict tool arguments with `{ regex: ... }` patterns.
+Restrict tool arguments with `{ regex: ... }` patterns:
 
 ```yaml
---- 
+---
 tools:
   - [rm, { regex: ".*\.(txt|md|json)$" }]                 # file type restrictions
   - [curl, { regex: "^https://(api\.company\.com)/.+" }]  # URL restrictions
@@ -73,55 +60,25 @@ tools:
 
 ## Options control
 
-Add `;` at the end of a tool command to disallow additional flags and arguments.
+Append `;` to prevent agents from adding extra flags:
 
 ```yaml
 ---
 tools:
-  - [cat, { }, ;]
-  - [curl, -X, GET, "https://api.com", ;]
-  - [rm, { regex: ".*\.png$" }, ;]
+  - [cat, { }, ;]                                # only allows placeholder argument
+  - [curl, -X, GET, https://api.example.com, ;]  # no additional arguments allowed
 ---
 ```
 
-> **Note**: CLI tools run directly without shell interpretation, preventing command injection attacks
 
 ## Environment variables
 
-Use environment `$VARIABLES` to hide secrets from agents and inject them at runtime.
+Reference environment `$VARIABLES` to hide secrets from agents and inject them at runtime:
 
 ```yaml
 ---
 tools:
-  - [curl, -H, "Authorization: Bearer $API_KEY", "https://api.com"]
-  - [psql, -U, $USER, -d, $DATABASE, -c, { }]
----
-```
-
-## Custom tools
-
-Use custom scripts and compiled binaries as tools.
-
-**1. Add executable files to your project:**
-
-```bash hl_lines="4-6"
-project/
-├── README.md
-└── custom/
-    ├── analyze.sh
-    └── process.sh
-    └── index.js
-
-1 directories, 4 files
-```
-
-**2. Define them as tools:**
-
-```yaml
----
-tools:
-  - [bash, scripts/analyze.sh]
-  - [bash, scripts/process.sh, { }, { }]
-  - [node, index.js, --port, { }]
+  - [curl, -H, "Authorization: Bearer $API_KEY", https://api.example.com]
+  - [psql, -U, $DB_USER, -d, $DB_NAME, -c, { }]
 ---
 ```

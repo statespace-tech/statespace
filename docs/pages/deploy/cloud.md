@@ -2,90 +2,85 @@
 icon: lucide/cloud-upload
 ---
 
-!!! info "First time?"
-
-    Create a free [Statespace](https://statespace.com) account to get your API key.
-
 # Cloud deployment
 
-Deploy and manage applications with Statespace's CLI.
+Deploy your app to get a URL that agents can connect to.
 
-## Quick start
+!!! abstract "First time?"
+
+    Create a free [Statespace](https://statespace.com) account.
+
+## Deploy
+
+Run `statespace deploy` to upload your app:
 
 ```console
-$ statespace app create ./project --visibility private
+$ statespace deploy ./myapp
+Creating 'myapp'...
+
+  ID:  myapp
+  URL:  https://myapp.statespace.app
+  Token:  <your-access-token>
+
+✓ Created 'myapp'
 ```
 
-## CLI usage
+!!! info "Learn more"
 
-### `statespace app create`
+    Authenticate requests to your deployed app with [access tokens](security.md).
 
-Deploy your application to the cloud and get a shareable URL.
+## Update
 
-**Usage:**
+Run `statespace sync` to push changes:
 
-```bash
-statespace app create [OPTIONS] PATH
+```console
+$ statespace sync
 ```
 
-**Arguments:**
+> **Note**: This creates the app if it doesn't exist, or updates it in place if it does.
 
-`PATH`
+## Delete
 
-: Path to application repository
+Remove a deployment:
 
-**Options:**
-
-`--name`
-
-: Custom environment name (defaults to directory name)
-
-`--visibility`
-
-: Environment visibility (`public` or `private`)
-
-`--verify`
-
-: Wait and verify environment is accessible after deployment
-
-### `statespace app list`
-
-View all your deployed applications.
-
-**Usage:**
-
-```bash
-statespace app list
+```console
+$ statespace app delete <app-name>
 ```
 
-### `statespace app sync`
+## Dependencies
 
-Sync a directory to an existing environment (create-or-update).
+Optionally, include a `Dockerfile` to customize the environment for your [tools](../develop/tools.md) and [components](../develop/components.md).
 
-**Usage:**
-
-```bash
-statespace app sync [PATH] [--name <NAME>]
+```text
+myapp/
+├── app.md
+├── Dockerfile  # optional
+└── ...
 ```
 
-### `statespace app delete`
+> **Note**: The Dockerfile is only processed when deploying or updating an app.
 
-Remove a deployment from the cloud.
+### Packages
 
-**Usage:**
+Use `RUN` to install additional CLI tools. The Dockerfile is a snippet — just `RUN` and `ENV` lines, no `FROM` needed.
 
-```bash
-statespace app delete [OPTIONS] ENV_ID_OR_NAME
+```dockerfile title="Dockerfile"
+# Install ripgrep for fast code search
+RUN apt-get update && apt-get install -y ripgrep
+
+# Install jq for JSON processing
+RUN apt-get install -y --no-install-recommends jq
+
+# Install figlet for ASCII art
+RUN apt-get install -y --no-install-recommends figlet
 ```
 
-**Arguments:**
+### Environment variables
 
-`ENV_ID_OR_NAME`
+Use `ENV` to set environment variables.
 
-: Environment ID or name to delete
-
-**Options:**
-
-`--yes, -y`
-
-: Skip confirmation prompt
+```dockerfile title="Dockerfile"
+# Use an external hostname - localhost refers to the container itself
+ENV DATABASE_URL=postgres://db.example.com:5432/mydb
+ENV DEBUG=false
+```
