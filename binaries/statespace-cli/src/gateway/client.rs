@@ -235,6 +235,7 @@ impl GatewayClient {
             .json(&Payload {
                 organization_id: org_id,
                 name,
+                // TODO: rename to "applications:{scope}" when server API is updated
                 scope: format!("environments:{scope}"),
                 allowed_application_ids: application_ids,
                 expires_at,
@@ -301,6 +302,7 @@ impl GatewayClient {
             .with_headers(self.http.post(&url))
             .json(&Payload {
                 new_name: name,
+                // TODO: rename to "applications:{scope}" when server API is updated
                 new_scope: scope.map(|s| format!("environments:{s}")),
                 new_allowed_application_ids: application_ids,
                 new_expires_at: expires_at,

@@ -1,6 +1,7 @@
 use crate::args::{AppCreateArgs, AppDeleteArgs, AppGetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
+use crate::gateway::applications::ApplicationStatus;
 use crate::identifiers::normalize_application_reference;
 use crate::names::generate_name;
 use std::io::{self, Write};
@@ -81,10 +82,12 @@ pub(crate) async fn run_list(gateway: GatewayClient) -> Result<()> {
     println!("{}", "─".repeat(80));
 
     for app in &apps {
-        let status = match app.status.as_str() {
-            "running" => format!("✓ {}", app.status),
-            "pending" | "creating" => format!("⏳ {}", app.status),
-            _ => format!("✗ {}", app.status),
+        let status = match app.status {
+            ApplicationStatus::Running => format!("✓ {}", app.status),
+            ApplicationStatus::Pending | ApplicationStatus::Creating => {
+                format!("⏳ {}", app.status)
+            }
+            ApplicationStatus::Unknown => format!("✗ {}", app.status),
         };
         let url = app.url.as_deref().unwrap_or("—");
         println!("{:<24}  {:<10}  {}", app.name, status, url);
