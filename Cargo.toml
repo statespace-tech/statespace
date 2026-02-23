@@ -4,6 +4,7 @@ members = [
     "binaries/statespace-cli",
     "crates/statespace-server",
     "crates/statespace-tool-runtime",
+    "crates/statespace-templates",
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ allow-branch = ["main"]
 [workspace.dependencies]
 statespace-tool-runtime = { path = "crates/statespace-tool-runtime", version = "0.1.4" }
 statespace-server = { path = "crates/statespace-server", version = "0.1.4" }
+statespace-templates = { path = "crates/statespace-templates", version = "0.1.4" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }

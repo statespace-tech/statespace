@@ -1,0 +1,12 @@
+[package]
+name = "statespace-templates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared templates (AGENTS.md, favicon, index.html) for Statespace servers"
+
+[lints]
+workspace = true

@@ -70,4 +70,24 @@ impl Error {
             Self::Internal(_) => "Internal server error".to_string(),
         }
     }
+
+    /// Returns the appropriate HTTP status code for this error as a `u16`.
+    #[must_use]
+    pub const fn http_status_code(&self) -> u16 {
+        match self {
+            Self::InvalidCommand(_)
+            | Self::CommandNotFound { .. }
+            | Self::NoFrontmatter
+            | Self::FrontmatterParse(_) => 400,
+
+            Self::PathTraversal { .. } | Self::Security(_) => 403,
+
+            Self::NotFound(_) => 404,
+            Self::Timeout => 504,
+            Self::OutputTooLarge { .. } => 413,
+
+            Self::Io(_) | Self::Internal(_) => 500,
+            Self::Network(_) => 502,
+        }
+    }
 }
