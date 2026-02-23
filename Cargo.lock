@@ -1585,6 +1585,7 @@ dependencies = [
  "axum",
  "serde",
  "serde_json",
+ "statespace-templates",
  "statespace-tool-runtime",
  "tempfile",
  "thiserror 2.0.18",
@@ -1593,6 +1594,10 @@ dependencies = [
  "tower-http",
  "tracing",
 ]
+
+[[package]]
+name = "statespace-templates"
+version = "0.1.4"
 
 [[package]]
 name = "statespace-tool-runtime"

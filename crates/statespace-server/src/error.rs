@@ -12,21 +12,7 @@ pub trait ErrorExt {
 
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
-        match self {
-            Error::InvalidCommand(_)
-            | Error::CommandNotFound { .. }
-            | Error::NoFrontmatter
-            | Error::FrontmatterParse(_) => StatusCode::BAD_REQUEST,
-
-            Error::PathTraversal { .. } | Error::Security(_) => StatusCode::FORBIDDEN,
-
-            Error::NotFound(_) => StatusCode::NOT_FOUND,
-            Error::Timeout => StatusCode::REQUEST_TIMEOUT,
-            Error::OutputTooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
-            Error::Network(_) => StatusCode::BAD_GATEWAY,
-
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        }
+        StatusCode::from_u16(self.http_status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
     }
 }
 
