@@ -1,6 +1,6 @@
 mod auth;
 mod client;
-mod environments;
+mod applications;
 mod organizations;
 mod secrets;
 mod ssh;

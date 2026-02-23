@@ -14,7 +14,7 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Resul
         .name
         .or_else(|| cached.as_ref().map(|s| s.name.clone()))
         .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(String::from))
-        .ok_or_else(|| crate::error::Error::cli("Could not determine environment name"))?;
+        .ok_or_else(|| crate::error::Error::cli("Could not determine application name"))?;
 
     let files = GatewayClient::scan_markdown_files(&dir)?;
 
@@ -54,10 +54,10 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: GatewayClient) -> Resul
         if files.len() == 1 { "" } else { "s" }
     );
 
-    let result = gateway.upsert_environment(&name, files).await?;
+    let result = gateway.upsert_application(&name, files).await?;
 
     let action = if result.created { "Created" } else { "Updated" };
-    eprintln!("{action} environment '{}'", result.name);
+    eprintln!("{action} application '{}'", result.name);
 
     if let Some(ref url) = result.url {
         eprintln!("URL: {url}");

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct EnvironmentFile {
+pub(crate) struct ApplicationFile {
     pub path: String,
     pub content: String,
     pub checksum: String,
@@ -24,7 +24,7 @@ pub(crate) struct UpsertResult {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct Environment {
+pub(crate) struct Application {
     pub id: String,
     pub name: String,
     pub status: String,

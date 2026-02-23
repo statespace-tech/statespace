@@ -1,7 +1,7 @@
 use crate::args::AppSshArgs;
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::identifiers::normalize_environment_reference;
+use crate::identifiers::normalize_application_reference;
 use std::process::Stdio;
 use tokio::process::Command;
 
@@ -21,10 +21,10 @@ fn ssh_host_from_api_url(api_url: &str) -> String {
 }
 
 pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
-    let reference = normalize_environment_reference(&args.app).map_err(Error::cli)?;
-    let env = gateway.get_environment(&reference).await?;
+    let reference = normalize_application_reference(&args.app).map_err(Error::cli)?;
+    let app = gateway.get_application(&reference).await?;
 
-    let slug = &env.name;
+    let slug = &app.name;
     let ssh_host = ssh_host_from_api_url(gateway.base_url());
 
     eprintln!("Connecting to {slug}@{ssh_host}");

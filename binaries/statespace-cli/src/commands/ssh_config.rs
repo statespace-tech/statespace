@@ -11,7 +11,7 @@ const INCLUDE_LINE: &str = "Include ~/.ssh/statespace_config";
 
 const STATESPACE_SSH_CONFIG: &str = r"# --- BEGIN STATESPACE MANAGED ---
 Host *.statespace
-  User env
+  User app
   RequestTTY auto
   ServerAliveInterval 30
   ServerAliveCountMax 3
@@ -172,9 +172,9 @@ pub(crate) async fn setup_ssh_full(gateway: &GatewayClient, skip_prompt: bool) -
 
     println!();
     println!("You can now use:");
-    println!("  ssh env@<environment>.statespace");
-    println!("  scp file.txt env@<environment>.statespace:~");
-    println!("  rsync -av ./dir env@<environment>.statespace:~");
+    println!("  ssh app@<application>.statespace");
+    println!("  scp file.txt app@<application>.statespace:~");
+    println!("  rsync -av ./dir app@<application>.statespace:~");
 
     Ok(())
 }

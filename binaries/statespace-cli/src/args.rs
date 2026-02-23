@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
-#[command(about = "Statespace CLI - deploy and manage environments")]
+#[command(about = "Statespace CLI - deploy and manage applications")]
 #[command(version)]
 pub(crate) struct Cli {
     /// API key override
@@ -112,36 +112,36 @@ pub(crate) enum OrgCommands {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AppCommands {
-    /// Create a new environment
+    /// Create a new application
     Create(AppCreateArgs),
 
-    /// Create a new environment (alias for create)
+    /// Create a new application (alias for create)
     #[command(hide = true)]
     Deploy(AppCreateArgs),
 
-    /// List all environments
+    /// List all applications
     List,
 
-    /// Show details for an environment
+    /// Show details for an application
     Get(AppGetArgs),
 
-    /// Delete an environment
+    /// Delete an application
     Delete(AppDeleteArgs),
 
-    /// Sync markdown files to an environment (create-or-update)
+    /// Sync markdown files to an application (create-or-update)
     Sync(AppSyncArgs),
 
-    /// SSH into an environment
+    /// SSH into an application
     Ssh(AppSshArgs),
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppSshArgs {
-    /// Environment ID or name
+    /// Application ID or name
     pub app: String,
 
-    /// SSH user (default: env)
-    #[arg(long, short, default_value = "env")]
+    /// SSH user (default: app)
+    #[arg(long, short, default_value = "app")]
     pub user: String,
 
     /// SSH port (default: 22)
@@ -155,7 +155,7 @@ pub(crate) struct AppSyncArgs {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Environment name (default: directory name)
+    /// Application name (default: directory name)
     #[arg(long, short)]
     pub name: Option<String>,
 }
@@ -192,10 +192,10 @@ pub(crate) enum VisibilityArg {
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppCreateArgs {
-    /// Directory containing markdown files (optional — omit to create an empty environment)
+    /// Directory containing markdown files (optional — omit to create an empty application)
     pub path: Option<PathBuf>,
 
-    /// Environment name (default: directory name, or randomly generated)
+    /// Application name (default: directory name, or randomly generated)
     #[arg(long, short)]
     pub name: Option<String>,
 
@@ -203,20 +203,20 @@ pub(crate) struct AppCreateArgs {
     #[arg(long)]
     pub visibility: Option<VisibilityArg>,
 
-    /// Wait for the environment to become ready
+    /// Wait for the application to become ready
     #[arg(long)]
     pub verify: bool,
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppGetArgs {
-    /// Environment ID or name
+    /// Application ID or name
     pub id: String,
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppDeleteArgs {
-    /// Environment ID or name
+    /// Application ID or name
     pub id: String,
 
     /// Skip confirmation prompt
@@ -295,7 +295,7 @@ pub(crate) struct TokenCreateArgs {
     #[arg(long, short, default_value = "read")]
     pub scope: String,
 
-    /// Restrict token to specific environment IDs
+    /// Restrict token to specific application IDs
     #[arg(long = "app-id")]
     pub app_ids: Vec<String>,
 
@@ -334,7 +334,7 @@ pub(crate) struct TokenRotateArgs {
     #[arg(long)]
     pub scope: Option<String>,
 
-    /// Restrict to specific environment IDs
+    /// Restrict to specific application IDs
     #[arg(long = "app-id")]
     pub app_ids: Vec<String>,
 

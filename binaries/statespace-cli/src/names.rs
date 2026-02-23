@@ -1,10 +1,10 @@
-/// Generate a random environment name in the format `adjective-noun-NNNN`.
+/// Generate a random application name in the format `adjective-noun-NNNN`.
 ///
 /// Uses the `petname` crate's curated word lists (Dustin Kirkland's petname
 /// project, widely adopted across Docker/Ubuntu/Heroku-style tooling).
 /// The 4-digit suffix reduces collision likelihood (~90M+ total combinations).
 pub(crate) fn generate_name() -> String {
-    let base = petname::petname(2, "-").unwrap_or_else(|| "env".to_string());
+    let base = petname::petname(2, "-").unwrap_or_else(|| "app".to_string());
     let num = random_suffix();
     format!("{base}-{num}")
 }

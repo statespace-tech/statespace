@@ -13,7 +13,8 @@ pub(crate) struct Token {
     pub last_used_at: Option<String>,
     #[serde(default)]
     pub usage_count: u64,
-    pub allowed_environments: Option<Vec<String>>,
+    #[serde(rename = "allowed_environments")]
+    pub allowed_applications: Option<Vec<String>>,
     pub revoked_at: Option<String>,
     pub revoked_by: Option<String>,
     pub revocation_reason: Option<String>,

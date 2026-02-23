@@ -1,7 +1,7 @@
 use crate::args::{AppCreateArgs, AppDeleteArgs, AppGetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::identifiers::normalize_environment_reference;
+use crate::identifiers::normalize_application_reference;
 use crate::names::generate_name;
 use std::io::{self, Write};
 use std::path::Path;
@@ -25,7 +25,7 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
     };
 
     if files.is_empty() {
-        eprintln!("Creating empty environment '{name}'...");
+        eprintln!("Creating empty application '{name}'...");
     } else {
         eprintln!(
             "Creating '{name}' ({} file{})...",
@@ -35,7 +35,7 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
     }
 
     let result = gateway
-        .create_environment(&name, files, args.visibility)
+        .create_application(&name, files, args.visibility)
         .await?;
 
     eprintln!();
@@ -51,11 +51,11 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
     if args.verify {
         if let (Some(url), Some(token)) = (&result.url, &result.auth_token) {
             eprintln!();
-            eprintln!("Waiting for environment to become ready...");
-            if gateway.verify_environment(url, token).await? {
+            eprintln!("Waiting for application to become ready...");
+            if gateway.verify_application(url, token).await? {
                 eprintln!("Ready.");
             } else {
-                eprintln!("Timed out waiting for environment. It may still be starting.");
+                eprintln!("Timed out waiting for application. It may still be starting.");
             }
         }
     }
@@ -64,44 +64,44 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
 }
 
 pub(crate) async fn run_list(gateway: GatewayClient) -> Result<()> {
-    let envs = gateway.list_environments().await?;
+    let apps = gateway.list_applications().await?;
 
-    if envs.is_empty() {
-        eprintln!("No environments found.");
+    if apps.is_empty() {
+        eprintln!("No applications found.");
         return Ok(());
     }
 
     eprintln!(
-        "{} environment{}\n",
-        envs.len(),
-        if envs.len() == 1 { "" } else { "s" }
+        "{} application{}\n",
+        apps.len(),
+        if apps.len() == 1 { "" } else { "s" }
     );
 
     println!("{:<24}  {:<10}  URL", "NAME", "STATUS");
     println!("{}", "─".repeat(80));
 
-    for env in &envs {
-        let status = match env.status.as_str() {
-            "running" => format!("✓ {}", env.status),
-            "pending" | "creating" => format!("⏳ {}", env.status),
-            _ => format!("✗ {}", env.status),
+    for app in &apps {
+        let status = match app.status.as_str() {
+            "running" => format!("✓ {}", app.status),
+            "pending" | "creating" => format!("⏳ {}", app.status),
+            _ => format!("✗ {}", app.status),
         };
-        let url = env.url.as_deref().unwrap_or("—");
-        println!("{:<24}  {:<10}  {}", env.name, status, url);
+        let url = app.url.as_deref().unwrap_or("—");
+        println!("{:<24}  {:<10}  {}", app.name, status, url);
     }
 
     Ok(())
 }
 
 pub(crate) async fn run_get(args: AppGetArgs, gateway: GatewayClient) -> Result<()> {
-    let reference = normalize_environment_reference(&args.id).map_err(Error::cli)?;
-    let env = gateway.get_environment(&reference).await?;
+    let reference = normalize_application_reference(&args.id).map_err(Error::cli)?;
+    let app = gateway.get_application(&reference).await?;
 
-    println!("Name:       {}", env.name);
-    println!("ID:         {}", env.id);
-    println!("Status:     {}", env.status);
-    println!("Created:    {}", env.created_at);
-    if let Some(ref url) = env.url {
+    println!("Name:       {}", app.name);
+    println!("ID:         {}", app.id);
+    println!("Status:     {}", app.status);
+    println!("Created:    {}", app.created_at);
+    if let Some(ref url) = app.url {
         println!("URL:        {url}");
     }
 
@@ -109,10 +109,10 @@ pub(crate) async fn run_get(args: AppGetArgs, gateway: GatewayClient) -> Result<
 }
 
 pub(crate) async fn run_delete(args: AppDeleteArgs, gateway: GatewayClient) -> Result<()> {
-    let reference = normalize_environment_reference(&args.id).map_err(Error::cli)?;
+    let reference = normalize_application_reference(&args.id).map_err(Error::cli)?;
 
     if !args.yes {
-        eprint!("Delete environment '{}'? [y/N] ", args.id);
+        eprint!("Delete application '{}'? [y/N] ", args.id);
         io::stderr().flush()?;
 
         let mut input = String::new();
@@ -124,7 +124,7 @@ pub(crate) async fn run_delete(args: AppDeleteArgs, gateway: GatewayClient) -> R
         }
     }
 
-    gateway.delete_environment(&reference).await?;
+    gateway.delete_application(&reference).await?;
     eprintln!("Deleted '{}'.", args.id);
 
     Ok(())
