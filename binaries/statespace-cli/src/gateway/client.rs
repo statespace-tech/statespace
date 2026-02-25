@@ -110,19 +110,20 @@ impl GatewayClient {
         &self,
         name: &str,
         files: Vec<EnvironmentFile>,
-        visibility: crate::args::VisibilityArg,
+        visibility: Option<crate::args::VisibilityArg>,
     ) -> Result<DeployResult> {
         #[derive(Serialize)]
         struct Payload<'a> {
             name: &'a str,
             files: Vec<EnvironmentFile>,
-            visibility: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            visibility: Option<&'a str>,
         }
 
-        let visibility_str = match visibility {
+        let visibility_str = visibility.map(|v| match v {
             crate::args::VisibilityArg::Public => "public",
             crate::args::VisibilityArg::Private => "private",
-        };
+        });
 
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self
