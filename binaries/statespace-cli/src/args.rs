@@ -182,9 +182,9 @@ pub(crate) struct AppCreateArgs {
     #[arg(long, short)]
     pub name: Option<String>,
 
-    /// Environment visibility
-    #[arg(long, default_value = "public")]
-    pub visibility: VisibilityArg,
+    /// Environment visibility (default: private for paid tiers, public for free)
+    #[arg(long)]
+    pub visibility: Option<VisibilityArg>,
 
     /// Wait for the environment to become ready
     #[arg(long)]
