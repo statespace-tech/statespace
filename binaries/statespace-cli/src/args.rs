@@ -164,6 +164,14 @@ pub(crate) struct ServeArgs {
     /// Port to bind the server to
     #[arg(long, default_value = "8000")]
     pub port: u16,
+
+    /// Environment variables for component blocks (KEY=VALUE)
+    #[arg(long = "env", short = 'e', value_name = "KEY=VALUE")]
+    pub env_vars: Vec<String>,
+
+    /// Load environment variables from a file
+    #[arg(long = "env-file", value_name = "PATH")]
+    pub env_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]

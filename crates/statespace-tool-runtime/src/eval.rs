@@ -1,5 +1,6 @@
 //! Component block processing for dynamic markdown content.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
 use std::time::Duration;
@@ -101,11 +102,20 @@ fn is_eval_info_string(info: &str) -> bool {
     info == "component"
 }
 
+const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HANDLER"];
+const RESERVED_ENV_KEYS: &[&str] = &["HOME", "LANG", "STATESPACE_SCRATCH", "STATESPACE_WORKSPACE"];
+
+fn is_reserved_env_key(key: &str) -> bool {
+    RESERVED_ENV_KEYS.contains(&key) || RESERVED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
+#[allow(clippy::implicit_hasher)]
 pub async fn execute_eval_block(
     block: &EvalBlock,
     working_dir: &Path,
     scratch_dir: Option<&Path>,
     workspace_dir: Option<&Path>,
+    user_env: &HashMap<String, String>,
 ) -> EvalResult {
     let mut command = Command::new("sh");
     command
@@ -116,6 +126,12 @@ pub async fn execute_eval_block(
         .env("HOME", "/tmp")
         .env("LANG", "C.UTF-8")
         .kill_on_drop(true);
+
+    for (k, v) in user_env {
+        if !is_reserved_env_key(k) {
+            command.env(k, v);
+        }
+    }
 
     if let Some(dir) = scratch_dir {
         command.env("STATESPACE_SCRATCH", dir);
@@ -190,7 +206,12 @@ pub async fn execute_eval_block(
     }
 }
 
-pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> String {
+#[allow(clippy::implicit_hasher)]
+pub async fn process_eval_blocks(
+    content: &str,
+    working_dir: &Path,
+    user_env: &HashMap<String, String>,
+) -> String {
     let mut blocks = parse_eval_blocks(content);
 
     if blocks.is_empty() {
@@ -212,12 +233,14 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> String {
         .map(|(i, b)| (i, b.range))
         .collect();
 
+    let user_env = std::sync::Arc::new(user_env.clone());
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
     let mut set = tokio::task::JoinSet::new();
 
     for (i, block) in blocks.into_iter().enumerate() {
         let sem = sem.clone();
         let wd = working_dir.to_path_buf();
+        let env = user_env.clone();
         set.spawn(async move {
             let Ok(_permit) = sem.acquire().await else {
                 return (
@@ -229,7 +252,7 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> String {
                     },
                 );
             };
-            let result = execute_eval_block(&block, &wd, None, None).await;
+            let result = execute_eval_block(&block, &wd, None, None, &env).await;
             (i, block.range, result)
         });
     }
@@ -272,7 +295,13 @@ pub async fn process_eval_blocks(content: &str, working_dir: &Path) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::collections::HashMap;
+
     use crate::eval::{is_eval_info_string, parse_eval_blocks};
+
+    fn empty_env() -> HashMap<String, String> {
+        HashMap::new()
+    }
 
     #[test]
     fn info_string_component() {
@@ -346,7 +375,14 @@ mod tests {
             range: (0, 0),
             code: "echo hello".to_string(),
         };
-        let result = execute_eval_block(&block, std::path::Path::new("/tmp"), None, None).await;
+        let result = execute_eval_block(
+            &block,
+            std::path::Path::new("/tmp"),
+            None,
+            None,
+            &empty_env(),
+        )
+        .await;
         assert!(result.success);
         assert_eq!(result.output, "hello");
     }
@@ -358,7 +394,14 @@ mod tests {
             range: (0, 0),
             code: "exit 42".to_string(),
         };
-        let result = execute_eval_block(&block, std::path::Path::new("/tmp"), None, None).await;
+        let result = execute_eval_block(
+            &block,
+            std::path::Path::new("/tmp"),
+            None,
+            None,
+            &empty_env(),
+        )
+        .await;
         assert!(!result.success);
         assert!(result.output.contains("eval error"));
         assert!(result.output.contains("42"));
@@ -371,7 +414,14 @@ mod tests {
             range: (0, 0),
             code: "nonexistent_command_xyz_123".to_string(),
         };
-        let result = execute_eval_block(&block, std::path::Path::new("/tmp"), None, None).await;
+        let result = execute_eval_block(
+            &block,
+            std::path::Path::new("/tmp"),
+            None,
+            None,
+            &empty_env(),
+        )
+        .await;
         assert!(!result.success);
         assert!(result.output.contains("eval error"));
     }
@@ -380,7 +430,7 @@ mod tests {
     async fn process_replaces_component_blocks() {
         use crate::eval::process_eval_blocks;
         let md = "# Title\n\n```component\necho 42\n```\n\nEnd\n";
-        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp"), &empty_env()).await;
         assert!(result.contains("42"));
         assert!(!result.contains("```component"));
         assert!(result.contains("# Title"));
@@ -391,7 +441,7 @@ mod tests {
     async fn process_no_component_blocks_returns_unchanged() {
         use crate::eval::process_eval_blocks;
         let md = "# Just text\n\n```json\n{}\n```\n";
-        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp"), &empty_env()).await;
         assert_eq!(result, md);
     }
 
@@ -399,7 +449,7 @@ mod tests {
     async fn process_multiple_blocks_replaced_in_order() {
         use crate::eval::process_eval_blocks;
         let md = "A\n\n```component\necho first\n```\n\nB\n\n```component\necho second\n```\n\nC\n";
-        let result = process_eval_blocks(md, std::path::Path::new("/tmp")).await;
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp"), &empty_env()).await;
         let first_pos = result.find("first").expect("first should be present");
         let second_pos = result.find("second").expect("second should be present");
         assert!(first_pos < second_pos);
@@ -415,9 +465,54 @@ mod tests {
             range: (0, 0),
             code: "sleep 10".to_string(),
         };
-        let result = execute_eval_block(&block, std::path::Path::new("/tmp"), None, None).await;
+        let result = execute_eval_block(
+            &block,
+            std::path::Path::new("/tmp"),
+            None,
+            None,
+            &empty_env(),
+        )
+        .await;
         assert!(!result.success);
         assert!(result.output.contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn user_env_injected_into_subprocess() {
+        use crate::eval::{EvalBlock, execute_eval_block};
+        let block = EvalBlock {
+            range: (0, 0),
+            code: "echo $MY_SECRET".to_string(),
+        };
+        let env = HashMap::from([("MY_SECRET".into(), "hunter2".into())]);
+        let result =
+            execute_eval_block(&block, std::path::Path::new("/tmp"), None, None, &env).await;
+        assert!(result.success);
+        assert_eq!(result.output, "hunter2");
+    }
+
+    #[tokio::test]
+    async fn reserved_env_keys_not_overridden() {
+        use crate::eval::{EvalBlock, execute_eval_block};
+        let block = EvalBlock {
+            range: (0, 0),
+            code: "echo $HOME".to_string(),
+        };
+        let env = HashMap::from([("HOME".into(), "/evil".into())]);
+        let result =
+            execute_eval_block(&block, std::path::Path::new("/tmp"), None, None, &env).await;
+        assert!(result.success);
+        assert_ne!(result.output, "/evil");
+    }
+
+    #[tokio::test]
+    async fn process_eval_blocks_with_user_env() {
+        use crate::eval::process_eval_blocks;
+        let md = "```component\necho $DB\n```\n";
+        let env = HashMap::from([("DB".into(), "postgresql://localhost/test".into())]);
+        let result = process_eval_blocks(md, std::path::Path::new("/tmp"), &env).await;
+        assert!(result.contains("postgresql://localhost/test"));
+        assert!(!result.contains("```component"));
     }
 
     #[test]

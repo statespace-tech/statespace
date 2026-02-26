@@ -14,6 +14,7 @@ use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
     expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -21,12 +22,25 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ServerConfig {
     pub content_root: PathBuf,
     pub host: String,
     pub port: u16,
     pub limits: ExecutionLimits,
+    pub env: HashMap<String, String>,
+}
+
+impl std::fmt::Debug for ServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfig")
+            .field("content_root", &self.content_root)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("limits", &self.limits)
+            .field("env_keys", &self.env.len())
+            .finish()
+    }
 }
 
 impl ServerConfig {
@@ -37,6 +51,7 @@ impl ServerConfig {
             host: "127.0.0.1".to_string(),
             port: 8000,
             limits: ExecutionLimits::default(),
+            env: HashMap::new(),
         }
     }
 
@@ -59,6 +74,12 @@ impl ServerConfig {
     }
 
     #[must_use]
+    pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
+        self.env = env;
+        self
+    }
+
+    #[must_use]
     pub fn socket_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -74,6 +95,7 @@ pub struct ServerState {
     pub content_resolver: Arc<dyn ContentResolver>,
     pub limits: ExecutionLimits,
     pub content_root: PathBuf,
+    pub env: Arc<HashMap<String, String>>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -81,6 +103,7 @@ impl std::fmt::Debug for ServerState {
         f.debug_struct("ServerState")
             .field("limits", &self.limits)
             .field("content_root", &self.content_root)
+            .field("env_keys", &self.env.len())
             .finish_non_exhaustive()
     }
 }
@@ -94,6 +117,7 @@ impl ServerState {
             content_resolver: Arc::new(LocalContentResolver::new(&config.content_root)?),
             limits: config.limits.clone(),
             content_root: config.content_root.clone(),
+            env: Arc::new(config.env.clone()),
         })
     }
 }
@@ -182,7 +206,7 @@ async fn serve_markdown(path: &str, state: &ServerState) -> Response {
     };
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
-    let rendered = eval::process_eval_blocks(&content, working_dir).await;
+    let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
 
     Html(rendered).into_response()
 }
