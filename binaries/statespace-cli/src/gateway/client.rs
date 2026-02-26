@@ -357,6 +357,68 @@ impl GatewayClient {
         parse_api_list_response(resp).await
     }
 
+    pub(crate) async fn set_secret(&self, env_id: &str, key: &str, value: &str) -> Result<()> {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            value: &'a str,
+        }
+
+        let url = format!(
+            "{}/dashboard/apps/{}/secrets/{}",
+            self.base_url, env_id, key
+        );
+        let resp = self
+            .with_headers(self.http.put(&url))
+            .json(&Payload { value })
+            .send()
+            .await?;
+
+        check_api_response(resp).await
+    }
+
+    pub(crate) async fn list_secret_keys(&self, env_id: &str) -> Result<Vec<String>> {
+        #[derive(serde::Deserialize)]
+        struct SecretKeysResponse {
+            keys: Vec<String>,
+        }
+
+        let url = format!("{}/dashboard/apps/{}/secrets", self.base_url, env_id);
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
+
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("(failed to read body: {e})"));
+
+        if !status.is_success() {
+            let message = text.chars().take(512).collect();
+            return Err(GatewayError::Api {
+                status: status.as_u16(),
+                message,
+            }
+            .into());
+        }
+
+        let response: SecretKeysResponse =
+            serde_json::from_str(&text).map_err(|e| GatewayError::Api {
+                status: status.as_u16(),
+                message: format!("failed to parse response: {e}"),
+            })?;
+
+        Ok(response.keys)
+    }
+
+    pub(crate) async fn delete_secret(&self, env_id: &str, key: &str) -> Result<()> {
+        let url = format!(
+            "{}/dashboard/apps/{}/secrets/{}",
+            self.base_url, env_id, key
+        );
+        let resp = self.with_headers(self.http.delete(&url)).send().await?;
+
+        check_api_response(resp).await
+    }
+
     pub(crate) async fn remove_ssh_key(&self, fingerprint: &str) -> Result<()> {
         let url = format!(
             "{}/api/v1/ssh-keys/{}",

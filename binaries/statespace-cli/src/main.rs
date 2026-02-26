@@ -107,6 +107,12 @@ async fn run() -> Result<()> {
             commands::tokens::run(command, gateway).await
         }
 
+        Commands::Secrets { command } => {
+            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+            let gateway = GatewayClient::new(creds)?;
+            commands::secrets::run(command, gateway).await
+        }
+
         Commands::Ssh { command } => match command {
             args::SshCommands::Setup { yes } => commands::ssh_config::run_setup(yes).await,
             args::SshCommands::Uninstall { yes } => commands::ssh_config::run_uninstall(yes),

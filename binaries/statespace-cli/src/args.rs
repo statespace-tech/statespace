@@ -61,6 +61,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: TokensCommands,
     },
+
+    /// Secrets management
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommands,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -349,4 +355,40 @@ pub(crate) struct TokenRevokeArgs {
     /// Skip confirmation prompt
     #[arg(long, short)]
     pub yes: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum SecretsCommands {
+    /// Set secrets for an environment
+    Set(SecretsSetArgs),
+    /// List secret keys for an environment
+    List(SecretsListArgs),
+    /// Delete a secret from an environment
+    Delete(SecretsDeleteArgs),
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct SecretsSetArgs {
+    /// Environment name, ID, or URL
+    #[arg(long, short)]
+    pub app: String,
+    /// Secrets in KEY=VALUE format
+    #[arg(required = true)]
+    pub secrets: Vec<String>,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct SecretsListArgs {
+    /// Environment name, ID, or URL
+    #[arg(long, short)]
+    pub app: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct SecretsDeleteArgs {
+    /// Environment name, ID, or URL
+    #[arg(long, short)]
+    pub app: String,
+    /// Secret key to delete
+    pub key: String,
 }
