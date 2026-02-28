@@ -178,7 +178,6 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].0, "bar");
 
-        // Verify state was persisted
         let state = load_state(&dir.path().canonicalize().expect("canon"))
             .expect("load")
             .expect("state exists");
