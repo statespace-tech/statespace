@@ -21,10 +21,10 @@ const VERIFY_MAX_DELAY_SECS: u64 = 10;
 
 #[derive(Clone)]
 pub(crate) struct GatewayClient {
-    base_url: String,
+    pub(super) base_url: String,
     api_key: String,
     org_id: Option<String>,
-    http: Client,
+    pub(super) http: Client,
 }
 
 impl GatewayClient {
@@ -62,7 +62,7 @@ impl GatewayClient {
             .ok_or_else(|| GatewayError::MissingOrgId.into())
     }
 
-    fn with_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    pub(super) fn with_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         let builder = builder.header("Authorization", self.auth_header());
         if let Some(ref org_id) = self.org_id {
             builder.header("X-Statespace-Org-Id", org_id)
@@ -357,68 +357,6 @@ impl GatewayClient {
         parse_api_list_response(resp).await
     }
 
-    pub(crate) async fn set_secret(&self, env_id: &str, key: &str, value: &str) -> Result<()> {
-        #[derive(Serialize)]
-        struct Payload<'a> {
-            value: &'a str,
-        }
-
-        let url = format!(
-            "{}/dashboard/apps/{}/secrets/{}",
-            self.base_url, env_id, key
-        );
-        let resp = self
-            .with_headers(self.http.put(&url))
-            .json(&Payload { value })
-            .send()
-            .await?;
-
-        check_api_response(resp).await
-    }
-
-    pub(crate) async fn list_secret_keys(&self, env_id: &str) -> Result<Vec<String>> {
-        #[derive(serde::Deserialize)]
-        struct SecretKeysResponse {
-            keys: Vec<String>,
-        }
-
-        let url = format!("{}/dashboard/apps/{}/secrets", self.base_url, env_id);
-        let resp = self.with_headers(self.http.get(&url)).send().await?;
-
-        let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .unwrap_or_else(|e| format!("(failed to read body: {e})"));
-
-        if !status.is_success() {
-            let message = text.chars().take(512).collect();
-            return Err(GatewayError::Api {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        let response: SecretKeysResponse =
-            serde_json::from_str(&text).map_err(|e| GatewayError::Api {
-                status: status.as_u16(),
-                message: format!("failed to parse response: {e}"),
-            })?;
-
-        Ok(response.keys)
-    }
-
-    pub(crate) async fn delete_secret(&self, env_id: &str, key: &str) -> Result<()> {
-        let url = format!(
-            "{}/dashboard/apps/{}/secrets/{}",
-            self.base_url, env_id, key
-        );
-        let resp = self.with_headers(self.http.delete(&url)).send().await?;
-
-        check_api_response(resp).await
-    }
-
     pub(crate) async fn remove_ssh_key(&self, fingerprint: &str) -> Result<()> {
         let url = format!(
             "{}/api/v1/ssh-keys/{}",
@@ -442,7 +380,7 @@ fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(results)
 }
 
-async fn check_api_response(resp: reqwest::Response) -> Result<()> {
+pub(super) async fn check_api_response(resp: reqwest::Response) -> Result<()> {
     let status = resp.status();
     if status.is_success() {
         return Ok(());
@@ -460,7 +398,9 @@ async fn check_api_response(resp: reqwest::Response) -> Result<()> {
     .into())
 }
 
-async fn parse_api_response<T: serde::de::DeserializeOwned>(resp: reqwest::Response) -> Result<T> {
+pub(super) async fn parse_api_response<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> Result<T> {
     let status = resp.status();
     let text = resp
         .text()
@@ -538,8 +478,8 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
 
 /// Unauthenticated client for RFC 8628 device authorization.
 pub(crate) struct AuthClient {
-    base_url: String,
-    http: Client,
+    pub(super) base_url: String,
+    pub(super) http: Client,
 }
 
 impl AuthClient {
