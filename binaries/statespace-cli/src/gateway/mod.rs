@@ -2,6 +2,7 @@ mod auth;
 mod client;
 mod environments;
 mod organizations;
+mod secrets;
 mod ssh;
 mod tokens;
 
