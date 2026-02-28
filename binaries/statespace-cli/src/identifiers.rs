@@ -21,7 +21,7 @@ pub(crate) fn normalize_application_reference(input: &str) -> Result<String, Str
 fn parse_name_from_url(input: &str) -> Option<String> {
     let url = reqwest::Url::parse(input).ok()?;
     let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" {
+    if scheme != "https" {
         return None;
     }
 
@@ -85,6 +85,12 @@ mod tests {
         let result = normalize_application_reference("https://my-cool-project.app.statespace.com")
             .expect("should extract name from url");
         assert_eq!(result, "my-cool-project");
+    }
+
+    #[test]
+    fn normalize_rejects_http_scheme_url() {
+        let result = normalize_application_reference("http://my-cool-project.app.statespace.com");
+        assert!(result.is_err());
     }
 
     #[test]
