@@ -104,13 +104,13 @@ async fn run_get(args: TokenGetArgs, gateway: GatewayClient) -> Result<()> {
     }
     print_kv("Usage count:", &token.usage_count.to_string());
 
-    if let Some(envs) = &token.allowed_environments {
-        let env_str = if envs.is_empty() {
+    if let Some(apps) = &token.allowed_applications {
+        let app_str = if apps.is_empty() {
             "All".to_string()
         } else {
-            envs.join(", ")
+            apps.join(", ")
         };
-        print_kv("Allowed apps:", &env_str);
+        print_kv("Allowed apps:", &app_str);
     }
 
     if let Some(revoked_at) = &token.revoked_at {

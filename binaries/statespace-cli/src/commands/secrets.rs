@@ -1,7 +1,7 @@
 use crate::args::{SecretsCommands, SecretsDeleteArgs, SecretsListArgs, SecretsSetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::identifiers::normalize_environment_reference;
+use crate::identifiers::normalize_application_reference;
 
 pub(crate) async fn run(cmd: SecretsCommands, gateway: GatewayClient) -> Result<()> {
     match cmd {
@@ -11,14 +11,14 @@ pub(crate) async fn run(cmd: SecretsCommands, gateway: GatewayClient) -> Result<
     }
 }
 
-async fn resolve_env_id(gateway: &GatewayClient, app: &str) -> Result<String> {
-    let reference = normalize_environment_reference(app).map_err(Error::cli)?;
-    let env = gateway.get_environment(&reference).await?;
-    Ok(env.id)
+async fn resolve_application_id(gateway: &GatewayClient, app: &str) -> Result<String> {
+    let reference = normalize_application_reference(app).map_err(Error::cli)?;
+    let app = gateway.get_application(&reference).await?;
+    Ok(app.id)
 }
 
 async fn run_set(args: SecretsSetArgs, gateway: GatewayClient) -> Result<()> {
-    let env_id = resolve_env_id(&gateway, &args.app).await?;
+    let app_id = resolve_application_id(&gateway, &args.app).await?;
 
     for secret in &args.secrets {
         let Some((key, value)) = secret.split_once('=') else {
@@ -26,7 +26,7 @@ async fn run_set(args: SecretsSetArgs, gateway: GatewayClient) -> Result<()> {
                 "Invalid secret format '{secret}': expected KEY=VALUE"
             )));
         };
-        gateway.set_secret(&env_id, key, value).await?;
+        gateway.set_secret(&app_id, key, value).await?;
         eprintln!("✓ Set {key}");
     }
 
@@ -34,8 +34,8 @@ async fn run_set(args: SecretsSetArgs, gateway: GatewayClient) -> Result<()> {
 }
 
 async fn run_list(args: SecretsListArgs, gateway: GatewayClient) -> Result<()> {
-    let env_id = resolve_env_id(&gateway, &args.app).await?;
-    let keys = gateway.list_secret_keys(&env_id).await?;
+    let app_id = resolve_application_id(&gateway, &args.app).await?;
+    let keys = gateway.list_secret_keys(&app_id).await?;
 
     if keys.is_empty() {
         println!("No secrets set.");
@@ -50,8 +50,8 @@ async fn run_list(args: SecretsListArgs, gateway: GatewayClient) -> Result<()> {
 }
 
 async fn run_delete(args: SecretsDeleteArgs, gateway: GatewayClient) -> Result<()> {
-    let env_id = resolve_env_id(&gateway, &args.app).await?;
-    gateway.delete_secret(&env_id, &args.key).await?;
+    let app_id = resolve_application_id(&gateway, &args.app).await?;
+    gateway.delete_secret(&app_id, &args.key).await?;
     eprintln!("✓ Deleted {}", args.key);
     Ok(())
 }

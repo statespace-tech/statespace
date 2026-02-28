@@ -1,17 +1,17 @@
-const ALLOWED_ENV_HOST_SUFFIXES: &[&str] = &["app.statespace.com", "app.staging.statespace.com"];
+const ALLOWED_APP_HOST_SUFFIXES: &[&str] = &["app.statespace.com", "app.staging.statespace.com"];
 
 /// Normalize user input into a value the gateway can resolve.
 ///
 /// The gateway accepts UUIDs, short IDs, and names (slug-format) in path parameters.
 /// The CLI's only job is to extract a name from a URL if one is pasted — everything
 /// else is passed through verbatim and resolved server-side.
-pub(crate) fn normalize_environment_reference(input: &str) -> Result<String, String> {
+pub(crate) fn normalize_application_reference(input: &str) -> Result<String, String> {
     if input.contains("://") {
         if let Some(name) = parse_name_from_url(input) {
             return Ok(name);
         }
         return Err(format!(
-            "Invalid environment URL: {input}. Expected https://{{name}}.app.statespace.com"
+            "Invalid application URL: {input}. Expected https://{{name}}.app.statespace.com"
         ));
     }
 
@@ -21,12 +21,12 @@ pub(crate) fn normalize_environment_reference(input: &str) -> Result<String, Str
 fn parse_name_from_url(input: &str) -> Option<String> {
     let url = reqwest::Url::parse(input).ok()?;
     let scheme = url.scheme();
-    if scheme != "http" && scheme != "https" {
+    if scheme != "https" {
         return None;
     }
 
     let host = url.host_str()?;
-    for suffix in ALLOWED_ENV_HOST_SUFFIXES {
+    for suffix in ALLOWED_APP_HOST_SUFFIXES {
         if host == *suffix {
             return None;
         }
@@ -43,10 +43,10 @@ fn parse_name_from_url(input: &str) -> Option<String> {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
-    use crate::identifiers::{normalize_environment_reference, parse_name_from_url};
+    use crate::identifiers::{normalize_application_reference, parse_name_from_url};
 
     #[test]
-    fn parse_name_from_url_accepts_env_domains() {
+    fn parse_name_from_url_accepts_app_domains() {
         assert_eq!(
             parse_name_from_url("https://my-cool-project.app.statespace.com"),
             Some("my-cool-project".to_string())
@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn normalize_uuid_passthrough() {
-        let result = normalize_environment_reference("550e8400-e29b-41d4-a716-446655440000")
+        let result = normalize_application_reference("550e8400-e29b-41d4-a716-446655440000")
             .expect("should pass through");
         assert_eq!(result, "550e8400-e29b-41d4-a716-446655440000");
     }
@@ -76,20 +76,26 @@ mod tests {
     #[test]
     fn normalize_name_passthrough() {
         let result =
-            normalize_environment_reference("my-cool-project").expect("should pass through");
+            normalize_application_reference("my-cool-project").expect("should pass through");
         assert_eq!(result, "my-cool-project");
     }
 
     #[test]
     fn normalize_url_extracts_name() {
-        let result = normalize_environment_reference("https://my-cool-project.app.statespace.com")
+        let result = normalize_application_reference("https://my-cool-project.app.statespace.com")
             .expect("should extract name from url");
         assert_eq!(result, "my-cool-project");
     }
 
     #[test]
+    fn normalize_rejects_http_scheme_url() {
+        let result = normalize_application_reference("http://my-cool-project.app.statespace.com");
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn normalize_rejects_invalid_url() {
-        let result = normalize_environment_reference("https://example.com/something");
+        let result = normalize_application_reference("https://example.com/something");
         assert!(result.is_err());
     }
 }

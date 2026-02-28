@@ -1,7 +1,7 @@
 use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
+use crate::gateway::applications::{Application, ApplicationFile, DeployResult, UpsertResult};
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
-use crate::gateway::environments::{DeployResult, Environment, EnvironmentFile, UpsertResult};
 use crate::gateway::organizations::Organization;
 use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
@@ -14,6 +14,7 @@ use std::path::Path;
 use std::time::Duration;
 
 const USER_AGENT: &str = concat!("statespace-cli/", env!("CARGO_PKG_VERSION"));
+const TOKEN_SCOPE_PREFIX: &str = "environments";
 
 const VERIFY_MAX_ATTEMPTS: u32 = 20;
 const VERIFY_BASE_DELAY_SECS: u64 = 2;
@@ -71,7 +72,7 @@ impl GatewayClient {
         }
     }
 
-    pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<EnvironmentFile>> {
+    pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<ApplicationFile>> {
         let mut files = Vec::new();
 
         for path in collect_files(dir)? {
@@ -95,7 +96,7 @@ impl GatewayClient {
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            files.push(EnvironmentFile {
+            files.push(ApplicationFile {
                 path: rel_path,
                 content,
                 checksum,
@@ -106,16 +107,16 @@ impl GatewayClient {
         Ok(files)
     }
 
-    pub(crate) async fn create_environment(
+    pub(crate) async fn create_application(
         &self,
         name: &str,
-        files: Vec<EnvironmentFile>,
+        files: Vec<ApplicationFile>,
         visibility: Option<crate::args::VisibilityArg>,
     ) -> Result<DeployResult> {
         #[derive(Serialize)]
         struct Payload<'a> {
             name: &'a str,
-            files: Vec<EnvironmentFile>,
+            files: Vec<ApplicationFile>,
             #[serde(skip_serializing_if = "Option::is_none")]
             visibility: Option<&'a str>,
         }
@@ -139,28 +140,28 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
-    pub(crate) async fn list_environments(&self) -> Result<Vec<Environment>> {
+    pub(crate) async fn list_applications(&self) -> Result<Vec<Application>> {
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self.with_headers(self.http.get(&url)).send().await?;
 
         parse_api_list_response(resp).await
     }
 
-    pub(crate) async fn get_environment(&self, id_or_name: &str) -> Result<Environment> {
+    pub(crate) async fn get_application(&self, id_or_name: &str) -> Result<Application> {
         let url = format!("{}/api/v1/environments/{}", self.base_url, id_or_name);
         let resp = self.with_headers(self.http.get(&url)).send().await?;
 
         parse_api_response(resp).await
     }
 
-    pub(crate) async fn upsert_environment(
+    pub(crate) async fn upsert_application(
         &self,
         name: &str,
-        files: Vec<EnvironmentFile>,
+        files: Vec<ApplicationFile>,
     ) -> Result<UpsertResult> {
         #[derive(Serialize)]
         struct Payload {
-            files: Vec<EnvironmentFile>,
+            files: Vec<ApplicationFile>,
         }
 
         let url = format!(
@@ -177,14 +178,14 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
-    pub(crate) async fn delete_environment(&self, environment_id: &str) -> Result<()> {
-        let url = format!("{}/api/v1/environments/{}", self.base_url, environment_id);
+    pub(crate) async fn delete_application(&self, application_id: &str) -> Result<()> {
+        let url = format!("{}/api/v1/environments/{}", self.base_url, application_id);
         let resp = self.with_headers(self.http.delete(&url)).send().await?;
 
         check_api_response(resp).await
     }
 
-    pub(crate) async fn verify_environment(&self, url: &str, auth_token: &str) -> Result<bool> {
+    pub(crate) async fn verify_application(&self, url: &str, auth_token: &str) -> Result<bool> {
         for attempt in 1..=VERIFY_MAX_ATTEMPTS {
             match self
                 .http
@@ -213,7 +214,7 @@ impl GatewayClient {
         &self,
         name: &str,
         scope: &str,
-        environment_ids: Option<&[String]>,
+        application_ids: Option<&[String]>,
         expires_at: Option<&str>,
     ) -> Result<TokenCreateResult> {
         let org_id = self.require_org_id()?;
@@ -223,8 +224,11 @@ impl GatewayClient {
             organization_id: &'a str,
             name: &'a str,
             scope: String,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            allowed_environment_ids: Option<&'a [String]>,
+            #[serde(
+                rename = "allowed_environment_ids",
+                skip_serializing_if = "Option::is_none"
+            )]
+            allowed_application_ids: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
             expires_at: Option<&'a str>,
         }
@@ -235,8 +239,8 @@ impl GatewayClient {
             .json(&Payload {
                 organization_id: org_id,
                 name,
-                scope: format!("environments:{scope}"),
-                allowed_environment_ids: environment_ids,
+                scope: format!("{TOKEN_SCOPE_PREFIX}:{scope}"),
+                allowed_application_ids: application_ids,
                 expires_at,
             })
             .send()
@@ -280,7 +284,7 @@ impl GatewayClient {
         token_id: &str,
         name: Option<&str>,
         scope: Option<&str>,
-        environment_ids: Option<&[String]>,
+        application_ids: Option<&[String]>,
         expires_at: Option<&str>,
     ) -> Result<TokenCreateResult> {
         #[derive(Serialize)]
@@ -290,8 +294,11 @@ impl GatewayClient {
             new_name: Option<&'a str>,
             #[serde(skip_serializing_if = "Option::is_none")]
             new_scope: Option<String>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            new_allowed_environment_ids: Option<&'a [String]>,
+            #[serde(
+                rename = "new_allowed_environment_ids",
+                skip_serializing_if = "Option::is_none"
+            )]
+            new_allowed_application_ids: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
             new_expires_at: Option<&'a str>,
         }
@@ -301,8 +308,8 @@ impl GatewayClient {
             .with_headers(self.http.post(&url))
             .json(&Payload {
                 new_name: name,
-                new_scope: scope.map(|s| format!("environments:{s}")),
-                new_allowed_environment_ids: environment_ids,
+                new_scope: scope.map(|s| format!("{TOKEN_SCOPE_PREFIX}:{s}")),
+                new_allowed_application_ids: application_ids,
                 new_expires_at: expires_at,
             })
             .send()
