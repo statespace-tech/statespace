@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Statespace Authors"]
@@ -22,9 +22,9 @@ pre-release-commit-message = "chore: release v{{version}}"
 allow-branch = ["main"]
 
 [workspace.dependencies]
-statespace-tool-runtime = { path = "crates/statespace-tool-runtime", version = "0.1.4" }
-statespace-server = { path = "crates/statespace-server", version = "0.1.4" }
-statespace-templates = { path = "crates/statespace-templates", version = "0.1.4" }
+statespace-tool-runtime = { path = "crates/statespace-tool-runtime", version = "0.1.5" }
+statespace-server = { path = "crates/statespace-server", version = "0.1.5" }
+statespace-templates = { path = "crates/statespace-templates", version = "0.1.5" }
 
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
