@@ -9,17 +9,17 @@ use crate::gateway::{AuthClient, DeviceTokenResponse, GatewayClient};
 use std::io::{self, Write};
 use std::time::Duration;
 
-pub(crate) async fn run(cmd: AuthCommands) -> Result<()> {
+pub(crate) async fn run(cmd: AuthCommands, cli_api_url: Option<&str>) -> Result<()> {
     match cmd {
-        AuthCommands::Login => run_login().await,
+        AuthCommands::Login => run_login(cli_api_url).await,
         AuthCommands::Logout => run_logout(),
         AuthCommands::Status => run_status(),
         AuthCommands::Token { format } => run_token(format),
     }
 }
 
-async fn run_login() -> Result<()> {
-    let api_url = resolve_api_url();
+async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
+    let api_url = resolve_api_url(cli_api_url);
 
     if let Some(creds) = load_stored_credentials()? {
         println!("Already logged in as {}", creds.email);

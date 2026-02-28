@@ -25,16 +25,24 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Auth { command } => commands::auth::run(command).await,
+        Commands::Auth { command } => commands::auth::run(command, cli.api_url.as_deref()).await,
 
         Commands::Deploy(args) => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+            let creds = resolve_credentials(
+                cli.api_url.as_deref(),
+                cli.api_key.as_deref(),
+                cli.org_id.as_deref(),
+            )?;
             let gateway = GatewayClient::new(creds)?;
             commands::app::run_create(args, gateway).await
         }
 
         Commands::Sync(args) => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+            let creds = resolve_credentials(
+                cli.api_url.as_deref(),
+                cli.api_key.as_deref(),
+                cli.org_id.as_deref(),
+            )?;
             let gateway = GatewayClient::new(creds)?;
             commands::sync::run_sync(args, gateway).await
         }
@@ -42,14 +50,22 @@ async fn run() -> Result<()> {
         Commands::Serve(args) => commands::serve::run_serve(args).await,
 
         Commands::Org { command } => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+            let creds = resolve_credentials(
+                cli.api_url.as_deref(),
+                cli.api_key.as_deref(),
+                cli.org_id.as_deref(),
+            )?;
             let gateway = GatewayClient::new(creds)?;
             commands::org::run(command, gateway).await
         }
 
         Commands::App { command } => {
             let build_gateway = || -> Result<GatewayClient> {
-                let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+                let creds = resolve_credentials(
+                    cli.api_url.as_deref(),
+                    cli.api_key.as_deref(),
+                    cli.org_id.as_deref(),
+                )?;
                 GatewayClient::new(creds)
             };
 
@@ -82,7 +98,11 @@ async fn run() -> Result<()> {
         }
 
         Commands::Tokens { command } => {
-            let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+            let creds = resolve_credentials(
+                cli.api_url.as_deref(),
+                cli.api_key.as_deref(),
+                cli.org_id.as_deref(),
+            )?;
             let gateway = GatewayClient::new(creds)?;
             commands::tokens::run(command, gateway).await
         }
@@ -91,7 +111,11 @@ async fn run() -> Result<()> {
             args::SshCommands::Setup { yes } => commands::ssh_config::run_setup(yes).await,
             args::SshCommands::Uninstall { yes } => commands::ssh_config::run_uninstall(yes),
             args::SshCommands::Keys { command } => {
-                let creds = resolve_credentials(cli.api_key.as_deref(), cli.org_id.as_deref())?;
+                let creds = resolve_credentials(
+                    cli.api_url.as_deref(),
+                    cli.api_key.as_deref(),
+                    cli.org_id.as_deref(),
+                )?;
                 let gateway = GatewayClient::new(creds)?;
                 commands::ssh_key::run(command, gateway).await
             }

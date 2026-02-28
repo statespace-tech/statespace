@@ -14,6 +14,9 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub org_id: Option<String>,
 
+    #[arg(long, global = true, env = "STATESPACE_GATEWAY_URL", hide = true)]
+    pub api_url: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
