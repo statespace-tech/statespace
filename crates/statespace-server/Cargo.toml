@@ -39,6 +39,9 @@ thiserror.workspace = true
 # Async
 async-trait.workspace = true
 
+# Hashing
+blake3 = "1.8.3"
+
 [dev-dependencies]
 tempfile = "3"
 
