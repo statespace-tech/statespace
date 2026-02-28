@@ -54,6 +54,7 @@ fn get_current_context(config: &ConfigFile) -> Option<&Context> {
 }
 
 pub(crate) fn resolve_credentials(
+    cli_api_url: Option<&str>,
     cli_api_key: Option<&str>,
     cli_org_id: Option<&str>,
 ) -> Result<Credentials> {
@@ -81,7 +82,10 @@ pub(crate) fn resolve_credentials(
     let cfg_key = context.and_then(|c| c.api_key.clone());
     let cfg_org = context.and_then(|c| c.org_id.clone());
 
-    let api_url = stored_url
+    let api_url = cli_api_url
+        .map(String::from)
+        .filter(|s| !s.trim().is_empty())
+        .or(stored_url)
         .or(cfg_url)
         .unwrap_or_else(|| DEFAULT_API_URL.to_string());
 
@@ -102,7 +106,10 @@ pub(crate) fn resolve_credentials(
     })
 }
 
-pub(crate) fn resolve_api_url() -> String {
+pub(crate) fn resolve_api_url(cli_api_url: Option<&str>) -> String {
+    if let Some(url) = cli_api_url.filter(|s| !s.trim().is_empty()) {
+        return url.to_string();
+    }
     let stored = load_stored_credentials().ok().flatten();
     let stored_url = stored.as_ref().map(|c| c.api_url.clone());
 
