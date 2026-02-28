@@ -1,6 +1,6 @@
+pub(crate) mod applications;
 mod auth;
 mod client;
-pub(crate) mod applications;
 mod organizations;
 mod secrets;
 mod ssh;

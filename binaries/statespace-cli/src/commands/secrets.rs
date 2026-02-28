@@ -1,7 +1,7 @@
 use crate::args::{SecretsCommands, SecretsDeleteArgs, SecretsListArgs, SecretsSetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::identifiers::normalize_environment_reference;
+use crate::identifiers::normalize_application_reference;
 
 pub(crate) async fn run(cmd: SecretsCommands, gateway: GatewayClient) -> Result<()> {
     match cmd {
@@ -12,8 +12,8 @@ pub(crate) async fn run(cmd: SecretsCommands, gateway: GatewayClient) -> Result<
 }
 
 async fn resolve_env_id(gateway: &GatewayClient, app: &str) -> Result<String> {
-    let reference = normalize_environment_reference(app).map_err(Error::cli)?;
-    let env = gateway.get_environment(&reference).await?;
+    let reference = normalize_application_reference(app).map_err(Error::cli)?;
+    let env = gateway.get_application(&reference).await?;
     Ok(env.id)
 }
 

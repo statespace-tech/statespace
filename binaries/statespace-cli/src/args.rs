@@ -199,7 +199,7 @@ pub(crate) struct AppCreateArgs {
     #[arg(long, short)]
     pub name: Option<String>,
 
-    /// Environment visibility (default: private for paid tiers, public for free)
+    /// Application visibility (default: private for paid tiers, public for free)
     #[arg(long)]
     pub visibility: Option<VisibilityArg>,
 
@@ -359,17 +359,17 @@ pub(crate) struct TokenRevokeArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SecretsCommands {
-    /// Set secrets for an environment
+    /// Set secrets for an application
     Set(SecretsSetArgs),
-    /// List secret keys for an environment
+    /// List secret keys for an application
     List(SecretsListArgs),
-    /// Delete a secret from an environment
+    /// Delete a secret from an application
     Delete(SecretsDeleteArgs),
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct SecretsSetArgs {
-    /// Environment name, ID, or URL
+    /// Application name, ID, or URL
     #[arg(long, short)]
     pub app: String,
     /// Secrets in KEY=VALUE format
@@ -379,14 +379,14 @@ pub(crate) struct SecretsSetArgs {
 
 #[derive(Debug, Parser)]
 pub(crate) struct SecretsListArgs {
-    /// Environment name, ID, or URL
+    /// Application name, ID, or URL
     #[arg(long, short)]
     pub app: String,
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct SecretsDeleteArgs {
-    /// Environment name, ID, or URL
+    /// Application name, ID, or URL
     #[arg(long, short)]
     pub app: String,
     /// Secret key to delete

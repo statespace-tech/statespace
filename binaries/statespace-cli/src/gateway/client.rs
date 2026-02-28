@@ -1,7 +1,7 @@
 use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
-use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 use crate::gateway::applications::{Application, ApplicationFile, DeployResult, UpsertResult};
+use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 use crate::gateway::organizations::Organization;
 use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
@@ -223,7 +223,10 @@ impl GatewayClient {
             organization_id: &'a str,
             name: &'a str,
             scope: String,
-            #[serde(rename = "allowed_environment_ids", skip_serializing_if = "Option::is_none")]
+            #[serde(
+                rename = "allowed_environment_ids",
+                skip_serializing_if = "Option::is_none"
+            )]
             allowed_application_ids: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
             expires_at: Option<&'a str>,
@@ -291,7 +294,10 @@ impl GatewayClient {
             new_name: Option<&'a str>,
             #[serde(skip_serializing_if = "Option::is_none")]
             new_scope: Option<String>,
-            #[serde(rename = "new_allowed_environment_ids", skip_serializing_if = "Option::is_none")]
+            #[serde(
+                rename = "new_allowed_environment_ids",
+                skip_serializing_if = "Option::is_none"
+            )]
             new_allowed_application_ids: Option<&'a [String]>,
             #[serde(skip_serializing_if = "Option::is_none")]
             new_expires_at: Option<&'a str>,

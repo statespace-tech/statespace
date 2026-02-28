@@ -96,13 +96,16 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    type UpsertCall = (String, Vec<ApplicationFile>);
+    type RecordedCalls = Arc<Mutex<Vec<UpsertCall>>>;
+
     struct MockUpserter {
         result: UpsertResult,
-        calls: Arc<Mutex<Vec<(String, Vec<ApplicationFile>)>>>,
+        calls: RecordedCalls,
     }
 
     impl MockUpserter {
-        fn new(result: UpsertResult) -> (Self, Arc<Mutex<Vec<(String, Vec<ApplicationFile>)>>>) {
+        fn new(result: UpsertResult) -> (Self, RecordedCalls) {
             let calls = Arc::new(Mutex::new(Vec::new()));
             let mock = Self {
                 result,
