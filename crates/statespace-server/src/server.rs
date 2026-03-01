@@ -145,18 +145,27 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .with_state(state))
 }
 
-const BROWSER_UA_KEYWORDS: &[&str] = &[
-    "Mozilla/", "Chrome/", "Safari/", "Firefox/", "Edg/", "Opera/", "OPR/",
-];
+const BROWSER_UA_KEYWORDS: &[&str] = &["Chrome/", "Safari/", "Firefox/", "Edg/", "Opera/", "OPR/"];
 
 fn is_browser_request(headers: &HeaderMap) -> bool {
-    let Some(ua) = headers
+    headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
-    else {
-        return false;
-    };
-    BROWSER_UA_KEYWORDS.iter().any(|kw| ua.contains(kw))
+        .is_some_and(|ua| BROWSER_UA_KEYWORDS.iter().any(|kw| ua.contains(kw)))
+}
+
+fn wants_html(headers: &HeaderMap) -> bool {
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_ascii_lowercase);
+
+    match accept.as_deref() {
+        Some(a) if a.contains("text/html") => true,
+        Some(a) if a.contains("text/markdown") || a.contains("text/plain") => false,
+        Some(a) if a.contains("*/*") => is_browser_request(headers),
+        Some(_) | None => is_browser_request(headers),
+    }
 }
 
 fn render_markdown_to_html(markdown: &str) -> String {
@@ -235,11 +244,11 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
         }
     };
 
-    if is_browser_request(headers) {
+    if wants_html(headers) {
         let working_dir = file_path.parent().unwrap_or(&state.content_root);
         let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
         (
-            [(header::VARY, "User-Agent")],
+            [(header::VARY, "Accept, User-Agent")],
             Html(render_markdown_to_html(&rendered)),
         )
             .into_response()
@@ -247,7 +256,7 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
         (
             [
                 (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
-                (header::VARY, "User-Agent"),
+                (header::VARY, "Accept, User-Agent"),
             ],
             content,
         )
@@ -349,6 +358,19 @@ mod tests {
         headers
     }
 
+    fn headers_with_accept(accept: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, accept.parse().unwrap());
+        headers
+    }
+
+    fn headers_with_ua_and_accept(ua: &str, accept: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::USER_AGENT, ua.parse().unwrap());
+        headers.insert(header::ACCEPT, accept.parse().unwrap());
+        headers
+    }
+
     #[test]
     fn browser_detected_chrome() {
         let h = headers_with_ua(
@@ -395,6 +417,48 @@ mod tests {
     fn not_browser_missing_ua() {
         let h = HeaderMap::new();
         assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn not_browser_mozilla_only() {
+        let h = headers_with_ua("Mozilla/5.0");
+        assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn wants_html_accept_text_html() {
+        let h = headers_with_accept("text/html,application/xhtml+xml,*/*;q=0.8");
+        assert!(wants_html(&h));
+    }
+
+    #[test]
+    fn wants_html_accept_text_markdown() {
+        let h = headers_with_accept("text/markdown");
+        assert!(!wants_html(&h));
+    }
+
+    #[test]
+    fn wants_html_accept_text_plain() {
+        let h = headers_with_accept("text/plain");
+        assert!(!wants_html(&h));
+    }
+
+    #[test]
+    fn wants_html_accept_wildcard_with_browser_ua() {
+        let h = headers_with_ua_and_accept("Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36", "*/*");
+        assert!(wants_html(&h));
+    }
+
+    #[test]
+    fn wants_html_accept_wildcard_with_curl_ua() {
+        let h = headers_with_ua_and_accept("curl/8.4.0", "*/*");
+        assert!(!wants_html(&h));
+    }
+
+    #[test]
+    fn wants_html_no_headers() {
+        let h = HeaderMap::new();
+        assert!(!wants_html(&h));
     }
 
     #[test]
