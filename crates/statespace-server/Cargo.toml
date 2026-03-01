@@ -41,6 +41,7 @@ async-trait.workspace = true
 
 # Markdown rendering
 pulldown-cmark.workspace = true
+ammonia.workspace = true
 
 # Hashing
 blake3 = "1.8.3"

@@ -3,6 +3,7 @@
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
 use crate::templates::{FAVICON_SVG, render_page_html};
+use ammonia::Builder;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -164,7 +165,8 @@ fn render_markdown_to_html(markdown: &str) -> String {
     let parser = Parser::new_ext(markdown, options);
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
-    render_page_html(&html_output)
+    let sanitized = Builder::default().clean(&html_output).to_string();
+    render_page_html(&sanitized)
 }
 
 async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> Response {
@@ -236,10 +238,17 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
     if is_browser_request(headers) {
         let working_dir = file_path.parent().unwrap_or(&state.content_root);
         let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
-        Html(render_markdown_to_html(&rendered)).into_response()
+        (
+            [(header::VARY, "User-Agent")],
+            Html(render_markdown_to_html(&rendered)),
+        )
+            .into_response()
     } else {
         (
-            [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+                (header::VARY, "User-Agent"),
+            ],
             content,
         )
             .into_response()
