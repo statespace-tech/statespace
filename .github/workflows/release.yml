@@ -46,16 +46,10 @@ on:
         required: true
         default: dry-run
         type: string
-      publish_only:
-        description: Publish crates for an existing tag without building release artifacts
-        required: true
-        default: false
-        type: boolean
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
-    if: ${{ !inputs.publish_only }}
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
@@ -252,22 +246,3 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
-
-  manual-publish-crates:
-    if: ${{ inputs.publish_only }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag }}
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-release
-        run: cargo install cargo-release
-
-      - name: Publish crates
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo release publish --workspace --no-confirm --no-verify --allow-branch HEAD --execute
