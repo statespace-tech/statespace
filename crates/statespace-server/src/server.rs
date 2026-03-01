@@ -244,9 +244,10 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
         }
     };
 
+    let working_dir = file_path.parent().unwrap_or(&state.content_root);
+    let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
+
     if wants_html(headers) {
-        let working_dir = file_path.parent().unwrap_or(&state.content_root);
-        let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
         (
             [(header::VARY, "Accept, User-Agent")],
             Html(render_markdown_to_html(&rendered)),
@@ -258,7 +259,7 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
                 (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
                 (header::VARY, "Accept, User-Agent"),
             ],
-            content,
+            rendered,
         )
             .into_response()
     }
