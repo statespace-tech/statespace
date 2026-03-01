@@ -41,6 +41,8 @@
           src = ./.;
           filter = path: type:
             (craneLib.filterCargoSources path type) ||
+            # Keep embedded template assets referenced by include_str! in statespace-templates.
+            (builtins.match ".*crates/statespace-templates/src/.*\\.(md|svg|html)$" path != null) ||
             (builtins.match ".*\\.toml$" path != null) ||
             (builtins.match ".*\\.lock$" path != null);
         };
