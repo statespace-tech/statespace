@@ -468,4 +468,11 @@ mod tests {
         assert!(result.contains("<p>world</p>"));
         assert!(result.contains("<!DOCTYPE html>"));
     }
+
+    #[test]
+    fn markdown_sanitizes_script_tags() {
+        let result = render_markdown_to_html("<script>alert('xss')</script>");
+        assert!(!result.contains("<script>"));
+        assert!(!result.contains("alert('xss')"));
+    }
 }
