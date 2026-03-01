@@ -145,26 +145,22 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 }
 
 const BROWSER_UA_KEYWORDS: &[&str] = &[
-    "Mozilla/",
-    "Chrome/",
-    "Safari/",
-    "Firefox/",
-    "Edg/",
-    "Opera/",
-    "OPR/",
+    "Mozilla/", "Chrome/", "Safari/", "Firefox/", "Edg/", "Opera/", "OPR/",
 ];
 
 fn is_browser_request(headers: &HeaderMap) -> bool {
-    let Some(ua) = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()) else {
+    let Some(ua) = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+    else {
         return false;
     };
     BROWSER_UA_KEYWORDS.iter().any(|kw| ua.contains(kw))
 }
 
 fn render_markdown_to_html(markdown: &str) -> String {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS;
+    let options =
+        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let parser = Parser::new_ext(markdown, options);
     let mut html_output = String::new();
     html::push_html(&mut html_output, parser);
