@@ -2,14 +2,15 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::FAVICON_SVG;
+use crate::templates::{FAVICON_SVG, render_page_html};
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
+use pulldown_cmark::{Options, Parser, html};
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
     expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
@@ -143,7 +144,34 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .with_state(state))
 }
 
-async fn index_handler(State(state): State<ServerState>) -> Response {
+const BROWSER_UA_KEYWORDS: &[&str] = &[
+    "Mozilla/",
+    "Chrome/",
+    "Safari/",
+    "Firefox/",
+    "Edg/",
+    "Opera/",
+    "OPR/",
+];
+
+fn is_browser_request(headers: &HeaderMap) -> bool {
+    let Some(ua) = headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok()) else {
+        return false;
+    };
+    BROWSER_UA_KEYWORDS.iter().any(|kw| ua.contains(kw))
+}
+
+fn render_markdown_to_html(markdown: &str) -> String {
+    let options = Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS;
+    let parser = Parser::new_ext(markdown, options);
+    let mut html_output = String::new();
+    html::push_html(&mut html_output, parser);
+    render_page_html(&html_output)
+}
+
+async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> Response {
     let index_path = state.content_root.join("index.html");
 
     if index_path.is_file() {
@@ -162,7 +190,7 @@ async fn index_handler(State(state): State<ServerState>) -> Response {
         }
     }
 
-    serve_markdown("", &state).await
+    serve_page("", &headers, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {
@@ -184,11 +212,15 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         .into_response()
 }
 
-async fn file_handler(Path(path): Path<String>, State(state): State<ServerState>) -> Response {
-    serve_markdown(&path, &state).await
+async fn file_handler(
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    State(state): State<ServerState>,
+) -> Response {
+    serve_page(&path, &headers, &state).await
 }
 
-async fn serve_markdown(path: &str, state: &ServerState) -> Response {
+async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Response {
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
         Err(e) => {
@@ -205,10 +237,17 @@ async fn serve_markdown(path: &str, state: &ServerState) -> Response {
         }
     };
 
-    let working_dir = file_path.parent().unwrap_or(&state.content_root);
-    let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
-
-    Html(rendered).into_response()
+    if is_browser_request(headers) {
+        let working_dir = file_path.parent().unwrap_or(&state.content_root);
+        let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
+        Html(render_markdown_to_html(&rendered)).into_response()
+    } else {
+        (
+            [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            content,
+        )
+            .into_response()
+    }
 }
 
 async fn action_handler_root(
@@ -292,4 +331,72 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 fn error_response(status: StatusCode, message: &str) -> Response {
     let response = ActionResponse::error(message.to_string());
     (status, Json(response)).into_response()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn headers_with_ua(ua: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::USER_AGENT, ua.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn browser_detected_chrome() {
+        let h = headers_with_ua(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        );
+        assert!(is_browser_request(&h));
+    }
+
+    #[test]
+    fn browser_detected_firefox() {
+        let h = headers_with_ua(
+            "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+        );
+        assert!(is_browser_request(&h));
+    }
+
+    #[test]
+    fn browser_detected_safari() {
+        let h = headers_with_ua(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+        );
+        assert!(is_browser_request(&h));
+    }
+
+    #[test]
+    fn not_browser_curl() {
+        let h = headers_with_ua("curl/8.4.0");
+        assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn not_browser_python_requests() {
+        let h = headers_with_ua("python-requests/2.31.0");
+        assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn not_browser_go_http() {
+        let h = headers_with_ua("Go-http-client/2.0");
+        assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn not_browser_missing_ua() {
+        let h = HeaderMap::new();
+        assert!(!is_browser_request(&h));
+    }
+
+    #[test]
+    fn markdown_renders_to_html() {
+        let result = render_markdown_to_html("# Hello\n\nworld");
+        assert!(result.contains("<h1>Hello</h1>"));
+        assert!(result.contains("<p>world</p>"));
+        assert!(result.contains("<!DOCTYPE html>"));
+    }
 }
