@@ -184,14 +184,9 @@ async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> 
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {
-    let favicon_path = state.content_root.join("favicon.svg");
-
-    let content = if favicon_path.is_file() {
-        fs::read_to_string(&favicon_path)
-            .await
-            .unwrap_or_else(|_| FAVICON_SVG.to_string())
-    } else {
-        FAVICON_SVG.to_string()
+    let content = match fs::read_to_string(state.content_root.join("favicon.svg")).await {
+        Ok(custom) => custom,
+        Err(_) => FAVICON_SVG.to_string(),
     };
 
     (
@@ -203,14 +198,9 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
 }
 
 async fn opengraph_handler(State(state): State<ServerState>) -> Response {
-    let custom = state.content_root.join("opengraph.png");
-
-    let bytes = if custom.is_file() {
-        fs::read(&custom)
-            .await
-            .unwrap_or_else(|_| OPENGRAPH_PNG.to_vec())
-    } else {
-        OPENGRAPH_PNG.to_vec()
+    let bytes = match fs::read(state.content_root.join("opengraph.png")).await {
+        Ok(custom) => custom,
+        Err(_) => OPENGRAPH_PNG.to_vec(),
     };
 
     (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], bytes).into_response()
