@@ -1,6 +1,6 @@
 //! Site initialization - writes template files if missing.
 
-use crate::templates::{AGENTS_MD, FAVICON_SVG};
+use crate::templates::{AGENTS_MD, FAVICON_SVG, OPENGRAPH_PNG};
 use std::io;
 use std::path::Path;
 use tokio::fs;
@@ -10,6 +10,7 @@ use tracing::info;
 pub enum TemplateFile {
     AgentsMd,
     FaviconSvg,
+    OpengraphPng,
 }
 
 impl TemplateFile {
@@ -17,6 +18,7 @@ impl TemplateFile {
         match self {
             Self::AgentsMd => "AGENTS.md",
             Self::FaviconSvg => "favicon.svg",
+            Self::OpengraphPng => "opengraph.png",
         }
     }
 }
@@ -33,7 +35,7 @@ pub enum InitResult {
 pub async fn initialize_templates(
     content_root: &Path,
 ) -> io::Result<Vec<(TemplateFile, InitResult)>> {
-    let mut results = Vec::with_capacity(2);
+    let mut results = Vec::with_capacity(3);
 
     results.push((
         TemplateFile::AgentsMd,
@@ -50,6 +52,16 @@ pub async fn initialize_templates(
         .await?,
     ));
 
+    results.push((
+        TemplateFile::OpengraphPng,
+        write_if_missing(
+            content_root,
+            TemplateFile::OpengraphPng.filename(),
+            OPENGRAPH_PNG,
+        )
+        .await?,
+    ));
+
     for (file, result) in &results {
         match result {
             InitResult::Created => info!("Created {}", file.filename()),
@@ -60,7 +72,11 @@ pub async fn initialize_templates(
     Ok(results)
 }
 
-async fn write_if_missing(root: &Path, filename: &str, content: &str) -> io::Result<InitResult> {
+async fn write_if_missing(
+    root: &Path,
+    filename: &str,
+    content: impl AsRef<[u8]>,
+) -> io::Result<InitResult> {
     let path = root.join(filename);
 
     if path.exists() {
@@ -83,10 +99,11 @@ mod tests {
 
         let results = initialize_templates(dir.path()).await.unwrap();
 
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
 
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(dir.path().join("favicon.svg").exists());
+        assert!(dir.path().join("opengraph.png").exists());
     }
 
     #[tokio::test]

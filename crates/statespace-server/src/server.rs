@@ -2,7 +2,7 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::{FAVICON_SVG, render_page_html};
+use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG, render_page_html};
 use ammonia::Builder;
 use axum::{
     Json, Router,
@@ -139,6 +139,7 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .route("/", get(index_handler).post(action_handler_root))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
+        .route("/opengraph.png", get(opengraph_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -197,6 +198,25 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "image/svg+xml")],
         content,
+    )
+        .into_response()
+}
+
+async fn opengraph_handler(State(state): State<ServerState>) -> Response {
+    let custom = state.content_root.join("opengraph.png");
+
+    let bytes = if custom.is_file() {
+        fs::read(&custom)
+            .await
+            .unwrap_or_else(|_| OPENGRAPH_PNG.to_vec())
+    } else {
+        OPENGRAPH_PNG.to_vec()
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "image/png")],
+        bytes,
     )
         .into_response()
 }
