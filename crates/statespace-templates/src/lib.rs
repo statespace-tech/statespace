@@ -4,6 +4,8 @@ pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 
 pub const FAVICON_SVG: &str = include_str!("favicon.svg");
 
+pub const OPENGRAPH_PNG: &[u8] = include_bytes!("opengraph.png");
+
 const PAGE_HTML_TEMPLATE: &str = include_str!("page.html");
 
 /// Renders a markdown page wrapped in a minimal HTML document.
@@ -26,6 +28,19 @@ mod tests {
     fn favicon_is_valid_svg() {
         assert!(FAVICON_SVG.starts_with("<?xml"));
         assert!(FAVICON_SVG.contains("<svg"));
+    }
+
+    #[test]
+    fn opengraph_is_valid_png() {
+        assert!(OPENGRAPH_PNG.starts_with(&[0x89, b'P', b'N', b'G']));
+    }
+
+    #[test]
+    fn page_html_includes_meta_tags() {
+        let html = render_page_html("");
+        assert!(html.contains(r#"<link rel="icon" href="/favicon.svg">"#));
+        assert!(html.contains(r#"<meta property="og:image" content="/opengraph.png">"#));
+        assert!(html.contains(r#"<meta property="og:type" content="website">"#));
     }
 
     #[test]
