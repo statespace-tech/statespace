@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn opengraph_is_valid_png() {
-        assert!(OPENGRAPH_PNG.starts_with(&[0x89, b'P', b'N', b'G']));
+        assert!(OPENGRAPH_PNG.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]));
     }
 
     #[test]
