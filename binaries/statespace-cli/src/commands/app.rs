@@ -1,7 +1,7 @@
 use crate::args::{AppCreateArgs, AppDeleteArgs, AppGetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::gateway::applications::ApplicationStatus;
+use crate::gateway::applications::{ApplicationStatus, Visibility};
 use crate::identifiers::normalize_application_reference;
 use crate::names::generate_name;
 use std::io::{self, Write};
@@ -36,8 +36,8 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
     }
 
     let visibility = match (args.public, args.private) {
-        (true, _) => Some("public"),
-        (_, true) => Some("private"),
+        (true, _) => Some(Visibility::Public),
+        (_, true) => Some(Visibility::Private),
         _ => None,
     };
 
