@@ -21,7 +21,7 @@ pub(crate) async fn run_serve(args: ServeArgs) -> Result<()> {
         .with_port(args.port)
         .with_env(env);
 
-    initialize_templates(&config.content_root, &config.base_url()).await?;
+    initialize_templates(&config.content_root).await?;
 
     let addr = config.socket_addr();
     let base_url = config.base_url();
