@@ -33,23 +33,6 @@ CORRECT: {"command": ["ls", "-la"]}
 CORRECT: {"command": ["ls", "--color", "-h"]}
 ```
 
-**Trailing `;` locks the argument list.** The command accepts only what is defined.
-
-```
-Tool:    [rm, { }, ;]
-CORRECT: {"command": ["rm", "file.txt"]}
-WRONG:   {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
-```
-
-**Fixed elements are immutable.** Only replace placeholders — never modify, remove, or add to fixed elements.
-
-```
-Tool:    [grep, -r, -i, { }, ../data/]
-CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/"]}
-WRONG:   {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
-WRONG:   {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
-```
-
 **`{ }` accepts exactly one argument:**
 
 ```
@@ -67,6 +50,24 @@ CORRECT: {"command": ["cat", "notes.txt"]}
 WRONG:   {"command": ["cat", "notes.py"]}   ← doesn't match
 ```
 
+**Fixed elements are immutable.** Only replace placeholders — never modify, remove, or add to fixed elements.
+
+```
+Tool:    [grep, -r, -i, { }, ../data/]
+CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/"]}
+CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra flag is fine
+WRONG:   {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
+WRONG:   {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
+```
+
+**Trailing `;` locks the argument list.** The command accepts only what is defined.
+
+```
+Tool:    [rm, { }, ;]
+CORRECT: {"command": ["rm", "file.txt"]}
+WRONG:   {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
+```
+
 **Write environment variables literally** — the server expands them at execution time.
 
 ```
@@ -78,5 +79,5 @@ WRONG:   {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  �
 ## Constraints
 
 - Only declared tools can be executed.
-- Commands run relative to the declaring Markdown file's directory.
+- Commands run relative to the app's root directory.
 - All interaction is over HTTP.
