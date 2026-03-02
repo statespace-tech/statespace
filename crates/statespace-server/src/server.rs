@@ -179,25 +179,7 @@ fn render_markdown_to_html(markdown: &str) -> String {
 }
 
 async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> Response {
-    let index_path = state.content_root.join("index.html");
-
-    if index_path.is_file() {
-        match fs::read_to_string(&index_path).await {
-            Ok(content) => {
-                return (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
-                    content,
-                )
-                    .into_response();
-            }
-            Err(e) => {
-                warn!("Failed to read index.html: {}", e);
-            }
-        }
-    }
-
-    serve_page("", &headers, &state).await
+    serve_page("AGENTS.md", &headers, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {

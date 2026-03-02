@@ -43,9 +43,6 @@ async-trait.workspace = true
 pulldown-cmark.workspace = true
 ammonia.workspace = true
 
-# Hashing
-blake3 = "1.8.3"
-
 [dev-dependencies]
 tempfile = "3"
 

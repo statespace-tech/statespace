@@ -7,7 +7,7 @@
 //! use statespace_server::{ServerConfig, build_router, initialize_templates};
 //!
 //! let config = ServerConfig::new(PathBuf::from("./toolsite"));
-//! initialize_templates(&config.content_root, &config.base_url()).await?;
+//! initialize_templates(&config.content_root).await?;
 //! let router = build_router(&config)?;
 //! ```
 
@@ -27,4 +27,4 @@ pub use content::{ContentResolver, LocalContentResolver};
 pub use error::{Error, Result};
 pub use init::initialize_templates;
 pub use server::{ServerConfig, ServerState, build_router};
-pub use templates::{AGENTS_MD, FAVICON_SVG, render_index_html};
+pub use templates::{AGENTS_MD, FAVICON_SVG};
