@@ -213,12 +213,7 @@ async fn opengraph_handler(State(state): State<ServerState>) -> Response {
         OPENGRAPH_PNG.to_vec()
     };
 
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/png")],
-        bytes,
-    )
-        .into_response()
+    (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], bytes).into_response()
 }
 
 async fn file_handler(
