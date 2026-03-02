@@ -70,6 +70,10 @@ jobs:
             mkdir -p "dist/${ARCHIVE}"
             if [ "$target" = "x86_64-unknown-linux-gnu" ]; then
               cp result-gnu/bin/statespace "dist/${ARCHIVE}/statespace"
+              chmod 755 "dist/${ARCHIVE}/statespace"
+              # Nix sets the interpreter to /nix/store/...; patch it to the
+              # standard system path so the binary runs outside NixOS.
+              nix shell nixpkgs#patchelf -c patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 --remove-rpath "dist/${ARCHIVE}/statespace"
             else
               cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
             fi
@@ -131,6 +135,10 @@ jobs:
             mkdir -p "dist/${ARCHIVE}"
             if [ "$target" = "aarch64-unknown-linux-gnu" ]; then
               cp result-gnu/bin/statespace "dist/${ARCHIVE}/statespace"
+              chmod 755 "dist/${ARCHIVE}/statespace"
+              # Nix sets the interpreter to /nix/store/...; patch it to the
+              # standard system path so the binary runs outside NixOS.
+              nix shell nixpkgs#patchelf -c patchelf --set-interpreter /lib/ld-linux-aarch64.so.1 --remove-rpath "dist/${ARCHIVE}/statespace"
             else
               cp result-musl/bin/statespace "dist/${ARCHIVE}/statespace"
             fi
