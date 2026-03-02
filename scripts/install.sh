@@ -35,13 +35,7 @@ detect_target() {
 
     case "$(uname -s)" in
         Darwin) os="apple-darwin" ;;
-        Linux)
-            if [[ -f /etc/alpine-release ]] || ldd --version 2>&1 | grep -qi musl; then
-                os="unknown-linux-musl"
-            else
-                os="unknown-linux-gnu"
-            fi
-            ;;
+        Linux) os="unknown-linux-musl" ;;
         MINGW*|MSYS*|CYGWIN*|Windows_NT)
             error "Windows is not supported. Use WSL: https://learn.microsoft.com/en-us/windows/wsl/install"
             ;;
