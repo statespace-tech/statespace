@@ -35,9 +35,13 @@ pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> R
         );
     }
 
-    let result = gateway
-        .create_application(&name, files, args.visibility)
-        .await?;
+    let visibility = match (args.public, args.private) {
+        (true, _) => Some("public"),
+        (_, true) => Some("private"),
+        _ => None,
+    };
+
+    let result = gateway.create_application(&name, files, visibility).await?;
 
     eprintln!();
     eprintln!("Created '{name}'");

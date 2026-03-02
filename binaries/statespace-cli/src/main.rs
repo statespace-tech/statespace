@@ -36,22 +36,18 @@ async fn run() -> Result<()> {
     match cli.command {
         Commands::Auth { command } => commands::auth::run(command, cli.api_url.as_deref()).await,
 
-        Commands::Deploy(args) => commands::app::run_create(args, build_gateway()?).await,
-
-        Commands::Sync(args) => commands::sync::run_sync(args, build_gateway()?).await,
+        Commands::Deploy(args) => commands::sync::run_sync(args, build_gateway()?).await,
 
         Commands::Serve(args) => commands::serve::run_serve(args).await,
 
         Commands::Org { command } => commands::org::run(command, build_gateway()?).await,
 
         Commands::App { command } => match command {
-            AppCommands::Create(args) | AppCommands::Deploy(args) => {
-                commands::app::run_create(args, build_gateway()?).await
-            }
+            AppCommands::Create(args) => commands::app::run_create(args, build_gateway()?).await,
+            AppCommands::Deploy(args) => commands::sync::run_sync(args, build_gateway()?).await,
             AppCommands::List => commands::app::run_list(build_gateway()?).await,
             AppCommands::Get(args) => commands::app::run_get(args, build_gateway()?).await,
             AppCommands::Delete(args) => commands::app::run_delete(args, build_gateway()?).await,
-            AppCommands::Sync(args) => commands::sync::run_sync(args, build_gateway()?).await,
             AppCommands::Ssh(args) => commands::ssh::run_ssh(args, build_gateway()?).await,
         },
 
