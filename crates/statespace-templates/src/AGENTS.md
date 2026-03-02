@@ -1,25 +1,82 @@
 # Statespace Application Instructions
 
-1. **Discover available tools:** Make a GET request to `/README` or any markdown file to see tools in its frontmatter.
-2. **Execute tools:** Make a POST request to the markdown file URL with a JSON body containing the command: `{"command": ["tool", "arg1", "arg2"]}`.
-3. **Use these API requests to find answers.** Do NOT use local filesystem tools or shell commands. All information must be retrieved through the API by making POST requests with the command in the JSON body to execute the available tools.
-4. **Treat tool definitions as immutable templates.** Literal strings must appear EXACTLY as defined. Only placeholders ({ } or { regex: ... }) accept your values.
-5. **Only execute listed commands.** Commands not in a markdown file's frontmatter will return an error. You may make POST requests to any markdown file that declares tools.
-6. **Commands execute relative to the markdown file's directory.** Account for this when using paths.
-7. **Never modify non-placeholder parts of a template:**
-   - Tool definition: `[grep, -r, -i, { }, ../data/]`
-   - Correct: `['grep', '-r', '-i', 'Emily', '../data/']` (only replaces { })
-   - Wrong: `['grep', '-r', '-i', 'Emily', '../data/file.txt']` (modifies fixed path)
-   - Wrong: `['grep', '-r', 'Emily', '../data/']` (removes fixed flag)
-8. **Replace placeholder `{ }` with exactly ONE argument:**
-   - Tool definition: `[ls, { }]`
-   - Correct: `['ls', 'dir']` (one argument)
-   - Wrong: `['ls']` (missing argument)
-   - Wrong: `['ls', 'dir1', 'dir2']` (multiple arguments for single placeholder)
-9. **Match placeholder `{ regex: ... }` against the specified pattern:**
-   - Tool definition: `[cat, { regex: ".*\\.txt$" }]`
-   - Correct: `['cat', 'file.txt']` (matches pattern)
-   - Wrong: `['cat', 'file.py']` (does not match pattern)
-10. **Commands ending with `;` accept NO additional flags.** Example: `[rm, { }, ;]` cannot accept `['rm', 'file', '-f']`.
-11. **Commands without `;` accept unlimited additional flags.** Example: `[ls]` accepts `['ls', '-la', '--color', '--help']`.
-12. **Pass environment variables exactly as written.** Do NOT substitute values. Write `$USER` or `$DB` literally in your commands. Missing or invalid placeholder arguments will cause an error.
+This web application exposes content and tools over HTTP. Follow these instructions exactly.
+
+## Quick Start
+
+1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
+2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
+3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
+
+## Tools
+
+Tools are declared in YAML frontmatter on Markdown files:
+
+```yaml
+---
+tools:
+  - [grep, -r, -i, { }, ../data/]
+  - [cat, { regex: ".*\\.txt$" }]
+  - [ls]
+---
+```
+
+Execute any declared tool by POSTing `{"command": [...]}` to `/`. Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
+
+### Rules
+
+**Extra arguments are allowed by default.** You can append additional flags after the defined elements.
+
+```
+Tool:    [ls]
+CORRECT: {"command": ["ls", "-la"]}
+CORRECT: {"command": ["ls", "--color", "-h"]}
+```
+
+**Trailing `;` locks the argument list.** The command accepts only what is defined.
+
+```
+Tool:    [rm, { }, ;]
+CORRECT: {"command": ["rm", "file.txt"]}
+WRONG:   {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
+```
+
+**Fixed elements are immutable.** Only replace placeholders — never modify, remove, or add to fixed elements.
+
+```
+Tool:    [grep, -r, -i, { }, ../data/]
+CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/"]}
+WRONG:   {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
+WRONG:   {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
+```
+
+**`{ }` accepts exactly one argument:**
+
+```
+Tool:    [ls, { }]
+CORRECT: {"command": ["ls", "src"]}
+WRONG:   {"command": ["ls"]}                ← missing argument
+WRONG:   {"command": ["ls", "src", "lib"]}  ← too many arguments
+```
+
+**`{ regex: "pattern" }` accepts one argument matching the pattern:**
+
+```
+Tool:    [cat, { regex: ".*\\.txt$" }]
+CORRECT: {"command": ["cat", "notes.txt"]}
+WRONG:   {"command": ["cat", "notes.py"]}   ← doesn't match
+```
+
+**Write environment variables literally** — the server expands them at execution time.
+
+```
+Tool:    [psql, $DATABASE_URL, -c, { }]
+CORRECT: {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
+WRONG:   {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
+```
+
+## Constraints
+
+- Only declared tools can be executed.
+- Commands run relative to the declaring Markdown file's directory.
+- All interaction is over HTTP.
