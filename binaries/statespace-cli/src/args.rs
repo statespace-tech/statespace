@@ -41,11 +41,8 @@ pub(crate) enum Commands {
         command: AppCommands,
     },
 
-    /// Deploy an app (shortcut for `app create`)
-    Deploy(AppCreateArgs),
-
-    /// Sync files to an app (shortcut for `app sync`)
-    Sync(AppSyncArgs),
+    /// Deploy an app (create or update)
+    Deploy(AppSyncArgs),
 
     /// Serve a local app (no account required)
     Serve(ServeArgs),
@@ -115,9 +112,9 @@ pub(crate) enum AppCommands {
     /// Create a new application
     Create(AppCreateArgs),
 
-    /// Create a new application (alias for create)
+    /// Deploy an application (create-or-update, alias for top-level deploy)
     #[command(hide = true)]
-    Deploy(AppCreateArgs),
+    Deploy(AppSyncArgs),
 
     /// List all applications
     List,
@@ -127,9 +124,6 @@ pub(crate) enum AppCommands {
 
     /// Delete an application
     Delete(AppDeleteArgs),
-
-    /// Sync markdown files to an application (create-or-update)
-    Sync(AppSyncArgs),
 
     /// SSH into an application
     Ssh(AppSshArgs),
@@ -183,13 +177,6 @@ pub(crate) struct ServeArgs {
     pub env_file: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, Default, ValueEnum)]
-pub(crate) enum VisibilityArg {
-    #[default]
-    Public,
-    Private,
-}
-
 #[derive(Debug, Parser)]
 pub(crate) struct AppCreateArgs {
     /// Directory containing markdown files (optional — omit to create an empty application)
@@ -199,9 +186,13 @@ pub(crate) struct AppCreateArgs {
     #[arg(long, short)]
     pub name: Option<String>,
 
-    /// Application visibility (default: private for paid tiers, public for free)
-    #[arg(long)]
-    pub visibility: Option<VisibilityArg>,
+    /// Make the application public
+    #[arg(long, conflicts_with = "private")]
+    pub public: bool,
+
+    /// Make the application private
+    #[arg(long, conflicts_with = "public")]
+    pub private: bool,
 
     /// Wait for the application to become ready
     #[arg(long)]

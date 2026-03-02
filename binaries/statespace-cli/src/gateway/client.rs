@@ -1,6 +1,8 @@
 use crate::config::Credentials;
 use crate::error::{GatewayError, Result};
-use crate::gateway::applications::{Application, ApplicationFile, DeployResult, UpsertResult};
+use crate::gateway::applications::{
+    Application, ApplicationFile, DeployResult, UpsertResult, Visibility,
+};
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 use crate::gateway::organizations::Organization;
 use crate::gateway::ssh::SshKey;
@@ -111,20 +113,15 @@ impl GatewayClient {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
-        visibility: Option<crate::args::VisibilityArg>,
+        visibility: Option<Visibility>,
     ) -> Result<DeployResult> {
         #[derive(Serialize)]
         struct Payload<'a> {
             name: &'a str,
             files: Vec<ApplicationFile>,
             #[serde(skip_serializing_if = "Option::is_none")]
-            visibility: Option<&'a str>,
+            visibility: Option<Visibility>,
         }
-
-        let visibility_str = visibility.map(|v| match v {
-            crate::args::VisibilityArg::Public => "public",
-            crate::args::VisibilityArg::Private => "private",
-        });
 
         let url = format!("{}/api/v1/environments", self.base_url);
         let resp = self
@@ -132,7 +129,7 @@ impl GatewayClient {
             .json(&Payload {
                 name,
                 files,
-                visibility: visibility_str,
+                visibility,
             })
             .send()
             .await?;

@@ -23,6 +23,13 @@ pub(crate) struct UpsertResult {
     pub auth_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Visibility {
+    Public,
+    Private,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ApplicationStatus {
