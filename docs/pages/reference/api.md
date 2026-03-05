@@ -4,31 +4,42 @@ icon: lucide/globe
 
 # REST API
 
-REST API endpoints for interacting with running applications
+REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://example.statespace.app` or `http://127.0.0.1:800`).
 
-## `GET /{path}`
+## <span class="http-method http-get">GET</span> `/{path}`
+
+Read a file from the application directory.
+
+- For Markdown pages, [components](../develop/components.md) are executed and replaced inline before returning.
+- For all other files (`.csv`, `.txt`, `.py`, etc.), the raw content is returned as-is.
+- Do not pass secrets as query parameter — use global static [environment variables](../develop/components.md) instead.
+
 
 <div class="grid" markdown>
 
 <div markdown>
 
-Read a file from the application directory.
-
 **Path parameters**
 
-`path` <span class="param-tag param-type">string</span> <span class="param-tag param-required">required</span>
+`path` (string, required)
 
-: Path to file (e.g., `README.md`)
+: Path to file (e.g., `README.md`, `src/data.csv`, `data/logs.txt`).
+
+**Query parameters**
+
+`{key=value}` (string, optional)
+
+: Environment variables injected into [components](../develop/components.md).
 
 **Headers**
 
-`authorization`  <span class="param-tag param-type">string</span>
+`authorization` (string, optional)
 
-  : Bearer token for authentication
+  : Bearer token for authentication.
 
 **Response**
 
-: Raw file content
+: File content.
 
 </div>
 
@@ -38,68 +49,73 @@ Read a file from the application directory.
 
 ```bash
 curl -X GET \
-  -H "Authorization: Bearer token" \
-  https://myapp.statespace.app/README.md
+  -H "Authorization: Bearer <TOKEN>" \
+  "https://example.statespace.app/page.md \
+  ?name=Alice"
 ```
+
+**Page** (`page.md`)
+
+````markdown
+# This is a Markdown page
+
+```component
+echo "You are talking to: $name"
+```
+````
 
 **Example Response**
 
-```yaml
----
-tools:
-  - [ls]
-  - [cat]
----
+```markdown
+# This is a Markdown page
 
-# Instructions
-You are an AI agent.
+You are talking to: Alice
 ```
 
 </div>
 
 </div>
 
-## `POST /{path}`
+## <span class="http-method http-post">POST</span> `/`
+
+Execute a [tool](../develop/tools.md) defined in a Markdown page's frontmatter.
+
+- Tools are global — any tool defined in any page can be called from the base URL.
+- The command must match a tool's allowed pattern, or it will be rejected.
 
 <div class="grid" markdown>
 
 <div markdown>
 
-Execute a tool defined in a Markdown file's frontmatter.
-
 **Request body (JSON)**
 
-`command` <span class="param-tag param-type">array</span> <span class="param-tag param-required">required</span>
+`command` (array, required)
 
-: Command to execute as an array of strings (e.g., `["echo", "hello"]`)
+: Command to execute as an array of strings (e.g., `["echo", "hello, world!"]`).
 
-`args` <span class="param-tag param-type">object</span> <span class="param-tag param-optional">optional</span>
+`env` (object, optional)
 
-: Placeholder values for tool argument expansion (e.g., `{"0": "hello"}`)
-
-`env` <span class="param-tag param-type">object</span> <span class="param-tag param-optional">optional</span>
-
-: Environment variables to pass to the command (e.g., `{"USER": "john"}`)
+: Environment variables to pass to the tool (e.g., `{"USER": "john"}`).
 
 **Headers**
 
-`authorization`  <span class="param-tag param-type">string</span>
+`authorization` (string, optional)
 
-  : Bearer token for authentication
+  : Bearer token for authentication.
 
 **Response (JSON)**
 
-`stdout` <span class="param-tag param-type">string</span>
+`stdout` (string)
 
-: Standard output from the command
+: Standard output from the command.
 
-`stderr` <span class="param-tag param-type">string</span>
+`stderr` (string)
 
-: Standard error from the command
+: Standard error from the command.
 
-`returncode` <span class="param-tag param-type">integer</span>
+`returncode` (integer)
 
-: Exit code (0 for success, non-zero for errors)
+: Exit code (0 for success, non-zero for errors).
 
 </div>
 
@@ -108,11 +124,12 @@ Execute a tool defined in a Markdown file's frontmatter.
 **Example**
 
 ```bash
-curl -X POST https://myapp.statespace.app/README.md \
+curl -X POST \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer token" \
+  -H "Authorization: Bearer <TOKEN>" \
+  "https://example.statespace.app" \
   -d '{
-    "command": ["echo", "hello"]
+    "command": ["grep", "error"]
   }'
 ```
 
@@ -120,7 +137,7 @@ curl -X POST https://myapp.statespace.app/README.md \
 
 ```json
 {
-  "stdout": "hello\n",
+  "stdout": "logs/app.log:Connection error\n",
   "stderr": "",
   "returncode": 0
 }

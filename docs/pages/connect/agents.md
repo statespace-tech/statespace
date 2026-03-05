@@ -4,22 +4,19 @@ icon: lucide/bot
 
 # Agents
 
-Any agent with HTTP request capabilities can interact with Statespace apps.
+Connect agents to your applications.
 
+!!! warning "Warning"
+
+    Always sandbox agents when connecting to public apps. Agents may have access to sensitive local data (e.g. environment variables, credentials, files), and a malicious app could use prompt injection to exfiltrate it.
 ## Coding agents
 
-Coding agents can make HTTP requests natively, so include the app URL in your prompt:
+Coding agents natively support HTTP requests — simply include the app URL in your prompt:
 
 === ":simple-claude: &nbsp; Claude Code"
 
     ```console
     $ claude "Multiply the random number in https://demo.statespace.app by 256"
-    ```
-
-=== ":simple-githubcopilot: &nbsp; GitHub Copilot"
-
-    ```console
-    $ copilot -p "Multiply the random number in https://demo.statespace.app by 256"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
@@ -28,13 +25,16 @@ Coding agents can make HTTP requests natively, so include the app URL in your pr
     $ agent "Multiply the random number in https://demo.statespace.app by 256"
     ```
 
-!!! warning "Warning"
+=== ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
-    Avoid connecting coding agents to public or untrusted apps. Coding agents have access to sensitive data on your local machine (environment variables, credentials, files). A malicious app could use prompt injection to trick the agent into leaking secrets. Always sandbox or restrict agents when connecting to public apps.
+    ```console
+    $ copilot -p "Multiply the random number in https://demo.statespace.app by 256"
+    ```
+
 
 ## Custom agents
 
-Custom agents need a simple HTTP request tool to interact with Statespace apps:
+Custom agents need an HTTP request tool to interact with apps:
 
 === ":simple-python: &nbsp; Python"
 
@@ -58,7 +58,7 @@ Custom agents need a simple HTTP request tool to interact with Statespace apps:
     /**
      * Make HTTP requests to interact with Statespace apps.
      */
-    async function httpRequest(url: string, method = "GET", body?: object): Promise<string> {
+    async function http(url: string, method = "GET", body?: object) {
         const response = await fetch(url, {
             method,
             body: body ? JSON.stringify(body) : undefined,
@@ -68,12 +68,22 @@ Custom agents need a simple HTTP request tool to interact with Statespace apps:
     }
     ```
 
-> **Note**: Once your agent can make HTTP requests, include the app URL in prompts or instructions.
-
 ## Authentication
 
-For apps protected with [access tokens](../deploy/security.md#access-tokens), include the `Authorization` header:
 
-```bash
-curl -H "Authorization: Bearer <token>" https://myapp.statespace.app
+Private apps require an [access tokens](../deploy/security.md#access-tokens). For coding agents, pass the token in your prompt:
+
+```console
+$ claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"
 ```
+
+For custom agents, add it to the `Authorization` header in your HTTP requests:
+
+```python
+response = httpx.request(method, url=url, json=body,
+                         headers={"Authorization": "Bearer <token>"})
+```
+
+!!! abstract "Work in progress"
+
+    Custom agents are more secure by default since tokens are injected directly into HTTP requests, bypassing the agent. We're working on similar support for coding agents.
