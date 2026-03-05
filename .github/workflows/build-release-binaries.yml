@@ -193,6 +193,15 @@ jobs:
           ARCHIVE="statespace-v${VERSION}-aarch64-apple-darwin"
           mkdir -p "dist/${ARCHIVE}"
           cp result/bin/statespace "dist/${ARCHIVE}/statespace"
+          chmod 755 "dist/${ARCHIVE}/statespace"
+
+          # Nix hardcodes dylib paths to /nix/store/...; rewrite them to
+          # the system-provided libraries so the binary works without Nix.
+          for lib in $(otool -L "dist/${ARCHIVE}/statespace" | awk '/\/nix\/store\// {print $1}'); do
+            base=$(basename "$lib")
+            install_name_tool -change "$lib" "/usr/lib/$base" "dist/${ARCHIVE}/statespace"
+          done
+
           tar -czvf "dist/${ARCHIVE}.tar.gz" -C dist "${ARCHIVE}"
           shasum -a 256 "dist/${ARCHIVE}.tar.gz" > "dist/${ARCHIVE}.tar.gz.sha256"
 
