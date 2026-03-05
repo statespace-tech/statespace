@@ -4,29 +4,31 @@ icon: lucide/wrench
 
 # Tools
 
-Tools are CLI commands that agents can call via [HTTP POST requests](../reference/api.md#post-path).
+Tools are CLI commands that agents can call with the [REST API](../reference/api.md#post-path).
 
-Every environment includes standard Unix utilities (`ls`, `cat`, `grep`, `sed`, `awk`, `jq`, etc.). To make a command available to agents, declare it in your page's frontmatter. Need something beyond the basics? Add a [Dockerfile](../deploy/cloud.md#dependencies) to install additional packages.
-
-## Overview
+## Syntax
 
 List tools in the YAML frontmatter of Markdown pages:
 
-```yaml hl_lines="1-8"
+```yaml title="page.md" hl_lines="1-6"
 ---
 tools:
-  - [ls]
-  - [cat]
-  - [grep, -r, "error", "logs/"]
-  - [curl, -X, GET, "https://api.com/v1"]
-  - [python3, scripts/analyze.py]
+  - [grep]
+  - [curl, -X, GET, { }]
+  - [psql, -c, { regex: "^SELECT\\b.*" }]
 ---
 
 # Instructions
-- Use the provided tools to explore and analyze
+- Use the provided tools
 ```
 
-> **Note**: By default, agents can append additional arguments to tool calls (e.g., `grep --help`).
+By default, agents can append additional arguments to tool calls:
+
+```bash
+Tool:    [grep]
+CORRECT: {"command": ["grep", "--help"]}
+CORRECT: {"command": ["grep", "-r", "error", "logs/"]}
+```
 
 ## Placeholders
 
@@ -41,7 +43,13 @@ tools:
 ---
 ```
 
-> **Note**: Tools run directly without shell interpretation, preventing command injection attacks.
+Tools run without shell interpretation, so placeholders are safe from command injections:
+
+```bash
+Tool:    [cat, { }]
+CORRECT: {"command": ["cat", "data.txt"]}
+ERROR:   {"command": ["cat", "data.txt; rm -rf /"]}   ← treated as a literal filename
+```
 
 ## Regex constraints
 
@@ -50,35 +58,39 @@ Restrict tool arguments with `{ regex: ... }` patterns:
 ```yaml
 ---
 tools:
-  - [rm, { regex: ".*\.(txt|md|json)$" }]                 # file type restrictions
-  - [curl, { regex: "^https://(api\.company\.com)/.+" }]  # URL restrictions
-  - [psql, -c, { regex: "^SELECT\b.*" }]                  # SQL safety (read-only)
-  - [ls, { regex: "^/home/user/.*" }]                     # path restrictions
-  - [git, checkout, { regex: "^[a-z0-9-]+$" }]            # valid branch names
+  - [rm, { regex: ".*\\.(txt|md|json)$" }]                  # file type restrictions
+  - [curl, { regex: "^https://(api\\.company\\.com)/.+" }]  # URL restrictions
+  - [psql, -c, { regex: "^SELECT\\b.*" }]                   # SQL safety (read-only)
+  - [ls, { regex: "^/home/user/.*" }]                       # path restrictions
+  - [git, checkout, { regex: "^[a-z0-9-]+$" }]              # valid branch names
 ---
 ```
 
 ## Options control
 
-Append `;` to prevent agents from adding extra flags:
+Append `;` to prevent agents from adding extra flags and arguments:
 
 ```yaml
 ---
 tools:
   - [cat, { }, ;]                                # only allows placeholder argument
   - [curl, -X, GET, https://api.example.com, ;]  # no additional arguments allowed
+  - [python3, scripts/report.py, { }, ;]         # agent passes one arg, nothing else
 ---
 ```
 
-
 ## Environment variables
 
-Reference environment `$VARIABLES` to hide secrets from agents and inject them at runtime:
+Reference environment `$VARIABLES` in your tools to hide secrets from agents:
 
 ```yaml
 ---
 tools:
   - [curl, -H, "Authorization: Bearer $API_KEY", https://api.example.com]
   - [psql, -U, $DB_USER, -d, $DB_NAME, -c, { }]
+  - [python3, scripts/upload.py, --token, $UPLOAD_TOKEN, { }]
 ---
 ```
+
+!!! tip
+    You can set your app's environment variables with the [CLI](../reference/cli.md), or inject them at runtime through the [REST API](../reference/api.md#post-path).

@@ -4,15 +4,16 @@ icon: lucide/cloud-upload
 
 # Cloud deployment
 
-Deploy your app to get a URL that agents can connect to.
+Deploy your app to get a URL for agents.
 
-!!! abstract "First time?"
 
-    Create a free [Statespace](https://statespace.com) account.
+!!! info "First time?"
+
+    Public apps are available on all plans. Upgrade to [pro](https://statespace.com/pricing) for private apps. [Create a free account](https://statespace.com/auth/login) to get started.
 
 ## Deploy
 
-Run `statespace deploy` to upload your app:
+Run `statespace deploy` to deploy your app:
 
 ```console
 $ statespace deploy ./myapp
@@ -25,62 +26,67 @@ Creating 'myapp'...
 ✓ Created 'myapp'
 ```
 
-!!! info "Learn more"
-
-    Authenticate requests to your deployed app with [access tokens](security.md).
-
-## Update
-
-Run `statespace sync` to push changes:
+Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md)):
 
 ```console
-$ statespace sync
+$ statespace deploy ./myapp --public
+$ statespace deploy ./myapp --private
 ```
 
-> **Note**: This creates the app if it doesn't exist, or updates it in place if it does.
-
-## Delete
-
-Remove a deployment:
+To access **private** apps, include the token in the `Authorization` header:
 
 ```console
-$ statespace app delete <app-name>
+$ curl -H "Authorization: Bearer <token>" https://myapp.statespace.app
+```
+
+You can manage deployed apps from the [CLI](../reference/cli.md#app-management):
+
+```console
+$ statespace app list
+$ statespace app get <app-id>
+$ statespace app delete <app-id>
 ```
 
 ## Dependencies
 
-Optionally, include a `Dockerfile` to customize the environment for your [tools](../develop/tools.md) and [components](../develop/components.md).
+By default, apps come with standard Unix utilities like `ls`, `cat`, `grep`, `curl`, and `date`:
 
-```text
+
+````yaml title="README.md"
+---
+tools:
+  - [grep, -r, { }, logs/]
+  - [cat, { }]
+  - [curl, -s, { }]
+---
+
+# My App
+
+```component
+echo "Today's date: $(date)"
+```
+````
+
+
+Include an optional `Dockerfile` to customize the environment for your apps:
+
+```text hl_lines="3"
 myapp/
-├── app.md
+├── README.md
 ├── Dockerfile  # optional
 └── ...
 ```
 
-> **Note**: The Dockerfile is only processed when deploying or updating an app.
 
-### Packages
-
-Use `RUN` to install additional CLI tools. The Dockerfile is a snippet — just `RUN` and `ENV` lines, no `FROM` needed.
+Use `RUN` to install additional CLI binaries.
 
 ```dockerfile title="Dockerfile"
-# Install ripgrep for fast code search
-RUN apt-get update && apt-get install -y ripgrep
+# Install PostgreSQL client for database queries
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client
+
+# Install Python for custom scripts
+RUN apt-get install -y --no-install-recommends python3
 
 # Install jq for JSON processing
 RUN apt-get install -y --no-install-recommends jq
-
-# Install figlet for ASCII art
-RUN apt-get install -y --no-install-recommends figlet
-```
-
-### Environment variables
-
-Use `ENV` to set environment variables.
-
-```dockerfile title="Dockerfile"
-# Use an external hostname - localhost refers to the container itself
-ENV DATABASE_URL=postgres://db.example.com:5432/mydb
-ENV DEBUG=false
 ```

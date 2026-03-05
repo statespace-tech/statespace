@@ -4,20 +4,18 @@ icon: lucide/terminal
 
 # SSH access
 
-Connect directly to deployed apps for debugging and hotfixes.
+SSH directly into private apps for debugging and hotfixes.
 
-> **Note**: SSH access requires a [Pro plan](https://statespace.com/pricing).
+!!! abstract "Work in progress"
+
+    SSH access is in closed beta for pro and enterprise users. Please [contact us](https://statespace.com/contact) to request early access.
 
 ## Connect
 
-```console
-$ ssh <app-name>@ssh.statespace.com
-```
-
-Or use the CLI:
+Open an interactive shell session on your deployed app:
 
 ```console
-$ statespace app ssh <app-name>
+$ ssh <app-id>@ssh.statespace.app
 ```
 
 ## Hotfixes
@@ -25,20 +23,28 @@ $ statespace app ssh <app-name>
 Edit files directly on the deployed instance:
 
 ```console
-$ ssh myapp@ssh.statespace.com
+$ ssh <app-id>@ssh.statespace.app
 $ vim README.md
 ```
 
-Changes take effect immediately without redeploying.
-
-!!! warning "Warning"
-
-    SSH changes persist across environment restarts — the environment automatically syncs local changes to storage every 5 minutes and on shutdown. However, running `statespace sync` will overwrite remote files that also exist in your local directory.
-
 ## Run commands
 
-Execute a single command without an interactive session:
+Execute individual commands on your remote apps:
 
 ```console
-$ ssh myapp@ssh.statespace.com "cat README.md"
+$ ssh <app-id>@ssh.statespace.app "cat README.md"
+```
+
+## Sync files
+
+Use `rsync` to copy files between your local machine and the deployed app:
+
+```console
+$ rsync -avz ./data/ <app-id>@ssh.statespace.app:data/
+```
+
+Pull files from the app:
+
+```console
+$ rsync -avz <app-id>@ssh.statespace.app:logs/ ./logs/
 ```
