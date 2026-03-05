@@ -71,7 +71,7 @@ Custom agents need an HTTP request tool to interact with apps:
 ## Authentication
 
 
-Private apps require an [access tokens](../deploy/security.md#access-tokens). For coding agents, pass the token in your prompt:
+Private apps require an [access token](../deploy/security.md#access-tokens). For coding agents, pass the token in your prompt:
 
 ```console
 $ claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"

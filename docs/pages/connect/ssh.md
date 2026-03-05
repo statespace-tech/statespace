@@ -29,7 +29,7 @@ $ vim README.md
 
 ## Run commands
 
-Execute individual commandds on your remote apps:
+Execute individual commands on your remote apps:
 
 ```console
 $ ssh myapp@ssh.statespace.app "cat README.md"

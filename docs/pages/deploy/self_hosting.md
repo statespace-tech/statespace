@@ -15,7 +15,7 @@ $ statespace serve <path>
 Serving 'myapp' at http://127.0.0.1:8000
 ```
 
-Optionally, bind bind the app to a specific host and port:
+Optionally, bind the app to a specific host and port:
 
 ```console
 $ statespace serve <path> --host 0.0.0.0 --port 8080

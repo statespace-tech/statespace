@@ -33,11 +33,16 @@ $ statespace app list
 $ statespace app delete <app-id>
 ```
 
-Alternatively, copy a key from [your account](https://statespace.com/auth/login) and pass it directly:
+Alternatively, set the `STATESPACE_API_KEY` environment variable:
 
 ```console
-$ statespace deploy <path> --api-key <api-key>
+$ export STATESPACE_API_KEY=<api-key>
+$ statespace deploy <path>
 ```
+
+!!! warning "Avoid passing API keys as command-line arguments"
+
+    CLI arguments are visible in process listings and shell history. Use `statespace auth login` or the `STATESPACE_API_KEY` environment variable instead.
 
 ## Access tokens
 

@@ -1,3 +1,5 @@
+# Diagram
+
 ```mermaid
 graph LR
     A(("<b>AI Agent</b>")) <===>|&nbsp;&nbsp;HTTP&nbsp;&nbsp;| B

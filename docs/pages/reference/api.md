@@ -50,8 +50,7 @@ Read a file from the application directory.
 ```bash
 curl -X GET \
   -H "Authorization: Bearer <TOKEN>" \
-  "https://example.statespace.app/page.md \
-  ?name=Alice"
+  "https://example.statespace.app/page.md?name=Alice"
 ```
 
 **Page** (`page.md`)

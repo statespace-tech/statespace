@@ -20,6 +20,7 @@
 ---
 
 **Website: [https://statespace.com](https://statespace.com/)**
+
 **Documentation: [https://docs.statespace.com](https://docs.statespace.com/)**
 
 ---
@@ -74,7 +75,7 @@ claude "Multiply the random number in http://127.0.0.1:8000 by 256"
 
 ### Deploy it
 
-Create a free [Statespace account](https://statespace.com/auth/login) and deploy you app to the cloud:
+Create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
 
 ```bash
 $ statespace deploy myapp/
