@@ -8,7 +8,7 @@
 
 # Statespace
 
-**Turn your data into shareable LLM apps in minutes. All in pure Markdown. Zero boilerplate.**
+**Build interactive web apps for AI agents in Markdown.**
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -19,13 +19,12 @@
 
 ---
 
-**Documentation: [docs.statespace.com](https://docs.statespace.com/)**
-
-**Source code: [https://github.com/statespace-tech/statespace](https://github.com/statespace-tech/statespace)**
+**Website: [https://statespace.com](https://statespace.com/)**
+**Documentation: [https://docs.statespace.com](https://docs.statespace.com/)**
 
 ---
 
-_Statespace is a declarative framework for building modular LLM applications in Markdown._
+_Statespace is a declarative framework for building AI friendly web applications that agents can navigate and interact with._
 
 ## Installation
 
@@ -41,203 +40,97 @@ curl -fsSL https://statespace.com/install.sh | bash
 
 Start with one file: `README.md`
 
-```yaml
+````yaml
 ---
 tools:
-  - [date]
+  - [expr]
 ---
 
-# Instructions
-- Run `date` to check today's date
+```component
+echo "Random number: $RANDOM"
 ```
+
+# Instructions
+- The component loads a random number when the page loads
+- Use the `expr` tool to perform calculations with it
+````
 
 ### Serve it
 
-Run your app locally (no account required):
+Save the example above as `myapp/README.md` and run: 
 
 ```bash
-statespace serve .
+$ statespace serve myapp/
+Running on `http://127.0.0.1:8000`
 ```
-
-> **Note**: Runs on `http://127.0.0.1:8000`
 
 ### Ask it
 
-Include the app URL in your prompts:
-
-<details open>
-<summary><b>Claude Code</b></summary>
+Pass the URL to any agent that can make HTTP requests:
 
 ```bash
-claude "Get today's date from http://127.0.0.1:8000"
+claude "Multiply the random number in http://127.0.0.1:8000 by 256"
 ```
-
-</details>
-
-<details>
-<summary><b>GitHub Copilot</b></summary>
-
-```bash
-copilot "Get today's date from http://127.0.0.1:8000"
-```
-
-</details>
-
-<details>
-<summary><b>Codex</b></summary>
-
-```bash
-codex "Get today's date from http://127.0.0.1:8000"
-```
-
-</details>
-
-For custom agents, add an HTTP request tool:
-
-<details>
-<summary><b>TypeScript</b></summary>
-
-```typescript
-import { execFileSync } from 'child_process';
-
-/**
- * Execute curl commands to interact with Statespace apps.
- */
-function curlTool(url: string, args: string[]): string {
-    const result = execFileSync('curl', [...args, url], {
-        encoding: 'utf-8'
-    });
-    return result.toString();
-}
-```
-
-</details>
-
-<details>
-<summary><b>Rust</b></summary>
-
-```rust
-use std::process::Command;
-
-/// Execute curl commands to interact with HTTP endpoints.
-fn curl_tool(url: &str, args: Vec<&str>) -> String {
-    let output = Command::new("curl")
-        .args(&args)
-        .arg(url)
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&output.stdout).to_string()
-}
-```
-
-</details>
-
-## Complex example
-
-### Upgrade it
-
-Your app can grow into a full project:
-
-```bash
-project/
-├── README.md
-├── data/
-│   ├── log1.txt
-│   ├── log2.txt
-│   └── log3.txt
-└── src/
-    ├── agentic_rag.md
-    ├── text2sql.md
-    └── vector_search.md
-
-3 directories, 9 files
-```
-
-Update `README.md` with CLI tools to progressively discover and read other files:
-
-```yaml
----
-tools:
-  - [date]
-  - [ls]
-  - [cat]
----
-
-# Instructions
-- Run `date` to check today's date
-- Use `ls` and `cat` to discover and read other files
-```
-
-### Compose it
-
-Add pages and CLI tools for different workflows:
-
-<details open>
-<summary><b>Vector Search</b></summary>
-
-```yaml
----
-tools:
-  - [curl, -X, POST, https://host.pinecone.io/records/namespaces/user/search]
----
-
-# Vector search instructions:
-- Query documents with your vector database API
-```
-
-> **Note**: replace the API with your own (e.g., Pinecone, Weaviate, Qdrant)
-
-</details>
-
-<details>
-<summary><b>Text-to-SQL</b></summary>
-
-```yaml
----
-tools:
-  - [psql, -U, $USER, -d, $DB, -c, { regex: "^SELECT\b.*" }]
----
-
-# Text-to-SQL instructions:
-- Use `psql` for read-only PostgreSQL queries
-```
-
-> **Note**: use your own database CLI (e.g., `mysql`, `sqlite3`, `mongosh`).
-
-</details>
-
-<details>
-<summary><b>Agentic RAG</b></summary>
-
-```yaml
----
-tools:
-  - [grep, -r, -i, { }, ../data/]
----
-
-# Document search instructions:
-- Use `grep` to search documents in `../data/`
-```
-
-> **Note**: apps can include any file type (e.g. `.csv`, `.sqlite`, `.json`)
-
-</details>
 
 ### Deploy it
 
-Create a free [Statespace account](https://statespace.com/) to deploy authenticated private apps:
+Create a free [Statespace account](https://statespace.com/auth/login) and deploy you app to the cloud:
 
 ```bash
-statespace app create . --visibility private
+$ statespace deploy myapp/
+Deployed to https://myapp.statespace.app
 ```
 
-Alternatively, share public apps with the community:
+## Concepts
 
-```bash
-statespace app create . --visibility public
+<details open>
+<summary><b>Tools</b> — Give agents controlled access to CLI commands over HTTP.</summary>
+
+```yaml
+---
+tools:
+  - [grep]
+  - [curl, -X, GET, { }]
+  - [psql, -c, { regex: "^SELECT\\b.*" }]
+---
 ```
 
-> **Note** Statespace gives you app URLs you can paste in prompts and instructions.
+</details>
+
+<details>
+<summary><b>Components</b> — Render live data inside <code>component</code> code blocks.</summary>
+
+````yaml
+```component
+echo "Server time: $(date)"
+```
+````
+
+</details>
+
+<details>
+<summary><b>Instructions</b> — Guide agents through your data, workflows, and pages.</summary>
+
+```markdown
+# Instructions
+- Use grep to search for logs in ./data
+- Query the database for recent users
+- See [analyze](src/analyze.md) for more workflows
+```
+
+</details>
+
+## Features
+
+✅ **Simple** — It's just Markdown. Easy to learn, easy to use, easy to maintain.
+
+⚡ **Lightweight** — Install a single Rust binary. No dependencies.
+
+🌐 **Universal** — Works immediately with any agent that can make HTTP requests.
+
+📦 **Portable** — Deploy apps to the cloud for a public URL, or run them locally.
+
+🔒 **Secure** — Restrict access to your private apps with token-based authentication.
 
 ## Community & Contributing
 
