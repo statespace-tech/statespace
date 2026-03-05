@@ -40,8 +40,6 @@ async fn run() -> Result<()> {
 
         Commands::Serve(args) => commands::serve::run_serve(args).await,
 
-        Commands::Org { command } => commands::org::run(command, build_gateway()?).await,
-
         Commands::App { command } => match command {
             AppCommands::Create(args) => commands::app::run_create(args, build_gateway()?).await,
             AppCommands::Deploy(args) => commands::sync::run_sync(args, build_gateway()?).await,

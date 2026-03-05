@@ -59,7 +59,7 @@ pub(crate) enum GatewayError {
     #[error("Not found: {0}")]
     NotFound(String),
 
-    #[error("Organization ID required. Run `statespace org use` to select one.")]
+    #[error("Organization ID required. Run `statespace auth login` again or pass `--org-id`.")]
     MissingOrgId,
 }
 

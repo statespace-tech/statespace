@@ -29,12 +29,6 @@ pub(crate) enum Commands {
         command: AuthCommands,
     },
 
-    /// Organization commands
-    Org {
-        #[command(subcommand)]
-        command: OrgCommands,
-    },
-
     /// Application commands
     App {
         #[command(subcommand)]
@@ -90,21 +84,6 @@ pub(crate) enum TokenOutputFormat {
     #[default]
     Plain,
     Json,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum OrgCommands {
-    /// List available organizations
-    List,
-
-    /// Show current organization
-    Current,
-
-    /// Switch to a different organization
-    Use {
-        /// Organization name or ID (interactive if omitted)
-        org: Option<String>,
-    },
 }
 
 #[derive(Debug, Subcommand)]
