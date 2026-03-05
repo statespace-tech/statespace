@@ -20,11 +20,12 @@
 ---
 
 **Website: [https://statespace.com](https://statespace.com/)**
+
 **Documentation: [https://docs.statespace.com](https://docs.statespace.com/)**
 
 ---
 
-_Statespace is a declarative framework for building AI friendly web applications that agents can navigate and interact with._
+_A declarative framework for building AI-friendly web applications that agents can navigate and interact with._
 
 ## Installation
 
