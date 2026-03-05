@@ -8,7 +8,7 @@ REST API endpoints for interacting with running applications. All endpoints use 
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
-Read a file from the application directory.
+Read a file from the app's directory.
 
 - For Markdown pages, [components](../develop/components.md) are executed and replaced inline before returning.
 - For all other files (`.csv`, `.txt`, `.py`, etc.), the raw content is returned as-is.
@@ -77,10 +77,12 @@ You are talking to: Alice
 
 ## <span class="http-method http-post">POST</span> `/`
 
-Execute a [tool](../develop/tools.md) defined in a Markdown page's frontmatter.
+Execute a [tool](../develop/tools.md).
 
-- Tools are global — any tool defined in any page can be called from the base URL.
-- The command must match a tool's allowed pattern, or it will be rejected.
+- Tools must be declared in Markdown frontmatters.
+- All tools from all pages are accessible from this single endpoint.
+- The command must match a declared tool pattern, or it will be rejected.
+
 
 <div class="grid" markdown>
 

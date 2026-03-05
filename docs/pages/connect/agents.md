@@ -70,7 +70,6 @@ Custom agents need an HTTP request tool to interact with apps:
 
 ## Authentication
 
-
 Private apps require an [access token](../deploy/security.md#access-tokens). For coding agents, pass the token in your prompt:
 
 ```console

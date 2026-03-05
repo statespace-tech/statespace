@@ -23,7 +23,7 @@ $ ssh <app-id>@ssh.statespace.app
 Edit files directly on the deployed instance:
 
 ```console
-$ ssh myapp@ssh.statespace.app
+$ ssh <app-id>@ssh.statespace.app
 $ vim README.md
 ```
 
@@ -32,7 +32,7 @@ $ vim README.md
 Execute individual commands on your remote apps:
 
 ```console
-$ ssh myapp@ssh.statespace.app "cat README.md"
+$ ssh <app-id>@ssh.statespace.app "cat README.md"
 ```
 
 ## Sync files
@@ -40,11 +40,11 @@ $ ssh myapp@ssh.statespace.app "cat README.md"
 Use `rsync` to copy files between your local machine and the deployed app:
 
 ```console
-$ rsync -avz ./data/ myapp@ssh.statespace.app:data/
+$ rsync -avz ./data/ <app-id>@ssh.statespace.app:data/
 ```
 
 Pull files from the app:
 
 ```console
-$ rsync -avz myapp@ssh.statespace.app:logs/ ./logs/
+$ rsync -avz <app-id>@ssh.statespace.app:logs/ ./logs/
 ```

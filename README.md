@@ -58,7 +58,7 @@ echo "Random number: $RANDOM"
 
 ### Serve it
 
-Save the example above as `myapp/README.md` and run: 
+Save the example above as `myapp/README.md` and run:
 
 ```bash
 $ statespace serve myapp/
