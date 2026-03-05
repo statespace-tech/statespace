@@ -1,7 +1,6 @@
 pub(crate) mod applications;
 mod auth;
 mod client;
-mod organizations;
 mod secrets;
 mod ssh;
 mod tokens;

@@ -4,7 +4,6 @@ use crate::gateway::applications::{
     Application, ApplicationFile, DeployResult, UpsertResult, Visibility,
 };
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
-use crate::gateway::organizations::Organization;
 use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -330,12 +329,6 @@ impl GatewayClient {
             .await?;
 
         check_api_response(resp).await
-    }
-
-    pub(crate) async fn list_organizations(&self) -> Result<Vec<Organization>> {
-        let url = format!("{}/api/v1/user/organizations", self.base_url);
-        let resp = self.with_headers(self.http.get(&url)).send().await?;
-        parse_api_list_response(resp).await
     }
 
     pub(crate) async fn add_ssh_key(&self, name: &str, public_key: &str) -> Result<SshKey> {
