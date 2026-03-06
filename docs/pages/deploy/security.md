@@ -110,7 +110,7 @@ curl "https://example.statespace.app/page.md?DB_USER=admin"
 
 !!! warning
 
-    Query parameters are unencrypted and can be exposed in transit. For sensitive values, use:
+    Query parameters can be exposed in transit. For sensitive values, use:
 
     - **Tools**: request bodies are encrypted in transit
     - **CLI**: set app secrets with the CLI
