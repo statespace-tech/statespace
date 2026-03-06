@@ -12,19 +12,18 @@ SSH directly into private apps for debugging and hotfixes.
 
 ## Connect
 
-Open an interactive shell session on your deployed app:
+Open an interactive shell on your deployed app:
 
 ```console
-$ ssh <app-id>@ssh.statespace.app
+$ ssh <APP>@ssh.statespace.app
 ```
 
-## Hotfixes
-
-Edit files directly on the deployed instance:
+Once connected, you can directly edit files and install packages:
 
 ```console
-$ ssh <app-id>@ssh.statespace.app
-$ vim README.md
+$ mkdir -p data/
+$ echo "# Updated" > README.md
+$ apt-get install -y python3
 ```
 
 ## Run commands
@@ -32,7 +31,7 @@ $ vim README.md
 Execute individual commands on your remote apps:
 
 ```console
-$ ssh <app-id>@ssh.statespace.app "cat README.md"
+$ ssh <APP>@ssh.statespace.app "cat README.md"
 ```
 
 ## Sync files
@@ -40,11 +39,11 @@ $ ssh <app-id>@ssh.statespace.app "cat README.md"
 Use `rsync` to copy files between your local machine and the deployed app:
 
 ```console
-$ rsync -avz ./data/ <app-id>@ssh.statespace.app:data/
+$ rsync -avz ./data/ <APP>@ssh.statespace.app:data/
 ```
 
 Pull files from the app:
 
 ```console
-$ rsync -avz <app-id>@ssh.statespace.app:logs/ ./logs/
+$ rsync -avz <APP>@ssh.statespace.app:logs/ ./logs/
 ```

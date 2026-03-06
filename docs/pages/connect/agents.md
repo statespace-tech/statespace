@@ -11,7 +11,7 @@ Connect agents to your applications.
     Always sandbox agents when connecting to public apps. Agents may have access to sensitive local data (e.g. environment variables, credentials, files), and a malicious app could use prompt injection to exfiltrate it.
 ## Coding agents
 
-Coding agents natively support HTTP requests — simply include the app URL in your prompt:
+Coding agents natively support HTTP requests. Simply include the app URL in your prompt:
 
 === ":simple-claude: &nbsp; Claude Code"
 
@@ -70,7 +70,7 @@ Custom agents need an HTTP request tool to interact with apps:
 
 ## Authentication
 
-Private apps require an [access token](../deploy/security.md#access-tokens). For coding agents, pass the token in your prompt:
+Private apps require an [access token](../deploy/security.md#access-tokens) — pass it directly to your coding agents:
 
 ```console
 $ claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"
@@ -79,10 +79,9 @@ $ claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"
 For custom agents, add it to the `Authorization` header in your HTTP requests:
 
 ```python
-response = httpx.request(method, url=url, json=body,
-                         headers={"Authorization": "Bearer <token>"})
+response = httpx.request("GET", url=url, headers={"Authorization": "Bearer <TOKEN>"})
 ```
 
 !!! abstract "Work in progress"
 
-    Custom agents are more secure by default since tokens are injected directly into HTTP requests, bypassing the agent. We're working on similar support for coding agents.
+    Custom agents are the most secure option since tokens are injected directly into HTTP requests and never pass through the agent. We're working on similar guarantees for coding agents.

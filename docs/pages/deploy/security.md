@@ -4,7 +4,7 @@ icon: lucide/lock
 
 # Security
 
-Manage authentication and access control for your apps.
+Manage authentication, access control, and secrets for your apps.
 
 !!! info "First time?"
 
@@ -12,7 +12,7 @@ Manage authentication and access control for your apps.
 
 ## API keys
 
-Run `statespace auth login` to authenticate and save your API key locally:
+Run `statespace auth login` to authenticate and save an API key locally:
 
 ```console
 $ statespace auth login
@@ -25,39 +25,29 @@ Open this URL in your browser:
 And enter code: QK8F-9FTJ
 ```
 
-Once logged in, all CLI commands use the saved credentials automatically:
+Once logged in, all relevant [CLI commands](../reference/cli.md) use the saved credentials automatically:
 
 ```console
-$ statespace deploy ./myapp
+$ statespace deploy <PATH>
 $ statespace app list
-$ statespace app delete <app-id>
+$ statespace app delete <APP>
 ```
 
-Alternatively, set the `STATESPACE_API_KEY` environment variable:
+Alternatively, pass an API key directly with `--api-key`:
 
 ```console
-$ export STATESPACE_API_KEY=<api-key>
-$ statespace deploy <path>
+$ statespace app list --api-key <API_KEY>
 ```
-
-!!! warning "Avoid passing API keys as command-line arguments"
-
-    CLI arguments are visible in process listings and shell history. Use `statespace auth login` or the `STATESPACE_API_KEY` environment variable instead.
 
 ## Access tokens
 
-Access tokens control access to your private apps:
+Use tokens to control access to your private apps:
 
 ```console
-$ statespace tokens create <name>
-Token created: <your-access-token>
+$ statespace tokens create <NAME> --scope <SCOPE>
 ```
 
-Restrict what a token can do with `--scope`:
-
-```console
-$ statespace tokens create <name> --scope <scope>
-```
+Tokens can be configured with three scopes:
 
 | Scope     | Description                          |
 |-----------|--------------------------------------|
@@ -65,17 +55,62 @@ $ statespace tokens create <name> --scope <scope>
 | `execute` | Read pages and call tools            |
 | `admin`   | Full access                          |
 
-
 Include the token in the `Authorization` header:
 
 ```console
-$ curl -H "Authorization: Bearer <token>" https://myapp.statespace.app
+$ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
 You can list, rotate, and revoke tokens:
 
 ```console
 $ statespace tokens list
-$ statespace tokens rotate <token>
-$ statespace tokens revoke <token>
+$ statespace tokens rotate <TOKEN>
+$ statespace tokens revoke <TOKEN>
 ```
+
+## Secrets
+
+Use `$VARIABLES` in tools and components to keep secrets hidden from agents:
+
+````yaml title="page.md"
+---
+tools:
+  - [psql, -U, $DB_USER, -d, $DB_NAME, -c, { }]
+---
+
+```component
+echo "Connected as: $DB_USER"
+```
+````
+
+Set secrets for a deployed app:
+
+```console
+$ statespace secrets set --app <APP> DB_USER=admin DB_NAME=mydb
+```
+
+Alternatively, you can inject secrets to tools at runtime through the [API](../reference/api.md#post):
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  "https://example.statespace.app/page.md" \
+  -d '{
+    "command": ["psql", "-c", "SELECT * FROM users"],
+    "env": {"DB_USER": "admin", "DB_NAME": "mydb"}
+  }'
+```
+
+For components, non-sensitive variables can be passed as query parameters:
+
+```bash
+curl "https://example.statespace.app/page.md?DB_USER=admin"
+```
+
+!!! warning
+
+    Query parameters can be exposed in transit. For sensitive values, use:
+
+    - **Tools**: request bodies are encrypted in transit
+    - **CLI**: set app secrets with the CLI
