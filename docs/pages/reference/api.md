@@ -4,16 +4,11 @@ icon: lucide/globe
 
 # REST API
 
-REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://example.statespace.app` or `http://127.0.0.1:800`).
+REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://example.statespace.app` or `http://127.0.0.1:8000`).
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
 Read a file from the app's directory.
-
-- For Markdown pages, [components](../develop/components.md) are executed and replaced inline before returning.
-- For all other files (`.csv`, `.txt`, `.py`, etc.), the raw content is returned as-is.
-- Do not pass secrets as query parameter — use global static [environment variables](../develop/components.md) instead.
-
 
 <div class="grid" markdown>
 
@@ -29,7 +24,7 @@ Read a file from the app's directory.
 
 `{key=value}` (string, optional)
 
-: Environment variables injected into [components](../develop/components.md).
+: Environment variables injected into components.
 
 **Headers**
 
@@ -77,12 +72,7 @@ You are talking to: Alice
 
 ## <span class="http-method http-post">POST</span> `/`
 
-Execute a [tool](../develop/tools.md).
-
-- Tools must be declared in Markdown frontmatters.
-- All tools from all pages are accessible from this single endpoint.
-- The command must match a declared tool pattern, or it will be rejected.
-
+Execute a tool.
 
 <div class="grid" markdown>
 

@@ -11,14 +11,14 @@ Run your app on your own infrastructure.
 Serve your app locally:
 
 ```console
-$ statespace serve <path>
+$ statespace serve <PATH>
 Serving 'myapp' at http://127.0.0.1:8000
 ```
 
 Optionally, bind the app to a specific host and port:
 
 ```console
-$ statespace serve <path> --host 0.0.0.0 --port 8080
+$ statespace serve <PATH> --host 0.0.0.0 --port 8080
 ```
 
 ## Docker

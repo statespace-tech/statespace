@@ -21,12 +21,12 @@ Creating 'myapp'...
 
   ID:  myapp
   URL:  https://myapp.statespace.app
-  Token:  <your-access-token>
+  Token:  <YOUR_ACCESS_TOKEN>
 
 ✓ Created 'myapp'
 ```
 
-Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md)):
+Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md#access-tokens)):
 
 ```console
 $ statespace deploy ./myapp --public
@@ -36,15 +36,15 @@ $ statespace deploy ./myapp --private
 To access **private** apps, include the token in the `Authorization` header:
 
 ```console
-$ curl -H "Authorization: Bearer <token>" https://myapp.statespace.app
+$ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
 You can manage deployed apps from the [CLI](../reference/cli.md#app-management):
 
 ```console
 $ statespace app list
-$ statespace app get <app-id>
-$ statespace app delete <app-id>
+$ statespace app get <APP>
+$ statespace app delete <APP>
 ```
 
 ## Dependencies

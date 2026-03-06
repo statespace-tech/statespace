@@ -93,4 +93,4 @@ tools:
 ```
 
 !!! tip
-    You can set your app's environment variables with the [CLI](../reference/cli.md), or inject them at runtime through the [REST API](../reference/api.md#post-path).
+    You can set your app's environment variables with the [CLI](../reference/cli.md), or inject them at runtime through the REST API.

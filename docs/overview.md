@@ -44,7 +44,7 @@ $ curl -X POST https://example.statespace.app -d '{"command": ["grep", "error"]}
 
 ## Base structure
 
-All apps have two base pages:
+All apps have two [base pages](pages/develop/instructions.md#base-pages):
 
 - **AGENTS.md** - ^^Auto-generated^^ page served at your app's root URL to onboard agents.
 - **README.md** - Your app's ^^required^^ main page with tools, components, and instructions.
@@ -58,7 +58,7 @@ app/
 
 ## Multi-page apps
 
-Split large apps into multiple pages to reduce token usage through progressive context disclosure:
+Split large apps into multiple pages to reduce token usage through [progressive disclosure](https://en.wikipedia.org/wiki/Progressive_disclosure):
 
 ```text
 app/

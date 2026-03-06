@@ -131,7 +131,7 @@ statespace org use [ORG]
 **Arguments:**
 
 `ORG`
-: Organization name or ID (optional — prompts interactively if omitted)
+: Organization name or ID (optional, prompts interactively if omitted)
 
 **Examples:**
 
@@ -156,7 +156,7 @@ statespace deploy [OPTIONS] [PATH]
 **Arguments:**
 
 `PATH`
-: Directory containing markdown files (optional — omit to create an empty environment)
+: Directory containing markdown files (optional, omit to create an empty environment)
 
 **Options:**
 
@@ -300,9 +300,9 @@ statespace ssh setup [OPTIONS]
 After setup, you can use native SSH commands:
 
 ```bash
-ssh env@<environment>.statespace
-scp file.txt env@<environment>.statespace:~
-rsync -av ./dir env@<environment>.statespace:~
+ssh env@<ENVIRONMENT>.statespace
+scp file.txt env@<ENVIRONMENT>.statespace:~
+rsync -av ./dir env@<ENVIRONMENT>.statespace:~
 ```
 
 ### `statespace ssh uninstall`
