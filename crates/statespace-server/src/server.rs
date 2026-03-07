@@ -2,8 +2,10 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG, render_page_html};
-use ammonia::Builder;
+#[cfg(test)]
+use crate::semantics::is_browser_request;
+use crate::semantics::{render_markdown_to_html, wants_html};
+use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -11,7 +13,6 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
-use pulldown_cmark::{Options, Parser, html};
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
     expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
@@ -146,39 +147,6 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .with_state(state))
 }
 
-const BROWSER_UA_KEYWORDS: &[&str] = &["Chrome/", "Safari/", "Firefox/", "Edg/", "Opera/", "OPR/"];
-
-fn is_browser_request(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|ua| BROWSER_UA_KEYWORDS.iter().any(|kw| ua.contains(kw)))
-}
-
-fn wants_html(headers: &HeaderMap) -> bool {
-    let accept = headers
-        .get(header::ACCEPT)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_ascii_lowercase);
-
-    match accept.as_deref() {
-        Some(a) if a.contains("text/html") => true,
-        Some(a) if a.contains("text/markdown") || a.contains("text/plain") => false,
-        Some(a) if a.contains("*/*") => is_browser_request(headers),
-        Some(_) | None => is_browser_request(headers),
-    }
-}
-
-fn render_markdown_to_html(markdown: &str) -> String {
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let parser = Parser::new_ext(markdown, options);
-    let mut html_output = String::new();
-    html::push_html(&mut html_output, parser);
-    let sanitized = Builder::default().clean(&html_output).to_string();
-    render_page_html(&sanitized)
-}
-
 async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> Response {
     serve_page("AGENTS.md", &headers, &state).await
 }
@@ -232,12 +200,34 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
     };
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
+    let has_eval = !eval::parse_eval_blocks(&content).is_empty();
     let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
 
     if wants_html(headers) {
+        if has_eval {
+            (
+                [
+                    (header::CACHE_CONTROL, "no-store"),
+                    (header::VARY, "Accept, User-Agent"),
+                ],
+                Html(render_markdown_to_html(&rendered)),
+            )
+                .into_response()
+        } else {
+            (
+                [(header::VARY, "Accept, User-Agent")],
+                Html(render_markdown_to_html(&rendered)),
+            )
+                .into_response()
+        }
+    } else if has_eval {
         (
-            [(header::VARY, "Accept, User-Agent")],
-            Html(render_markdown_to_html(&rendered)),
+            [
+                (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+                (header::CACHE_CONTROL, "no-store"),
+                (header::VARY, "Accept, User-Agent"),
+            ],
+            rendered,
         )
             .into_response()
     } else {
@@ -462,5 +452,28 @@ mod tests {
         let result = render_markdown_to_html("<script>alert('xss')</script>");
         assert!(!result.contains("<script>"));
         assert!(!result.contains("alert('xss')"));
+    }
+
+    #[tokio::test]
+    async fn eval_pages_set_no_store_cache_control() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "```component\necho hello\n```\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+
+        let response = serve_page("README.md", &headers, &state).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let cache_control = response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok());
+        assert_eq!(cache_control, Some("no-store"));
     }
 }

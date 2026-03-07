@@ -5,6 +5,8 @@ use statespace_tool_runtime::Error;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+use crate::semantics::markdown_lookup_candidates;
+
 #[async_trait]
 pub trait ContentResolver: Send + Sync {
     async fn resolve(&self, path: &str) -> Result<String, Error>;
@@ -54,23 +56,12 @@ impl LocalContentResolver {
         Ok(target)
     }
 
-    fn resolve_to_file(target: &Path, original: &str) -> Result<PathBuf, Error> {
-        if target.is_file() {
-            return Ok(target.to_path_buf());
-        }
-
-        if target.is_dir() {
-            let readme = target.join("README.md");
-            if readme.is_file() {
-                return Ok(readme);
+    fn resolve_to_file(root: &Path, original: &str) -> Result<PathBuf, Error> {
+        for candidate in markdown_lookup_candidates(original) {
+            let candidate_path = root.join(candidate);
+            if candidate_path.is_file() {
+                return Ok(candidate_path);
             }
-            return Err(Error::NotFound(original.to_string()));
-        }
-
-        let mut with_md = target.to_path_buf();
-        with_md.set_extension("md");
-        if with_md.is_file() {
-            return Ok(with_md);
         }
 
         Err(Error::NotFound(original.to_string()))
@@ -80,8 +71,8 @@ impl LocalContentResolver {
 #[async_trait]
 impl ContentResolver for LocalContentResolver {
     async fn resolve(&self, path: &str) -> Result<String, Error> {
-        let target = self.validate_path(path)?;
-        let resolved = Self::resolve_to_file(&target, path)?;
+        self.validate_path(path)?;
+        let resolved = Self::resolve_to_file(&self.root, path)?;
 
         let resolved = resolved
             .canonicalize()
@@ -97,8 +88,8 @@ impl ContentResolver for LocalContentResolver {
     }
 
     async fn resolve_path(&self, path: &str) -> Result<PathBuf, Error> {
-        let target = self.validate_path(path)?;
-        let resolved = Self::resolve_to_file(&target, path)?;
+        self.validate_path(path)?;
+        let resolved = Self::resolve_to_file(&self.root, path)?;
 
         let resolved = resolved
             .canonicalize()
@@ -125,8 +116,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write(dir.path().join("README.md"), "# Root README").unwrap();
         write(dir.path().join("file.md"), "# File").unwrap();
+        write(dir.path().join("no_readme.md"), "# No Readme File").unwrap();
+        write(dir.path().join("index.html"), "<h1>index</h1>").unwrap();
         std::fs::create_dir(dir.path().join("subdir")).unwrap();
         write(dir.path().join("subdir/README.md"), "# Subdir README").unwrap();
+        std::fs::create_dir(dir.path().join("no_readme")).unwrap();
         dir
     }
 
@@ -164,6 +158,24 @@ mod tests {
 
         let content = resolver.resolve("subdir").await.unwrap();
         assert!(content.contains("# Subdir README"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_subdir_without_readme_falls_back_to_sibling_markdown() {
+        let dir = setup_test_dir();
+        let resolver = LocalContentResolver::new(dir.path()).unwrap();
+
+        let content = resolver.resolve("no_readme").await.unwrap();
+        assert!(content.contains("# No Readme File"));
+    }
+
+    #[tokio::test]
+    async fn test_resolve_index_html_not_found() {
+        let dir = setup_test_dir();
+        let resolver = LocalContentResolver::new(dir.path()).unwrap();
+
+        let result = resolver.resolve("index.html").await;
+        assert!(matches!(result, Err(Error::NotFound(_))));
     }
 
     #[tokio::test]

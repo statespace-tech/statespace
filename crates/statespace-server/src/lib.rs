@@ -14,6 +14,7 @@
 pub mod content;
 pub mod error;
 pub mod init;
+pub mod semantics;
 pub mod server;
 pub mod templates;
 
