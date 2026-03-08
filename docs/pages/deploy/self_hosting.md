@@ -4,7 +4,7 @@ icon: lucide/server
 
 # Self-hosting
 
-Run your app on your own infrastructure.
+Run apps on your own infrastructure.
 
 ## Serve
 

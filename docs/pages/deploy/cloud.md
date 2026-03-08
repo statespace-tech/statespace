@@ -4,7 +4,7 @@ icon: lucide/cloud-upload
 
 # Cloud deployment
 
-Deploy your app to get a URL for agents.
+Deploy apps to get a shareable URL.
 
 
 !!! info "First time?"
@@ -73,7 +73,7 @@ Include an optional `Dockerfile` to customize the environment for your apps:
 ```text hl_lines="3"
 myapp/
 ├── README.md
-├── Dockerfile  # optional
+├── Dockerfile
 └── ...
 ```
 
