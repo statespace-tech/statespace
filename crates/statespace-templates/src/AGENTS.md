@@ -15,9 +15,9 @@ Tools are declared in YAML frontmatter on Markdown files:
 ```yaml
 ---
 tools:
+  - [ls]
   - [grep, -r, -i, { }, ../data/]
   - [cat, { regex: ".*\\.txt$" }]
-  - [ls]
 ---
 ```
 
@@ -28,52 +28,54 @@ Execute any declared tool by POSTing `{"command": [...]}` to `/`. Commands run w
 **Extra arguments are allowed by default.** You can append additional flags after the defined elements.
 
 ```text
-Tool:    [ls]
-CORRECT: {"command": ["ls", "-la"]}
-CORRECT: {"command": ["ls", "--color", "-h"]}
+Tool:       [ls]
+CORRECT:    {"command": ["ls", "."]}
+CORRECT:    {"command": ["ls", "--help"]}
+CORRECT:    {"command": ["ls", "-la", "."]}
 ```
 
 **`{ }` accepts exactly one argument:**
 
 ```text
-Tool:    [ls, { }]
-CORRECT: {"command": ["ls", "src"]}
-WRONG:   {"command": ["ls"]}                ← missing argument
-WRONG:   {"command": ["ls", "src", "lib"]}  ← too many arguments
+Tool:       [ls, { }]
+CORRECT:    {"command": ["ls", "src"]}
+CORRECT:    {"command": ["ls", "src", "lib"]}  ← extra arguments are fine
+INCORRECT:  {"command": ["ls"]}                ← missing argument
 ```
 
 **`{ regex: "pattern" }` accepts one argument matching the pattern:**
 
 ```text
-Tool:    [cat, { regex: ".*\\.txt$" }]
-CORRECT: {"command": ["cat", "notes.txt"]}
-WRONG:   {"command": ["cat", "notes.py"]}   ← doesn't match
+Tool:       [cat, { regex: ".*\\.txt$" }]
+CORRECT:    {"command": ["cat", "notes.txt"]}
+CORRECT:    {"command": ["cat", "notes.txt", "logs.csv"]}     ← extra arguments are fine
+INCORRECT:  {"command": ["cat", "notes.py"]}                  ← doesn't match regex pattern
 ```
 
 **Fixed elements are immutable.** Only replace placeholders — never modify, remove, or add to fixed elements.
 
 ```text
-Tool:    [grep, -r, -i, { }, ../data/]
-CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/"]}
-CORRECT: {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra flag is fine
-WRONG:   {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
-WRONG:   {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
+Tool:       [grep, -r, -i, { }, ../data/]
+CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/"]}
+CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra arguments are fine
+INCORRECT:  {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
+INCORRECT:  {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
 ```
 
 **Trailing `;` locks the argument list.** The command accepts only what is defined.
 
 ```text
-Tool:    [rm, { }, ;]
-CORRECT: {"command": ["rm", "file.txt"]}
-WRONG:   {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
+Tool:       [rm, { }, ;]
+CORRECT:    {"command": ["rm", "file.txt"]}
+INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
 ```
 
 **Write environment variables literally** — the server expands them at execution time.
 
 ```text
-Tool:    [psql, $DATABASE_URL, -c, { }]
-CORRECT: {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
-WRONG:   {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
+Tool:       [psql, $DATABASE_URL, -c, { }]
+CORRECT:    {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
+INCORRECT:  {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
 ```
 
 ## Constraints

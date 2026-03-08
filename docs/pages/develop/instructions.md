@@ -33,7 +33,7 @@ app/
 └── ...
 ```
 
-Add your app's general tools and instructions to `README.md`:
+Add general instructions and tools to your `README.md`:
 
 ```yaml title="README.md"
 ---
@@ -53,13 +53,14 @@ tools:
 ```markdown title="AGENTS.md"
 # Statespace Application Instructions
 
-This web application exposes content and tools over HTTP.
+This web application exposes content and tools over HTTP. 
+Follow these instructions exactly.
 
 ## Quick Start
 
-1. GET `/README.md` to discover what this app does
-2. Follow links to read content
-3. POST to `/` with {"command": [...]} to execute tools
+1. **GET `/README.md`** — discover what this application does and where to navigate.
+2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
+3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
 ...
 ```

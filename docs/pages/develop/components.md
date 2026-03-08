@@ -66,5 +66,19 @@ echo "User ID: $USER"
 ```
 ````
 
-!!! tip
-    You can set your app's environment variables with the [CLI](../reference/cli.md), or inject them at runtime through the [REST API](../reference/api.md#post-path).
+You can set secrets for a deployed app with the [CLI](../reference/cli.md):
+
+```console
+$ statespace secrets set --app <APP> USER=admin
+```
+
+Or pass them as query parameters when [fetching pages](../reference/api.md#get):
+
+
+```bash
+curl "https://example.statespace.app/page.md?USER=admin"
+```
+
+!!! warning
+
+    Query parameters can be exposed iduring transit. For sensitive values, set secrets with the CLI, or use tools.

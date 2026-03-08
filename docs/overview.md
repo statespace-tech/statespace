@@ -1,5 +1,5 @@
 ---
-icon: lucide/blocks
+icon: lucide/compass
 ---
 
 # Overview

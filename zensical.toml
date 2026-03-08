@@ -1,7 +1,7 @@
 [project]
 site_name = "STATESPACE"
-site_description = "Build AI applications in Markdown"
-site_url = "https://docs.statespace.ai"
+site_description = "Interactive web applications for AI agents"
+site_url = "https://docs.statespace.com"
 repo_url = "https://github.com/statespace-tech/statespace"
 repo_name = "statespace-tech/statespace"
 extra_css = [
@@ -68,9 +68,9 @@ generator = false
   name = "Star us on GitHub"
 
 [[project.extra.social]]
-  icon = "fontawesome/brands/python"
-  link = "https://pypi.org/project/statespace/"
-  name = "Install from PyPI"
+  icon = "fontawesome/brands/rust"
+  link = "https://crates.io/crates/statespace"
+  name = "Install from Cargo"
 
 [[project.extra.social]]
   icon = "fontawesome/brands/discord"

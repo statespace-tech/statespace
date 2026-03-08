@@ -25,9 +25,9 @@ tools:
 By default, agents can append additional arguments to tool calls:
 
 ```bash
-Tool:    [grep]
-CORRECT: {"command": ["grep", "--help"]}
-CORRECT: {"command": ["grep", "-r", "error", "logs/"]}
+Tool:    [ls]
+CORRECT: {"command": ["ls", "--help"]}
+CORRECT: {"command": ["ls", "-la", "."]}
 ```
 
 ## Placeholders
@@ -43,12 +43,21 @@ tools:
 ---
 ```
 
+Each placeholder accepts exactly one argument:
+
+```bash
+Tool:       [ls, { }]
+CORRECT:    {"command": ["ls", "src"]}
+CORRECT:    {"command": ["ls", "src", "lib"]}  ← extra arguments are fine
+INCORRECT:  {"command": ["ls"]}                ← missing argument
+```
+
 Tools run without shell interpretation, so placeholders are safe from command injections:
 
 ```bash
-Tool:    [cat, { }]
-CORRECT: {"command": ["cat", "data.txt"]}
-ERROR:   {"command": ["cat", "data.txt; rm -rf /"]}   ← treated as a literal filename
+Tool:       [cat, { }]
+CORRECT:    {"command": ["cat", "data.txt"]}
+INCORRECT:  {"command": ["cat", "data.txt; rm -rf /"]}   ← treated as literal filename
 ```
 
 ## Regex constraints
@@ -66,6 +75,15 @@ tools:
 ---
 ```
 
+Arguments that don't match the pattern are rejected:
+
+```bash
+Tool:       [cat, { regex: ".*\\.txt$" }]
+CORRECT:    {"command": ["cat", "note.txt"]}
+CORRECT:    {"command": ["cat", "note.txt", "logs.csv"]}     ← extra arguments are fine
+INCORRECT:  {"command": ["cat", "note.py"]}                  ← doesn't match pattern
+```
+
 ## Options control
 
 Append `;` to prevent agents from adding extra flags and arguments:
@@ -79,6 +97,14 @@ tools:
 ---
 ```
 
+Only the defined arguments are accepted — extra flags are rejected:
+
+```bash
+Tool:       [rm, { }, ;]
+CORRECT:    {"command": ["rm", "file.txt"]}
+INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
+```
+
 ## Environment variables
 
 Reference environment `$VARIABLES` in your tools to hide secrets from agents:
@@ -86,11 +112,24 @@ Reference environment `$VARIABLES` in your tools to hide secrets from agents:
 ```yaml
 ---
 tools:
-  - [curl, -H, "Authorization: Bearer $API_KEY", https://api.example.com]
-  - [psql, -U, $DB_USER, -d, $DB_NAME, -c, { }]
-  - [python3, scripts/upload.py, --token, $UPLOAD_TOKEN, { }]
+  - [psql, -U, $USER, -d, $DB, -c, { }]
 ---
 ```
 
-!!! tip
-    You can set your app's environment variables with the [CLI](../reference/cli.md), or inject them at runtime through the REST API.
+You can set secrets for a deployed app with the [CLI](../reference/cli.md):
+
+```console
+$ statespace secrets set --app <APP> USER=admin DB=mydb
+```
+
+Or pass them in the request body of [tool calls](../reference/api.md#post):
+
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  "https://example.statespace.app/page.md" \
+  -d '{
+    "command": ["psql", "-U", "$USER", "-d", "$DB", "-c", "SELECT * FROM users"],
+    "env": {"USER": "admin", "DB": "mydb"}
+  }'
+```
