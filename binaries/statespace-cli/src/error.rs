@@ -39,7 +39,6 @@ pub(crate) enum ConfigError {
 }
 
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub(crate) enum GatewayError {
     #[error("Failed to build HTTP client: {0}")]
     ClientBuild(String),
@@ -50,9 +49,6 @@ pub(crate) enum GatewayError {
     #[error("API error ({status}): {message}")]
     Api { status: u16, message: String },
 
-    #[error("Failed to parse response: {0}")]
-    Parse(String),
-
     #[error("Authentication required. Run `statespace auth login`.")]
     Unauthorized,
 
@@ -61,6 +57,27 @@ pub(crate) enum GatewayError {
 
     #[error("Organization ID required. Run `statespace auth login` again or pass `--org-id`.")]
     MissingOrgId,
+}
+
+impl GatewayError {
+    pub(crate) fn from_response(status: u16, body: &str) -> Self {
+        let message = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| e.get("message"))
+                    .or_else(|| v.get("message"))
+                    .and_then(|m| m.as_str())
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| body.chars().take(512).collect());
+
+        match status {
+            401 => Self::Unauthorized,
+            404 => Self::NotFound(message),
+            _ => Self::Api { status, message },
+        }
+    }
 }
 
 impl From<reqwest::Error> for GatewayError {

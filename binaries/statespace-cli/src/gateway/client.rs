@@ -383,16 +383,11 @@ pub(super) async fn check_api_response(resp: reqwest::Response) -> Result<()> {
         return Ok(());
     }
 
-    let text = resp
+    let body = resp
         .text()
         .await
         .unwrap_or_else(|e| format!("(failed to read body: {e})"));
-    let message = text.chars().take(512).collect();
-    Err(GatewayError::Api {
-        status: status.as_u16(),
-        message,
-    }
-    .into())
+    Err(GatewayError::from_response(status.as_u16(), &body).into())
 }
 
 pub(super) async fn parse_api_response<T: serde::de::DeserializeOwned>(
@@ -405,12 +400,7 @@ pub(super) async fn parse_api_response<T: serde::de::DeserializeOwned>(
         .unwrap_or_else(|e| format!("(failed to read body: {e})"));
 
     if !status.is_success() {
-        let message = text.chars().take(512).collect();
-        return Err(GatewayError::Api {
-            status: status.as_u16(),
-            message,
-        }
-        .into());
+        return Err(GatewayError::from_response(status.as_u16(), &text).into());
     }
 
     let status_code = status.as_u16();
@@ -441,12 +431,7 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
         .unwrap_or_else(|e| format!("(failed to read body: {e})"));
 
     if !status.is_success() {
-        let message = text.chars().take(512).collect();
-        return Err(GatewayError::Api {
-            status: status_code,
-            message,
-        }
-        .into());
+        return Err(GatewayError::from_response(status_code, &text).into());
     }
 
     let value: Value = serde_json::from_str(&text).map_err(|e| GatewayError::Api {
