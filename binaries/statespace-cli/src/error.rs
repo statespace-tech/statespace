@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::{fmt, io};
 use thiserror::Error;
 
@@ -45,6 +46,7 @@ pub(crate) enum ApiErrorCode {
     QuotaExceeded,
     PrivateAppNotAllowed,
     CustomPackagesNotAllowed,
+    /// Forward-compatible catch-all for new gateway codes not yet modeled here.
     Unknown(String),
 }
 
@@ -142,41 +144,55 @@ impl GatewayError {
 }
 
 fn parse_api_error_fields(body: &str) -> Option<(ApiErrorCode, String)> {
-    let value = serde_json::from_str::<serde_json::Value>(body).ok()?;
+    let payload = serde_json::from_str::<ApiErrorPayload>(body).ok()?;
 
-    if let Some(error_object) = value.get("error").and_then(|error| error.as_object()) {
-        let message = error_object
-            .get("message")
-            .and_then(|raw| raw.as_str())
-            .or_else(|| value.get("message").and_then(|raw| raw.as_str()))
-            .map_or_else(|| body.chars().take(512).collect::<String>(), String::from);
+    let (raw_code, message) = match payload {
+        ApiErrorPayload::Structured { error, message } => {
+            let message = error
+                .message
+                .or(message)
+                .unwrap_or_else(|| truncated_body(body));
+            (error.code, message)
+        }
+        ApiErrorPayload::Flat { error, message } => {
+            let message = message.unwrap_or_else(|| truncated_body(body));
+            (Some(error), message)
+        }
+        ApiErrorPayload::MessageOnly { message } => (None, message),
+    };
 
-        let code = ApiErrorCode::from_raw_and_message(
-            error_object.get("code").and_then(|raw| raw.as_str()),
-            &message,
-        );
+    let code = ApiErrorCode::from_raw_and_message(raw_code.as_deref(), &message);
+    Some((code, message))
+}
 
-        return Some((code, message));
-    }
+fn truncated_body(body: &str) -> String {
+    body.chars().take(512).collect()
+}
 
-    if let Some(code_str) = value.get("error").and_then(|error| error.as_str()) {
-        let message = value
-            .get("message")
-            .and_then(|raw| raw.as_str())
-            .map_or_else(|| body.chars().take(512).collect::<String>(), String::from);
-        return Some((
-            ApiErrorCode::from_raw_and_message(Some(code_str), &message),
-            message,
-        ));
-    }
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ApiErrorPayload {
+    Structured {
+        error: StructuredApiError,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    Flat {
+        error: String,
+        #[serde(default)]
+        message: Option<String>,
+    },
+    MessageOnly {
+        message: String,
+    },
+}
 
-    value
-        .get("message")
-        .and_then(|message| message.as_str())
-        .map(|message| {
-            let message = message.to_string();
-            (ApiErrorCode::from_raw_and_message(None, &message), message)
-        })
+#[derive(Debug, Deserialize)]
+struct StructuredApiError {
+    #[serde(default)]
+    code: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
 }
 
 fn is_name_taken_message(message: &str) -> bool {
@@ -187,5 +203,50 @@ fn is_name_taken_message(message: &str) -> bool {
 impl From<reqwest::Error> for GatewayError {
     fn from(e: reqwest::Error) -> Self {
         GatewayError::Http(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApiErrorCode, parse_api_error_fields};
+
+    #[test]
+    fn parses_structured_error_payload() {
+        let body = r#"{"error":{"code":"invalid_name","message":"bad name"}}"#;
+        assert_eq!(
+            parse_api_error_fields(body),
+            Some((ApiErrorCode::InvalidName, "bad name".to_string()))
+        );
+    }
+
+    #[test]
+    fn parses_flat_error_payload() {
+        let body = r#"{"error":"quota_exceeded","message":"limit reached"}"#;
+        assert_eq!(
+            parse_api_error_fields(body),
+            Some((ApiErrorCode::QuotaExceeded, "limit reached".to_string()))
+        );
+    }
+
+    #[test]
+    fn maps_conflict_name_taken_to_typed_variant() {
+        let body =
+            r#"{"error":{"code":"CONFLICT","message":"Application name already taken: pho"}}"#;
+        assert!(matches!(
+            parse_api_error_fields(body),
+            Some((ApiErrorCode::NameTaken, _))
+        ));
+    }
+
+    #[test]
+    fn keeps_unknown_code_for_forward_compatibility() {
+        let body = r#"{"error":{"code":"totally_new_code","message":"new failure"}}"#;
+        assert_eq!(
+            parse_api_error_fields(body),
+            Some((
+                ApiErrorCode::Unknown("totally_new_code".to_string()),
+                "new failure".to_string(),
+            ))
+        );
     }
 }
