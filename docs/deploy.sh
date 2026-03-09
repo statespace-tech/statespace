@@ -11,6 +11,9 @@ trap cleanup EXIT
 
 echo "Preparing deployment files..."
 
+echo "Validating docs nav..."
+python3 ../scripts/check_docs_nav.py
+
 # Copy zensical.toml from parent directory
 cp ../zensical.toml .
 

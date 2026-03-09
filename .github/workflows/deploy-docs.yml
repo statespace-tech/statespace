@@ -19,6 +19,9 @@ jobs:
       
       - name: Setup Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Validate docs nav targets
+        run: python3 scripts/check_docs_nav.py
       
       - name: Deploy to Fly.io
         run: |

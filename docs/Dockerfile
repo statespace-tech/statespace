@@ -20,7 +20,7 @@ COPY zensical.toml ./
 
 COPY pages ./docs/pages
 COPY assets ./docs/assets
-COPY index.md install.md ./docs/
+COPY *.md ./docs/
 
 EXPOSE 8080
 
