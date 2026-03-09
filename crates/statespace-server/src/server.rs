@@ -187,12 +187,22 @@ async fn file_handler(
     serve_page(&path, &headers, &query_env, &state).await
 }
 
+fn has_invalid_query_env_entry(query_env: &HashMap<String, String>) -> bool {
+    query_env.iter().any(|(key, value)| {
+        key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0')
+    })
+}
+
 async fn serve_page(
     path: &str,
     headers: &HeaderMap,
     query_env: &HashMap<String, String>,
     state: &ServerState,
 ) -> Response {
+    if has_invalid_query_env_entry(query_env) {
+        return (StatusCode::BAD_REQUEST, "Invalid query parameter").into_response();
+    }
+
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
         Err(e) => {
@@ -535,5 +545,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&body), "trusted");
+    }
+
+    #[tokio::test]
+    async fn invalid_query_key_returns_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "ok\n").unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([("A=B".to_string(), "1".to_string())]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_query_value_returns_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "ok\n").unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([("USER_ID".to_string(), "abc\0def".to_string())]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

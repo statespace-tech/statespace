@@ -103,7 +103,13 @@ fn is_eval_info_string(info: &str) -> bool {
 }
 
 const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HANDLER"];
-const RESERVED_ENV_KEYS: &[&str] = &["HOME", "LANG", "STATESPACE_SCRATCH", "STATESPACE_WORKSPACE"];
+const RESERVED_ENV_KEYS: &[&str] = &[
+    "HOME",
+    "LANG",
+    "PATH",
+    "STATESPACE_SCRATCH",
+    "STATESPACE_WORKSPACE",
+];
 
 fn is_reserved_env_key(key: &str) -> bool {
     RESERVED_ENV_KEYS.contains(&key) || RESERVED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
@@ -573,10 +579,14 @@ mod tests {
         use crate::eval::merge_eval_env;
 
         let trusted = HashMap::from([("AWS_SECRET_ACCESS_KEY".to_string(), "x".to_string())]);
-        let untrusted = HashMap::from([("LD_PRELOAD".to_string(), "y".to_string())]);
+        let untrusted = HashMap::from([
+            ("LD_PRELOAD".to_string(), "y".to_string()),
+            ("PATH".to_string(), "/tmp/evil".to_string()),
+        ]);
 
         let merged = merge_eval_env(&trusted, &untrusted);
         assert!(!merged.contains_key("AWS_SECRET_ACCESS_KEY"));
         assert!(!merged.contains_key("LD_PRELOAD"));
+        assert!(!merged.contains_key("PATH"));
     }
 }
