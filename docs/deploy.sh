@@ -11,6 +11,11 @@ trap cleanup EXIT
 
 echo "Preparing deployment files..."
 
+if [ "${SKIP_DOCS_NAV_CHECK:-0}" != "1" ]; then
+    echo "Validating docs nav..."
+    python3 ../scripts/check_docs_nav.py
+fi
+
 # Copy zensical.toml from parent directory
 cp ../zensical.toml .
 
