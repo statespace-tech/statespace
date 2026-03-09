@@ -1,10 +1,17 @@
 use crate::args::AppSyncArgs;
-use crate::error::Result;
+use crate::error::{ApiErrorCode, Error, GatewayError, Result};
 use crate::gateway::GatewayClient;
-use crate::gateway::applications::{ApplicationFile, UpsertResult};
+use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult};
+use crate::names::generate_name;
 use crate::state::{SyncState, load_state, save_state};
 
-pub(crate) trait Upserter {
+pub(crate) trait SyncGateway {
+    fn create_application(
+        &self,
+        name: &str,
+        files: Vec<ApplicationFile>,
+    ) -> impl std::future::Future<Output = Result<DeployResult>> + Send;
+
     fn upsert_application(
         &self,
         name: &str,
@@ -12,7 +19,15 @@ pub(crate) trait Upserter {
     ) -> impl std::future::Future<Output = Result<UpsertResult>> + Send;
 }
 
-impl Upserter for GatewayClient {
+impl SyncGateway for GatewayClient {
+    async fn create_application(
+        &self,
+        name: &str,
+        files: Vec<ApplicationFile>,
+    ) -> Result<DeployResult> {
+        self.create_application(name, files, None).await
+    }
+
     async fn upsert_application(
         &self,
         name: &str,
@@ -22,18 +37,56 @@ impl Upserter for GatewayClient {
     }
 }
 
-pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl Upserter) -> Result<()> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeployMode {
+    Create,
+    Upsert,
+}
+
+#[derive(Debug, Clone)]
+struct SyncTarget {
+    name: String,
+    mode: DeployMode,
+}
+
+#[derive(Debug, Clone)]
+struct SyncResult {
+    created: bool,
+    id: String,
+    name: String,
+    url: Option<String>,
+    auth_token: Option<String>,
+}
+
+impl SyncResult {
+    fn from_create(name: String, result: DeployResult) -> Self {
+        Self {
+            created: true,
+            id: result.id,
+            name,
+            url: result.url,
+            auth_token: result.auth_token,
+        }
+    }
+
+    fn from_upsert(result: UpsertResult) -> Self {
+        Self {
+            created: result.created,
+            id: result.id,
+            name: result.name,
+            url: result.url,
+            auth_token: result.auth_token,
+        }
+    }
+}
+
+pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Result<()> {
     let dir = args.path.canonicalize().map_err(|e| {
         crate::error::Error::cli(format!("Invalid path '{}': {e}", args.path.display()))
     })?;
 
     let cached = load_state(&dir)?;
-
-    let name = args
-        .name
-        .or_else(|| cached.as_ref().map(|s| s.name.clone()))
-        .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(String::from))
-        .ok_or_else(|| crate::error::Error::cli("Could not determine application name"))?;
+    let target = resolve_target(args.name, cached.as_ref());
 
     let files = GatewayClient::scan_markdown_files(&dir)?;
 
@@ -48,7 +101,7 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl Upserter) -> Resul
         .collect();
 
     if let Some(ref prev) = cached {
-        let same_target = prev.name == name;
+        let same_target = prev.name == target.name;
         if same_target {
             let prev_map: std::collections::HashMap<&str, &str> = prev
                 .checksums
@@ -68,12 +121,25 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl Upserter) -> Resul
     }
 
     eprintln!(
-        "Syncing {} file{} to '{name}'...",
+        "Syncing {} file{} to '{}'...",
         files.len(),
-        if files.len() == 1 { "" } else { "s" }
+        if files.len() == 1 { "" } else { "s" },
+        target.name
     );
 
-    let result = gateway.upsert_application(&name, files).await?;
+    let result = match target.mode {
+        DeployMode::Create => {
+            let create_result = gateway
+                .create_application(&target.name, files)
+                .await
+                .map_err(|error| map_create_error(error, &target.name))?;
+            SyncResult::from_create(target.name.clone(), create_result)
+        }
+        DeployMode::Upsert => {
+            let upsert_result = gateway.upsert_application(&target.name, files).await?;
+            SyncResult::from_upsert(upsert_result)
+        }
+    };
 
     let action = if result.created { "Created" } else { "Updated" };
     eprintln!("{action} application '{}'", result.name);
@@ -90,42 +156,125 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl Upserter) -> Resul
     Ok(())
 }
 
+fn resolve_target(explicit_name: Option<String>, cached: Option<&SyncState>) -> SyncTarget {
+    match explicit_name {
+        Some(name) => {
+            let mode = if cached.is_some_and(|state| state.name == name) {
+                DeployMode::Upsert
+            } else {
+                DeployMode::Create
+            };
+            SyncTarget { name, mode }
+        }
+        None => match cached {
+            Some(state) => SyncTarget {
+                name: state.name.clone(),
+                mode: DeployMode::Upsert,
+            },
+            None => SyncTarget {
+                name: generate_name(),
+                mode: DeployMode::Create,
+            },
+        },
+    }
+}
+
+fn map_create_error(error: Error, name: &str) -> Error {
+    match error {
+        Error::Gateway(GatewayError::Api {
+            status: 409,
+            code: ApiErrorCode::NameTaken,
+            ..
+        }) => {
+            let mut suggestion = generate_name();
+            while suggestion == name {
+                suggestion = generate_name();
+            }
+            Error::cli(format!(
+                "Application name '{name}' is already taken. Try `statespace deploy --name {suggestion}`."
+            ))
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    type CreateCall = (String, Vec<ApplicationFile>);
     type UpsertCall = (String, Vec<ApplicationFile>);
-    type RecordedCalls = Arc<Mutex<Vec<UpsertCall>>>;
+    type RecordedCreateCalls = Arc<Mutex<Vec<CreateCall>>>;
+    type RecordedUpsertCalls = Arc<Mutex<Vec<UpsertCall>>>;
 
-    struct MockUpserter {
-        result: UpsertResult,
-        calls: RecordedCalls,
+    struct MockSyncGateway {
+        create_result: DeployResult,
+        upsert_result: UpsertResult,
+        fail_create_with_name_taken: bool,
+        create_calls: RecordedCreateCalls,
+        upsert_calls: RecordedUpsertCalls,
     }
 
-    impl MockUpserter {
-        fn new(result: UpsertResult) -> (Self, RecordedCalls) {
-            let calls = Arc::new(Mutex::new(Vec::new()));
+    impl MockSyncGateway {
+        fn new(
+            create_result: DeployResult,
+            upsert_result: UpsertResult,
+        ) -> (Self, RecordedCreateCalls, RecordedUpsertCalls) {
+            let create_calls = Arc::new(Mutex::new(Vec::new()));
+            let upsert_calls = Arc::new(Mutex::new(Vec::new()));
             let mock = Self {
-                result,
-                calls: Arc::clone(&calls),
+                create_result,
+                upsert_result,
+                fail_create_with_name_taken: false,
+                create_calls: Arc::clone(&create_calls),
+                upsert_calls: Arc::clone(&upsert_calls),
             };
-            (mock, calls)
+            (mock, create_calls, upsert_calls)
         }
     }
 
-    impl Upserter for MockUpserter {
+    impl SyncGateway for MockSyncGateway {
+        async fn create_application(
+            &self,
+            name: &str,
+            files: Vec<ApplicationFile>,
+        ) -> Result<DeployResult> {
+            self.create_calls
+                .lock()
+                .expect("lock poisoned")
+                .push((name.to_string(), files));
+
+            if self.fail_create_with_name_taken {
+                return Err(Error::Gateway(GatewayError::Api {
+                    status: 409,
+                    code: ApiErrorCode::NameTaken,
+                    message: format!("Environment name '{name}' is already taken"),
+                }));
+            }
+
+            Ok(self.create_result.clone())
+        }
+
         async fn upsert_application(
             &self,
             name: &str,
             files: Vec<ApplicationFile>,
         ) -> Result<UpsertResult> {
-            self.calls
+            self.upsert_calls
                 .lock()
                 .expect("lock poisoned")
                 .push((name.to_string(), files));
-            Ok(self.result.clone())
+            Ok(self.upsert_result.clone())
+        }
+    }
+
+    fn deploy_result(name: &str) -> DeployResult {
+        DeployResult {
+            id: "id-1".to_string(),
+            auth_token: None,
+            url: Some(format!("https://{name}.app.statespace.com")),
         }
     }
 
@@ -140,32 +289,76 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_created_calls_upsert_with_name_and_files() {
+    async fn sync_without_cached_state_creates_with_random_name() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("page.md"), "# Hello").expect("write");
 
-        let (mock, calls) = MockUpserter::new(upsert_result(true, "foo"));
+        let (mock, create_calls, upsert_calls) =
+            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
 
         let args = AppSyncArgs {
             path: dir.path().to_path_buf(),
-            name: Some("foo".to_string()),
+            name: None,
         };
 
         run_sync(args, mock).await.expect("run_sync");
 
-        let recorded = calls.lock().expect("lock");
+        let recorded = create_calls.lock().expect("lock");
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "foo");
+        assert_ne!(recorded[0].0, "unused");
+        assert!(recorded[0].0.contains('-'));
         assert_eq!(recorded[0].1.len(), 1);
         assert_eq!(recorded[0].1[0].path, "page.md");
+        assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
-    async fn sync_updated_persists_state() {
+    async fn sync_with_cached_state_uses_upsert() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
 
-        let (mock, calls) = MockUpserter::new(upsert_result(false, "bar"));
+        let canonical_dir = dir.path().canonicalize().expect("canon");
+        save_state(
+            &canonical_dir,
+            &SyncState::new(
+                "id-1".to_string(),
+                "cached-app".to_string(),
+                Some("https://cached-app.app.statespace.com".to_string()),
+                None,
+            ),
+        )
+        .expect("save state");
+
+        let (mock, create_calls, upsert_calls) =
+            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "cached-app"));
+
+        let args = AppSyncArgs {
+            path: dir.path().to_path_buf(),
+            name: None,
+        };
+
+        run_sync(args, mock).await.expect("run_sync");
+
+        assert!(create_calls.lock().expect("lock").is_empty());
+
+        let recorded_upserts = upsert_calls.lock().expect("lock");
+        assert_eq!(recorded_upserts.len(), 1);
+        assert_eq!(recorded_upserts[0].0, "cached-app");
+
+        let state = load_state(&canonical_dir)
+            .expect("load")
+            .expect("state exists");
+        assert_eq!(state.name, "cached-app");
+        assert_eq!(state.deployment_id, "id-1");
+    }
+
+    #[tokio::test]
+    async fn sync_with_explicit_name_creates_target() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
+
+        let (mock, create_calls, upsert_calls) =
+            MockSyncGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
 
         let args = AppSyncArgs {
             path: dir.path().to_path_buf(),
@@ -174,14 +367,31 @@ mod tests {
 
         run_sync(args, mock).await.expect("run_sync");
 
-        let recorded = calls.lock().expect("lock");
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].0, "bar");
+        let recorded_creates = create_calls.lock().expect("lock");
+        assert_eq!(recorded_creates.len(), 1);
+        assert_eq!(recorded_creates[0].0, "bar");
+        assert!(upsert_calls.lock().expect("lock").is_empty());
+    }
 
-        let state = load_state(&dir.path().canonicalize().expect("canon"))
-            .expect("load")
-            .expect("state exists");
-        assert_eq!(state.name, "bar");
-        assert_eq!(state.deployment_id, "id-1");
+    #[tokio::test]
+    async fn sync_name_taken_returns_suggestion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("page.md"), "# Hello").expect("write");
+
+        let (mut mock, _, _) =
+            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+        mock.fail_create_with_name_taken = true;
+
+        let args = AppSyncArgs {
+            path: dir.path().to_path_buf(),
+            name: Some("taken-name".to_string()),
+        };
+
+        let error = run_sync(args, mock)
+            .await
+            .expect_err("expected taken-name error");
+        let message = error.to_string();
+        assert!(message.contains("already taken"));
+        assert!(message.contains("statespace deploy --name"));
     }
 }

@@ -131,7 +131,7 @@ pub(crate) struct AppSyncArgs {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Application name (default: directory name)
+    /// Application name (default: randomly generated on first run, then reused from .statespace/state.json)
     #[arg(long, short)]
     pub name: Option<String>,
 }
