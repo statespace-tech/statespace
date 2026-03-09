@@ -8,7 +8,7 @@ use crate::semantics::{render_markdown_to_html, wants_html};
 use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
@@ -147,8 +147,12 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .with_state(state))
 }
 
-async fn index_handler(headers: HeaderMap, State(state): State<ServerState>) -> Response {
-    serve_page("AGENTS.md", &headers, &state).await
+async fn index_handler(
+    headers: HeaderMap,
+    Query(query_env): Query<HashMap<String, String>>,
+    State(state): State<ServerState>,
+) -> Response {
+    serve_page("AGENTS.md", &headers, &query_env, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {
@@ -177,12 +181,28 @@ async fn opengraph_handler(State(state): State<ServerState>) -> Response {
 async fn file_handler(
     Path(path): Path<String>,
     headers: HeaderMap,
+    Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
 ) -> Response {
-    serve_page(&path, &headers, &state).await
+    serve_page(&path, &headers, &query_env, &state).await
 }
 
-async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Response {
+fn has_invalid_query_env_entry(query_env: &HashMap<String, String>) -> bool {
+    query_env.iter().any(|(key, value)| {
+        key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0')
+    })
+}
+
+async fn serve_page(
+    path: &str,
+    headers: &HeaderMap,
+    query_env: &HashMap<String, String>,
+    state: &ServerState,
+) -> Response {
+    if has_invalid_query_env_entry(query_env) {
+        return (StatusCode::BAD_REQUEST, "Invalid query parameter").into_response();
+    }
+
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
         Err(e) => {
@@ -201,7 +221,8 @@ async fn serve_page(path: &str, headers: &HeaderMap, state: &ServerState) -> Res
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
     let has_eval = !eval::parse_eval_blocks(&content).is_empty();
-    let rendered = eval::process_eval_blocks(&content, working_dir, &state.env).await;
+    let merged_env = eval::merge_eval_env(state.env.as_ref(), query_env);
+    let rendered = eval::process_eval_blocks(&content, working_dir, &merged_env).await;
 
     if wants_html(headers) {
         if has_eval {
@@ -329,6 +350,7 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn headers_with_ua(ua: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -467,7 +489,7 @@ mod tests {
         let state = ServerState::from_config(&config).unwrap();
         let headers = headers_with_accept("text/markdown");
 
-        let response = serve_page("README.md", &headers, &state).await;
+        let response = serve_page("README.md", &headers, &HashMap::new(), &state).await;
         assert_eq!(response.status(), StatusCode::OK);
 
         let cache_control = response
@@ -475,5 +497,81 @@ mod tests {
             .get(header::CACHE_CONTROL)
             .and_then(|v| v.to_str().ok());
         assert_eq!(cache_control, Some("no-store"));
+    }
+
+    #[tokio::test]
+    async fn query_params_injected_into_component_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "```component\nprintf '%s/%s' \"$USER_ID\" \"$PAGE\"\n```\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([
+            ("USER_ID".to_string(), "42".to_string()),
+            ("PAGE".to_string(), "stats".to_string()),
+        ]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), "42/stats");
+    }
+
+    #[tokio::test]
+    async fn configured_env_overrides_query_params() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "```component\necho \"$USER_ID\"\n```\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf()).with_env(HashMap::from([(
+            "USER_ID".to_string(),
+            "trusted".to_string(),
+        )]));
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([("USER_ID".to_string(), "untrusted".to_string())]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&body), "trusted");
+    }
+
+    #[tokio::test]
+    async fn invalid_query_key_returns_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "ok\n").unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([("A=B".to_string(), "1".to_string())]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn invalid_query_value_returns_bad_request() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("README.md"), "ok\n").unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf());
+        let state = ServerState::from_config(&config).unwrap();
+        let headers = headers_with_accept("text/markdown");
+        let query = HashMap::from([("USER_ID".to_string(), "abc\0def".to_string())]);
+
+        let response = serve_page("README.md", &headers, &query, &state).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }

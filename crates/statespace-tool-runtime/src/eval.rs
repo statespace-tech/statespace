@@ -103,10 +103,43 @@ fn is_eval_info_string(info: &str) -> bool {
 }
 
 const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HANDLER"];
-const RESERVED_ENV_KEYS: &[&str] = &["HOME", "LANG", "STATESPACE_SCRATCH", "STATESPACE_WORKSPACE"];
+const RESERVED_ENV_KEYS: &[&str] = &[
+    "HOME",
+    "LANG",
+    "PATH",
+    "STATESPACE_SCRATCH",
+    "STATESPACE_WORKSPACE",
+];
 
 fn is_reserved_env_key(key: &str) -> bool {
     RESERVED_ENV_KEYS.contains(&key) || RESERVED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
+}
+
+/// Merge request-scoped env vars with trusted env vars for eval execution.
+///
+/// Untrusted caller-provided keys are applied first, then trusted keys are
+/// layered on top so trusted values always win when names collide.
+#[must_use]
+#[allow(clippy::implicit_hasher)]
+pub fn merge_eval_env(
+    trusted_env: &HashMap<String, String>,
+    untrusted_env: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let mut merged = HashMap::with_capacity(trusted_env.len() + untrusted_env.len());
+
+    for (key, value) in untrusted_env {
+        if !is_reserved_env_key(key) {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    for (key, value) in trusted_env {
+        if !is_reserved_env_key(key) {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+
+    merged
 }
 
 #[allow(clippy::implicit_hasher)]
@@ -524,5 +557,36 @@ mod tests {
         }
         let blocks = parse_eval_blocks(&md);
         assert_eq!(blocks.len(), 25);
+    }
+
+    #[test]
+    fn merge_eval_env_trusted_overrides_untrusted() {
+        use crate::eval::merge_eval_env;
+
+        let trusted = HashMap::from([("USER_ID".to_string(), "42".to_string())]);
+        let untrusted = HashMap::from([
+            ("USER_ID".to_string(), "7".to_string()),
+            ("PAGE".to_string(), "stats".to_string()),
+        ]);
+
+        let merged = merge_eval_env(&trusted, &untrusted);
+        assert_eq!(merged.get("USER_ID"), Some(&"42".to_string()));
+        assert_eq!(merged.get("PAGE"), Some(&"stats".to_string()));
+    }
+
+    #[test]
+    fn merge_eval_env_filters_reserved_keys() {
+        use crate::eval::merge_eval_env;
+
+        let trusted = HashMap::from([("AWS_SECRET_ACCESS_KEY".to_string(), "x".to_string())]);
+        let untrusted = HashMap::from([
+            ("LD_PRELOAD".to_string(), "y".to_string()),
+            ("PATH".to_string(), "/tmp/evil".to_string()),
+        ]);
+
+        let merged = merge_eval_env(&trusted, &untrusted);
+        assert!(!merged.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(!merged.contains_key("LD_PRELOAD"));
+        assert!(!merged.contains_key("PATH"));
     }
 }
