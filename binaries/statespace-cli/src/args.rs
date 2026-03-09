@@ -42,6 +42,7 @@ pub(crate) enum Commands {
     Serve(ServeArgs),
 
     /// SSH configuration management
+    #[cfg(feature = "ssh")]
     Ssh {
         #[command(subcommand)]
         command: SshCommands,
@@ -105,9 +106,11 @@ pub(crate) enum AppCommands {
     Delete(AppDeleteArgs),
 
     /// SSH into an application
+    #[cfg(feature = "ssh")]
     Ssh(AppSshArgs),
 }
 
+#[cfg(feature = "ssh")]
 #[derive(Debug, Parser)]
 pub(crate) struct AppSshArgs {
     /// Application ID or name
@@ -194,6 +197,7 @@ pub(crate) struct AppDeleteArgs {
     pub yes: bool,
 }
 
+#[cfg(feature = "ssh")]
 #[derive(Debug, Subcommand)]
 pub(crate) enum SshKeyCommands {
     /// List your SSH public keys
@@ -217,6 +221,7 @@ pub(crate) enum SshKeyCommands {
     },
 }
 
+#[cfg(feature = "ssh")]
 #[derive(Debug, Subcommand)]
 pub(crate) enum SshCommands {
     /// Configure SSH for native scp/rsync/ssh access

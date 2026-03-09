@@ -12,6 +12,10 @@ description = "Statespace command-line interface"
 name = "statespace"
 path = "src/main.rs"
 
+[features]
+default = []
+ssh = []
+
 [dependencies]
 clap = { workspace = true }
 dirs = { workspace = true }

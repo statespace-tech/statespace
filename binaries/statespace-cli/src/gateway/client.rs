@@ -4,6 +4,7 @@ use crate::gateway::applications::{
     Application, ApplicationFile, DeployResult, UpsertResult, Visibility,
 };
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
+#[cfg(feature = "ssh")]
 use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -49,6 +50,7 @@ impl GatewayClient {
         format!("Bearer {}", self.api_key)
     }
 
+    #[cfg(feature = "ssh")]
     pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -331,6 +333,7 @@ impl GatewayClient {
         check_api_response(resp).await
     }
 
+    #[cfg(feature = "ssh")]
     pub(crate) async fn add_ssh_key(&self, name: &str, public_key: &str) -> Result<SshKey> {
         #[derive(Serialize)]
         struct Payload<'a> {
@@ -348,12 +351,14 @@ impl GatewayClient {
         parse_api_response(resp).await
     }
 
+    #[cfg(feature = "ssh")]
     pub(crate) async fn list_ssh_keys(&self) -> Result<Vec<SshKey>> {
         let url = format!("{}/api/v1/ssh-keys", self.base_url);
         let resp = self.with_headers(self.http.get(&url)).send().await?;
         parse_api_list_response(resp).await
     }
 
+    #[cfg(feature = "ssh")]
     pub(crate) async fn remove_ssh_key(&self, fingerprint: &str) -> Result<()> {
         let url = format!(
             "{}/api/v1/ssh-keys/{}",

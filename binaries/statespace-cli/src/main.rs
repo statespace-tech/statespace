@@ -46,6 +46,7 @@ async fn run() -> Result<()> {
             AppCommands::List => commands::app::run_list(build_gateway()?).await,
             AppCommands::Get(args) => commands::app::run_get(args, build_gateway()?).await,
             AppCommands::Delete(args) => commands::app::run_delete(args, build_gateway()?).await,
+            #[cfg(feature = "ssh")]
             AppCommands::Ssh(args) => commands::ssh::run_ssh(args, build_gateway()?).await,
         },
 
@@ -53,6 +54,7 @@ async fn run() -> Result<()> {
 
         Commands::Secrets { command } => commands::secrets::run(command, build_gateway()?).await,
 
+        #[cfg(feature = "ssh")]
         Commands::Ssh { command } => match command {
             args::SshCommands::Setup { yes } => commands::ssh_config::run_setup(yes).await,
             args::SshCommands::Uninstall { yes } => commands::ssh_config::run_uninstall(yes),

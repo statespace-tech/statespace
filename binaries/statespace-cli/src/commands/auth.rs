@@ -1,11 +1,10 @@
 use crate::args::{AuthCommands, TokenOutputFormat};
-use crate::commands::ssh_config;
 use crate::config::{
-    Credentials, StoredCredentials, credentials_path, delete_stored_credentials,
-    load_stored_credentials, resolve_api_url, save_stored_credentials,
+    StoredCredentials, credentials_path, delete_stored_credentials, load_stored_credentials,
+    resolve_api_url, save_stored_credentials,
 };
 use crate::error::Result;
-use crate::gateway::{AuthClient, DeviceTokenResponse, GatewayClient};
+use crate::gateway::{AuthClient, DeviceTokenResponse};
 use std::io::{self, Write};
 use std::time::Duration;
 
@@ -88,23 +87,6 @@ async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
                 println!("✓ Logged in as {}", creds.email);
                 println!();
                 println!("Credentials saved to {}", credentials_path().display());
-
-                println!();
-                println!("SSH Access Setup");
-                println!("────────────────");
-
-                let gateway_creds = Credentials {
-                    api_url: creds.api_url.clone(),
-                    api_key: creds.api_key.clone(),
-                    org_id: Some(creds.org_id.clone()),
-                };
-
-                if let Ok(gateway) = GatewayClient::new(gateway_creds) {
-                    if let Err(e) = ssh_config::setup_ssh_full(&gateway, false).await {
-                        eprintln!("Note: SSH setup failed: {e}");
-                        eprintln!("You can run 'statespace ssh setup' later.");
-                    }
-                }
 
                 return Ok(());
             }
