@@ -1,5 +1,5 @@
 use crate::config::Credentials;
-use crate::error::{GatewayError, Result};
+use crate::error::{ApiErrorCode, GatewayError, Result};
 use crate::gateway::applications::{
     Application, ApplicationFile, DeployResult, UpsertResult, Visibility,
 };
@@ -411,6 +411,7 @@ pub(super) async fn parse_api_response<T: serde::de::DeserializeOwned>(
     let status_code = status.as_u16();
     let value: Value = serde_json::from_str(&text).map_err(|e| GatewayError::Api {
         status: status_code,
+        code: ApiErrorCode::Unknown("invalid_response".to_string()),
         message: format!("invalid JSON: {e}"),
     })?;
 
@@ -419,6 +420,7 @@ pub(super) async fn parse_api_response<T: serde::de::DeserializeOwned>(
     serde_json::from_value(data.clone()).map_err(|e| {
         GatewayError::Api {
             status: status_code,
+            code: ApiErrorCode::Unknown("invalid_response".to_string()),
             message: format!("failed to parse response: {e}"),
         }
         .into()
@@ -441,6 +443,7 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
 
     let value: Value = serde_json::from_str(&text).map_err(|e| GatewayError::Api {
         status: status_code,
+        code: ApiErrorCode::Unknown("invalid_response".to_string()),
         message: format!("invalid JSON: {e}"),
     })?;
 
@@ -450,6 +453,7 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
         serde_json::from_value(data.clone()).map_err(|e| {
             GatewayError::Api {
                 status: status_code,
+                code: ApiErrorCode::Unknown("invalid_response".to_string()),
                 message: format!("failed to parse list: {e}"),
             }
             .into()
@@ -457,6 +461,7 @@ async fn parse_api_list_response<T: serde::de::DeserializeOwned>(
     } else {
         let single: T = serde_json::from_value(data.clone()).map_err(|e| GatewayError::Api {
             status: status_code,
+            code: ApiErrorCode::Unknown("invalid_response".to_string()),
             message: format!("failed to parse item: {e}"),
         })?;
         Ok(vec![single])
