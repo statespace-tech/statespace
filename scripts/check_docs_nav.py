@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
+
+if sys.version_info < (3, 11):
+    print("Error: Python 3.11+ is required for docs nav validation", file=sys.stderr)
+    sys.exit(1)
+
+import tomllib
 
 
 def iter_nav_targets(node: Any):
@@ -36,7 +41,9 @@ def main() -> int:
         if target.startswith(("http://", "https://", "mailto:")):
             continue
 
-        doc_path = target.lstrip("/")
+        doc_path = target.lstrip("/").split("#", 1)[0]
+        if not doc_path:
+            continue
         if not (docs_root / doc_path).is_file():
             missing.append(target)
 
