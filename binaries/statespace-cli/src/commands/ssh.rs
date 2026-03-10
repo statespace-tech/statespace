@@ -21,18 +21,24 @@ fn ssh_host_from_api_url(api_url: &str) -> String {
 }
 
 pub(crate) async fn run_ssh(args: AppSshArgs, gateway: GatewayClient) -> Result<()> {
-    let reference = normalize_application_reference(&args.app).map_err(Error::cli)?;
+    let AppSshArgs { app, user, port } = args;
+
+    let reference = normalize_application_reference(&app).map_err(Error::cli)?;
     let app = gateway.get_application(&reference).await?;
 
     let slug = &app.name;
     let ssh_host = ssh_host_from_api_url(gateway.base_url());
+    let ssh_user = user.unwrap_or_else(|| slug.clone());
+    let ssh_target = format!("{ssh_user}@{ssh_host}");
 
-    eprintln!("Connecting to {slug}@{ssh_host}");
+    eprintln!("Connecting to {ssh_target}");
 
     let status = Command::new("ssh")
         .args(["-o", "StrictHostKeyChecking=no"])
         .args(["-o", "UserKnownHostsFile=/dev/null"])
-        .arg(format!("{slug}@{ssh_host}"))
+        .arg("-p")
+        .arg(port.to_string())
+        .arg(&ssh_target)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())

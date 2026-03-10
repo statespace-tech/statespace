@@ -231,7 +231,7 @@ statespace app get <APP>
 **Arguments:**
 
 `APP`
-: Environment name, ID, or URL
+: Application name, ID, or URL
 
 ### `statespace app delete`
 
@@ -244,7 +244,7 @@ statespace app delete [OPTIONS] <APP>
 **Arguments:**
 
 `APP`
-: Environment name, ID, or URL
+: Application name, ID, or URL
 
 **Options:**
 
@@ -262,12 +262,12 @@ statespace app ssh <APP>
 **Arguments:**
 
 `APP`
-: Environment name, ID, or URL
+: Application name, ID, or URL
 
 **Options:**
 
 `--user, -u`
-: SSH user (default: `app`)
+: SSH user (default: application slug)
 
 `--port, -p`
 : SSH port (default: `22`)

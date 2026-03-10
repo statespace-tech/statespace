@@ -117,9 +117,9 @@ pub(crate) struct AppSshArgs {
     #[arg(value_name = "APP")]
     pub app: String,
 
-    /// SSH user (default: app)
-    #[arg(long, short, default_value = "app")]
-    pub user: String,
+    /// SSH user override (default: application slug)
+    #[arg(long, short)]
+    pub user: Option<String>,
 
     /// SSH port (default: 22)
     #[arg(long, short, default_value = "22")]
