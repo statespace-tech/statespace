@@ -124,6 +124,8 @@ USER = "admin"
 DB = "mydb"
 ```
 
+For local one-off testing with `statespace serve`, you can override runtime values with `--env` and `--env-file`; those overrides are not persisted back into `config.toml`.
+
 Or pass them in the request body of [tool calls](../reference/api.md#post):
 
 ```bash

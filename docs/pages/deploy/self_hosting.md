@@ -21,6 +21,15 @@ Optionally, bind the app to a specific host and port:
 $ statespace serve <PATH> --host 0.0.0.0 --port 8080
 ```
 
+Pass one-off runtime values with `--env` or `--env-file`:
+
+```console
+$ statespace serve <PATH> --env API_BASE=https://api.internal --env LOG_LEVEL=debug
+$ statespace serve <PATH> --env-file .env.local
+```
+
+For `serve`, merge order is `--env` > `--env-file` > config `[env]` (from `config.toml`), and flag/file values are not persisted.
+
 ## Docker
 
 Create a `Dockerfile` to containerize your app:
