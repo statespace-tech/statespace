@@ -16,6 +16,9 @@ These options apply to all commands:
 `--org-id`
 : Organization ID override
 
+`--config`
+: Path to `config.toml` for auth and local `[env]` values
+
 ## Local Development
 
 ### `statespace serve`
@@ -39,10 +42,29 @@ statespace serve [OPTIONS] [PATH]
 `--port`
 : Port to bind to (default: `8000`)
 
+`--env, -e KEY=VALUE`
+: Runtime environment override for `serve` (repeatable)
+
+`--env-file PATH`
+: Load runtime environment values from file (`KEY=VALUE` per line)
+
+`--config PATH`
+: Read `[env]` defaults from a custom config file
+
+Runtime merge order for `serve` is: `--env` > `--env-file` > config `[env]`.
+
+`--env` and `--env-file` are runtime-only for the current `serve` process and do not write back to `config.toml`.
+
 **Example:**
 
 ```bash
 statespace serve ./my-app --port 3000
+
+# One-off overrides for local testing/CI
+statespace serve ./my-app --env API_URL=https://example.internal --env LOG_LEVEL=debug
+
+# Bulk runtime values from file
+statespace serve ./my-app --env-file .env.local
 ```
 
 ## Authentication

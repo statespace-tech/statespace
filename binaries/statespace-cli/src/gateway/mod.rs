@@ -1,7 +1,6 @@
 pub(crate) mod applications;
 mod auth;
 mod client;
-mod secrets;
 #[cfg(feature = "ssh")]
 mod ssh;
 mod tokens;

@@ -1,26 +1,31 @@
 use crate::args::{AuthCommands, TokenOutputFormat};
 use crate::config::{
-    StoredCredentials, credentials_path, delete_stored_credentials, load_stored_credentials,
-    resolve_api_url, save_stored_credentials,
+    StoredCredentials, delete_stored_credentials, load_stored_credentials, resolve_api_url,
+    save_stored_credentials,
 };
 use crate::error::Result;
 use crate::gateway::{AuthClient, DeviceTokenResponse};
 use std::io::{self, Write};
+use std::path::Path;
 use std::time::Duration;
 
-pub(crate) async fn run(cmd: AuthCommands, cli_api_url: Option<&str>) -> Result<()> {
+pub(crate) async fn run(
+    cmd: AuthCommands,
+    cli_api_url: Option<&str>,
+    config_path: &Path,
+) -> Result<()> {
     match cmd {
-        AuthCommands::Login => run_login(cli_api_url).await,
-        AuthCommands::Logout => run_logout(),
-        AuthCommands::Status => run_status(),
-        AuthCommands::Token { format } => run_token(format),
+        AuthCommands::Login => login(cli_api_url, config_path).await,
+        AuthCommands::Logout => logout(config_path),
+        AuthCommands::Status => status(config_path),
+        AuthCommands::Token { format } => token(format, config_path),
     }
 }
 
-async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
-    let api_url = resolve_api_url(cli_api_url);
+async fn login(cli_api_url: Option<&str>, config_path: &Path) -> Result<()> {
+    let api_url = resolve_api_url(cli_api_url, config_path)?;
 
-    if let Some(creds) = load_stored_credentials()? {
+    if let Some(creds) = load_stored_credentials(config_path)? {
         println!("Already logged in as {}", creds.email);
         print!("Log out and re-authenticate? [y/N] ");
         io::stdout().flush()?;
@@ -33,7 +38,7 @@ async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
             return Ok(());
         }
 
-        delete_stored_credentials()?;
+        delete_stored_credentials(config_path)?;
     }
 
     let client = AuthClient::with_url(&api_url)?;
@@ -78,15 +83,14 @@ async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
                 println!();
 
                 println!("Exchanging token for API key...");
-                let exchange_result = client.exchange_token(&user.access_token).await?;
+                let exchange = client.exchange_token(&user.access_token).await?;
 
-                let creds =
-                    StoredCredentials::from_exchange(user, exchange_result, api_url.clone());
-                save_stored_credentials(&creds)?;
+                let creds = StoredCredentials::from_exchange(user, exchange, api_url.clone());
+                save_stored_credentials(config_path, &creds)?;
 
                 println!("✓ Logged in as {}", creds.email);
                 println!();
-                println!("Credentials saved to {}", credentials_path().display());
+                println!("Credentials saved to {}", config_path.display());
 
                 return Ok(());
             }
@@ -100,10 +104,10 @@ async fn run_login(cli_api_url: Option<&str>) -> Result<()> {
     }
 }
 
-fn run_logout() -> Result<()> {
-    match load_stored_credentials()? {
+fn logout(config_path: &Path) -> Result<()> {
+    match load_stored_credentials(config_path)? {
         Some(creds) => {
-            delete_stored_credentials()?;
+            delete_stored_credentials(config_path)?;
             println!("✓ Logged out (was {})", creds.email);
         }
         None => {
@@ -113,8 +117,8 @@ fn run_logout() -> Result<()> {
     Ok(())
 }
 
-fn run_status() -> Result<()> {
-    if let Some(creds) = load_stored_credentials()? {
+fn status(config_path: &Path) -> Result<()> {
+    if let Some(creds) = load_stored_credentials(config_path)? {
         println!("Logged in as: {}", creds.email);
         if let Some(name) = &creds.name {
             println!("Name:         {name}");
@@ -125,7 +129,7 @@ fn run_status() -> Result<()> {
             println!("Expires:      {expires}");
         }
         println!();
-        println!("Credentials:  {}", credentials_path().display());
+        println!("Credentials:  {}", config_path.display());
     } else {
         println!("Not logged in");
         println!();
@@ -134,10 +138,11 @@ fn run_status() -> Result<()> {
     Ok(())
 }
 
-fn run_token(format: TokenOutputFormat) -> Result<()> {
-    let Some(creds) = load_stored_credentials()? else {
-        eprintln!("Not logged in. Run `statespace auth login` first.");
-        std::process::exit(1);
+fn token(format: TokenOutputFormat, config_path: &Path) -> Result<()> {
+    let Some(creds) = load_stored_credentials(config_path)? else {
+        return Err(crate::error::Error::cli(
+            "Not logged in. Run `statespace auth login` first.",
+        ));
     };
 
     match format {

@@ -39,6 +39,18 @@ Alternatively, pass an API key directly with `--api-key`:
 $ statespace app list --api-key <API_KEY>
 ```
 
+For CI/CD, you can provide auth non-interactively in either style:
+
+```console
+# Explicit overrides per command
+$ statespace app list --api-key <API_KEY> --org-id <ORG_ID> --api-url https://api.staging.statespace.com
+
+# Or point to a pre-written config file
+$ statespace --config /path/to/config.toml app list
+```
+
+`statespace serve --env` and `statespace serve --env-file` are runtime overrides for local serve only; they do not persist values back to `config.toml`.
+
 ## Access tokens
 
 Use tokens to control access to your private apps:
