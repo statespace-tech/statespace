@@ -225,26 +225,26 @@ statespace app list
 Show details for an environment.
 
 ```bash
-statespace app get <ID>
+statespace app get <APP>
 ```
 
 **Arguments:**
 
-`ID`
-: Environment ID or name
+`APP`
+: Environment name, ID, or URL
 
 ### `statespace app delete`
 
 Delete an environment.
 
 ```bash
-statespace app delete [OPTIONS] <ID>
+statespace app delete [OPTIONS] <APP>
 ```
 
 **Arguments:**
 
-`ID`
-: Environment ID or name
+`APP`
+: Environment name, ID, or URL
 
 **Options:**
 
@@ -262,12 +262,12 @@ statespace app ssh <APP>
 **Arguments:**
 
 `APP`
-: Environment name or ID
+: Environment name, ID, or URL
 
 **Options:**
 
 `--user, -u`
-: SSH user (default: `env`)
+: SSH user (default: `app`)
 
 `--port, -p`
 : SSH port (default: `22`)

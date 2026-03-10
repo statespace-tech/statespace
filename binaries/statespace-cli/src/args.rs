@@ -113,7 +113,8 @@ pub(crate) enum AppCommands {
 #[cfg(feature = "ssh")]
 #[derive(Debug, Parser)]
 pub(crate) struct AppSshArgs {
-    /// Application ID or name
+    /// Application name, ID, or URL
+    #[arg(value_name = "APP")]
     pub app: String,
 
     /// SSH user (default: app)
@@ -183,13 +184,15 @@ pub(crate) struct AppCreateArgs {
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppGetArgs {
-    /// Application ID or name
+    /// Application name, ID, or URL
+    #[arg(value_name = "APP")]
     pub id: String,
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppDeleteArgs {
-    /// Application ID or name
+    /// Application name, ID, or URL
+    #[arg(value_name = "APP")]
     pub id: String,
 
     /// Skip confirmation prompt
