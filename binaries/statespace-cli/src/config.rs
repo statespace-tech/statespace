@@ -86,15 +86,15 @@ pub(crate) fn load_config(path: &Path) -> Result<Option<Config>> {
 }
 
 pub(crate) fn save_config(path: &Path, config: &Config) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.exists()
-    {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            ConfigError::Invalid(format!(
-                "Failed to create config directory '{}': {e}",
-                parent.display()
-            ))
-        })?;
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ConfigError::Invalid(format!(
+                    "Failed to create config directory '{}': {e}",
+                    parent.display()
+                ))
+            })?;
+        }
     }
 
     let content = toml::to_string_pretty(config)
