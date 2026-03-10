@@ -19,6 +19,10 @@ pub(crate) struct Cli {
     #[arg(long, global = true, env = "STATESPACE_GATEWAY_URL", hide = true)]
     pub api_url: Option<String>,
 
+    /// Path to configuration.
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -54,12 +58,6 @@ pub(crate) enum Commands {
     Tokens {
         #[command(subcommand)]
         command: TokensCommands,
-    },
-
-    /// Secrets management
-    Secrets {
-        #[command(subcommand)]
-        command: SecretsCommands,
     },
 }
 
@@ -313,40 +311,4 @@ pub(crate) struct TokenRevokeArgs {
     /// Skip confirmation prompt
     #[arg(long, short)]
     pub yes: bool,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum SecretsCommands {
-    /// Set secrets for an application
-    Set(SecretsSetArgs),
-    /// List secret keys for an application
-    List(SecretsListArgs),
-    /// Delete a secret from an application
-    Delete(SecretsDeleteArgs),
-}
-
-#[derive(Debug, Parser)]
-pub(crate) struct SecretsSetArgs {
-    /// Application name, ID, or URL
-    #[arg(long, short)]
-    pub app: String,
-    /// Secrets in KEY=VALUE format
-    #[arg(required = true)]
-    pub secrets: Vec<String>,
-}
-
-#[derive(Debug, Parser)]
-pub(crate) struct SecretsListArgs {
-    /// Application name, ID, or URL
-    #[arg(long, short)]
-    pub app: String,
-}
-
-#[derive(Debug, Parser)]
-pub(crate) struct SecretsDeleteArgs {
-    /// Application name, ID, or URL
-    #[arg(long, short)]
-    pub app: String,
-    /// Secret key to delete
-    pub key: String,
 }
