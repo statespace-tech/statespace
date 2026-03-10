@@ -273,10 +273,11 @@ mod tests {
             files: Vec<ApplicationFile>,
             visibility: Option<Visibility>,
         ) -> Result<DeployResult> {
-            self.create_calls
-                .lock()
-                .expect("lock poisoned")
-                .push((name.to_string(), files, visibility));
+            self.create_calls.lock().expect("lock poisoned").push((
+                name.to_string(),
+                files,
+                visibility,
+            ));
 
             if self.fail_create_with_name_taken {
                 return Err(Error::Gateway(GatewayError::Api {
