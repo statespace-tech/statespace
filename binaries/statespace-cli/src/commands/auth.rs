@@ -23,7 +23,7 @@ pub(crate) async fn run(
 }
 
 async fn login(cli_api_url: Option<&str>, config_path: &Path) -> Result<()> {
-    let api_url = resolve_api_url(cli_api_url, config_path);
+    let api_url = resolve_api_url(cli_api_url, config_path)?;
 
     if let Some(creds) = load_stored_credentials(config_path)? {
         println!("Already logged in as {}", creds.email);
@@ -140,8 +140,9 @@ fn status(config_path: &Path) -> Result<()> {
 
 fn token(format: TokenOutputFormat, config_path: &Path) -> Result<()> {
     let Some(creds) = load_stored_credentials(config_path)? else {
-        eprintln!("Not logged in. Run `statespace auth login` first.");
-        std::process::exit(1);
+        return Err(crate::error::Error::cli(
+            "Not logged in. Run `statespace auth login` first.",
+        ));
     };
 
     match format {

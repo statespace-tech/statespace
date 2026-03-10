@@ -107,7 +107,12 @@ pub(crate) fn save_config(path: &Path, config: &Config) -> Result<()> {
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        let _ = std::fs::set_permissions(path, perms);
+        std::fs::set_permissions(path, perms).map_err(|e| {
+            ConfigError::Invalid(format!(
+                "Failed to set config permissions for '{}': {e}",
+                path.display()
+            ))
+        })?;
     }
 
     Ok(())
@@ -187,9 +192,9 @@ pub(crate) fn resolve_credentials(
     resolved.into_credentials(config_path)
 }
 
-pub(crate) fn resolve_api_url(cli_api_url: Option<&str>, config_path: &Path) -> String {
-    let cfg_auth = load_config(config_path).ok().flatten().map(|c| c.auth);
-    ResolvedAuth::from_sources(
+pub(crate) fn resolve_api_url(cli_api_url: Option<&str>, config_path: &Path) -> Result<String> {
+    let cfg_auth = load_config(config_path)?.map(|c| c.auth);
+    Ok(ResolvedAuth::from_sources(
         CredentialOverrides {
             api_url: cli_api_url,
             api_key: None,
@@ -197,7 +202,7 @@ pub(crate) fn resolve_api_url(cli_api_url: Option<&str>, config_path: &Path) -> 
         },
         cfg_auth.as_ref(),
     )
-    .api_url
+    .api_url)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,8 +313,121 @@ pub(crate) fn delete_stored_credentials(config_path: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::error::Error;
+
+    #[test]
+    fn resolve_credentials_prefers_cli_overrides() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let creds = resolve_credentials(
+            CredentialOverrides {
+                api_url: Some("https://cli.statespace.test"),
+                api_key: Some("sk_cli"),
+                org_id: Some("org_cli"),
+            },
+            &path,
+        )
+        .unwrap();
+
+        assert_eq!(creds.api_url, "https://cli.statespace.test");
+        assert_eq!(creds.api_key, "sk_cli");
+        assert_eq!(creds.org_id.as_deref(), Some("org_cli"));
+    }
+
+    #[test]
+    fn save_and_load_stored_credentials_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let expected = StoredCredentials {
+            api_key: "sk_saved".to_string(),
+            org_id: "org_saved".to_string(),
+            org_name: Some("Saved Org".to_string()),
+            email: "saved@example.com".to_string(),
+            name: Some("Saved User".to_string()),
+            user_id: "user_saved".to_string(),
+            expires_at: Some("2099-01-01T00:00:00Z".to_string()),
+            api_url: "https://saved.statespace.test".to_string(),
+        };
+
+        save_stored_credentials(&path, &expected).unwrap();
+        let loaded = load_stored_credentials(&path).unwrap().unwrap();
+
+        assert_eq!(loaded.api_key, expected.api_key);
+        assert_eq!(loaded.org_id, expected.org_id);
+        assert_eq!(loaded.org_name, expected.org_name);
+        assert_eq!(loaded.email, expected.email);
+        assert_eq!(loaded.name, expected.name);
+        assert_eq!(loaded.user_id, expected.user_id);
+        assert_eq!(loaded.expires_at, expected.expires_at);
+        assert_eq!(loaded.api_url, expected.api_url);
+    }
+
+    #[test]
+    fn resolve_credentials_falls_back_to_saved_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        save_stored_credentials(
+            &path,
+            &StoredCredentials {
+                api_key: "sk_saved".to_string(),
+                org_id: "org_saved".to_string(),
+                org_name: None,
+                email: "saved@example.com".to_string(),
+                name: None,
+                user_id: "user_saved".to_string(),
+                expires_at: None,
+                api_url: "https://saved.statespace.test".to_string(),
+            },
+        )
+        .unwrap();
+
+        let creds = resolve_credentials(CredentialOverrides::default(), &path).unwrap();
+        assert_eq!(creds.api_url, "https://saved.statespace.test");
+        assert_eq!(creds.api_key, "sk_saved");
+        assert_eq!(creds.org_id.as_deref(), Some("org_saved"));
+    }
+
+    #[test]
+    fn resolve_credentials_requires_api_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        save_config(
+            &path,
+            &Config {
+                auth: AuthConfig {
+                    api_url: "https://example.test".to_string(),
+                    api_key: None,
+                    org_id: None,
+                },
+                profile: ProfileConfig::default(),
+                env: HashMap::new(),
+            },
+        )
+        .unwrap();
+
+        let err = resolve_credentials(CredentialOverrides::default(), &path).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Config(ConfigError::MissingApiKey { .. })
+        ));
+    }
+
+    #[test]
+    fn resolve_api_url_surfaces_config_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "not = [valid").unwrap();
+
+        let err = resolve_api_url(None, &path).unwrap_err();
+        assert!(matches!(err, Error::Config(ConfigError::Invalid(_))));
+    }
 
     #[test]
     fn test_config_path_exists() {

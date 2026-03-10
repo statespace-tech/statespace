@@ -75,4 +75,4 @@ curl "https://example.statespace.app/page.md?USER=admin"
 
 !!! warning
 
-    Query parameters can be exposed during transit. For sensitive values, set environment values in the CLI config file, or pass them in tool calls.
+    Query parameters can be exposed during transit. For sensitive values, set environment values in the CLI config file, or pass one-off runtime values to `statespace serve` using `--env KEY=VALUE` or `--env-file PATH`.
