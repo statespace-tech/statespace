@@ -1,72 +1,9 @@
-use crate::args::{AppCreateArgs, AppDeleteArgs, AppGetArgs};
+use crate::args::{AppDeleteArgs, AppGetArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::gateway::applications::{ApplicationStatus, Visibility};
+use crate::gateway::applications::ApplicationStatus;
 use crate::identifiers::normalize_application_reference;
-use crate::names::generate_name;
 use std::io::{self, Write};
-use std::path::Path;
-
-pub(crate) async fn run_create(args: AppCreateArgs, gateway: GatewayClient) -> Result<()> {
-    let (name, files) = if let Some(ref path) = args.path {
-        let dir = path
-            .canonicalize()
-            .map_err(|e| Error::cli(format!("Invalid path '{}': {e}", path.display())))?;
-
-        if !dir.is_dir() {
-            return Err(Error::cli(format!("Not a directory: {}", dir.display())));
-        }
-
-        let name = resolve_name(args.name.as_deref(), &dir);
-        let files = GatewayClient::scan_markdown_files(&dir)?;
-        (name, files)
-    } else {
-        let name = args.name.unwrap_or_else(generate_name);
-        (name, Vec::new())
-    };
-
-    if files.is_empty() {
-        eprintln!("Creating empty application '{name}'...");
-    } else {
-        eprintln!(
-            "Creating '{name}' ({} file{})...",
-            files.len(),
-            if files.len() == 1 { "" } else { "s" }
-        );
-    }
-
-    let visibility = match (args.public, args.private) {
-        (true, _) => Some(Visibility::Public),
-        (_, true) => Some(Visibility::Private),
-        _ => None,
-    };
-
-    let result = gateway.create_application(&name, files, visibility).await?;
-
-    eprintln!();
-    eprintln!("Created '{name}'");
-    eprintln!("  ID:  {}", result.id);
-    if let Some(ref url) = result.url {
-        eprintln!("  URL: {url}");
-    }
-    if let Some(ref token) = result.auth_token {
-        eprintln!("  Token: {token}");
-    }
-
-    if args.verify {
-        if let (Some(url), Some(token)) = (&result.url, &result.auth_token) {
-            eprintln!();
-            eprintln!("Waiting for application to become ready...");
-            if gateway.verify_application(url, token).await? {
-                eprintln!("Ready.");
-            } else {
-                eprintln!("Timed out waiting for application. It may still be starting.");
-            }
-        }
-    }
-
-    Ok(())
-}
 
 pub(crate) async fn run_list(gateway: GatewayClient) -> Result<()> {
     let apps = gateway.list_applications().await?;
@@ -135,11 +72,4 @@ pub(crate) async fn run_delete(args: AppDeleteArgs, gateway: GatewayClient) -> R
     eprintln!("Deleted '{}'.", args.id);
 
     Ok(())
-}
-
-fn resolve_name(explicit: Option<&str>, dir: &Path) -> String {
-    explicit
-        .map(String::from)
-        .or_else(|| dir.file_name().and_then(|n| n.to_str()).map(String::from))
-        .unwrap_or_else(generate_name)
 }

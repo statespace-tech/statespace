@@ -18,10 +18,6 @@ use std::time::Duration;
 const USER_AGENT: &str = concat!("statespace-cli/", env!("CARGO_PKG_VERSION"));
 const TOKEN_SCOPE_PREFIX: &str = "environments";
 
-const VERIFY_MAX_ATTEMPTS: u32 = 20;
-const VERIFY_BASE_DELAY_SECS: u64 = 2;
-const VERIFY_MAX_DELAY_SECS: u64 = 10;
-
 #[derive(Clone)]
 pub(crate) struct GatewayClient {
     pub(super) base_url: String,
@@ -181,30 +177,6 @@ impl GatewayClient {
         let resp = self.with_headers(self.http.delete(&url)).send().await?;
 
         check_api_response(resp).await
-    }
-
-    pub(crate) async fn verify_application(&self, url: &str, auth_token: &str) -> Result<bool> {
-        for attempt in 1..=VERIFY_MAX_ATTEMPTS {
-            match self
-                .http
-                .get(url)
-                .header("Authorization", format!("Bearer {auth_token}"))
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => return Ok(true),
-                _ => {}
-            }
-
-            if attempt < VERIFY_MAX_ATTEMPTS {
-                let wait = std::cmp::min(
-                    VERIFY_BASE_DELAY_SECS * u64::from(attempt),
-                    VERIFY_MAX_DELAY_SECS,
-                );
-                tokio::time::sleep(Duration::from_secs(wait)).await;
-            }
-        }
-        Ok(false)
     }
 
     #[allow(clippy::items_after_statements)]

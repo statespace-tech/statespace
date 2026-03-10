@@ -496,7 +496,7 @@ mod tests {
         use crate::eval::{EvalBlock, execute_eval_block};
         let block = EvalBlock {
             range: (0, 0),
-            code: "sleep 10".to_string(),
+            code: "while true; do :; done".to_string(),
         };
         let result = execute_eval_block(
             &block,
