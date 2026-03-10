@@ -1,7 +1,7 @@
 use crate::args::AppSyncArgs;
 use crate::error::{ApiErrorCode, Error, GatewayError, Result};
 use crate::gateway::GatewayClient;
-use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult};
+use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult, Visibility};
 use crate::names::generate_name;
 use crate::state::{SyncState, load_state, save_state};
 
@@ -10,6 +10,7 @@ pub(crate) trait SyncGateway {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
+        visibility: Option<Visibility>,
     ) -> impl std::future::Future<Output = Result<DeployResult>> + Send;
 
     fn upsert_application(
@@ -24,8 +25,9 @@ impl SyncGateway for GatewayClient {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
+        visibility: Option<Visibility>,
     ) -> Result<DeployResult> {
-        self.create_application(name, files, None).await
+        self.create_application(name, files, visibility).await
     }
 
     async fn upsert_application(
@@ -81,79 +83,108 @@ impl SyncResult {
 }
 
 pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Result<()> {
-    let dir = args.path.canonicalize().map_err(|e| {
-        crate::error::Error::cli(format!("Invalid path '{}': {e}", args.path.display()))
-    })?;
+    let visibility = args.visibility;
 
-    let cached = load_state(&dir)?;
-    let target = resolve_target(args.name, cached.as_ref());
+    match args.path {
+        None => {
+            // Create empty app (no files, no state file)
+            let name = args.name.unwrap_or_else(generate_name);
+            eprintln!("Creating empty application '{name}'...");
 
-    let files = GatewayClient::scan_markdown_files(&dir)?;
+            let result = gateway
+                .create_application(&name, Vec::new(), visibility)
+                .await
+                .map_err(|e| map_create_error(e, &name))?;
 
-    if files.is_empty() {
-        eprintln!("No .md files found in {}", dir.display());
-        return Ok(());
-    }
+            eprintln!();
+            eprintln!("Created '{name}'");
+            eprintln!("  ID: {}", result.id);
+            if let Some(ref url) = result.url {
+                eprintln!("  URL: {url}");
+            }
+            if let Some(ref token) = result.auth_token {
+                eprintln!("  Token: {token}");
+            }
 
-    let checksums: Vec<(String, String)> = files
-        .iter()
-        .map(|f| (f.path.clone(), f.checksum.clone()))
-        .collect();
+            Ok(())
+        }
+        Some(path) => {
+            // Sync files from directory
+            let dir = path.canonicalize().map_err(|e| {
+                crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
+            })?;
 
-    if let Some(ref prev) = cached {
-        let same_target = prev.name == target.name;
-        if same_target {
-            let prev_map: std::collections::HashMap<&str, &str> = prev
-                .checksums
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            let changed = checksums.len() != prev.checksums.len()
-                || checksums
-                    .iter()
-                    .any(|(p, c)| prev_map.get(p.as_str()) != Some(&c.as_str()));
+            let cached = load_state(&dir)?;
+            let target = resolve_target(args.name, cached.as_ref());
 
-            if !changed {
-                eprintln!("No changes detected, skipping sync.");
+            let files = GatewayClient::scan_markdown_files(&dir)?;
+
+            if files.is_empty() {
+                eprintln!("No .md files found in {}", dir.display());
                 return Ok(());
             }
+
+            let checksums: Vec<(String, String)> = files
+                .iter()
+                .map(|f| (f.path.clone(), f.checksum.clone()))
+                .collect();
+
+            if let Some(ref prev) = cached {
+                let same_target = prev.name == target.name;
+                if same_target {
+                    let prev_map: std::collections::HashMap<&str, &str> = prev
+                        .checksums
+                        .iter()
+                        .map(|(k, v)| (k.as_str(), v.as_str()))
+                        .collect();
+                    let changed = checksums.len() != prev.checksums.len()
+                        || checksums
+                            .iter()
+                            .any(|(p, c)| prev_map.get(p.as_str()) != Some(&c.as_str()));
+
+                    if !changed {
+                        eprintln!("No changes detected, skipping sync.");
+                        return Ok(());
+                    }
+                }
+            }
+
+            eprintln!(
+                "Syncing {} file{} to '{}'...",
+                files.len(),
+                if files.len() == 1 { "" } else { "s" },
+                target.name
+            );
+
+            let result = match target.mode {
+                DeployMode::Create => {
+                    let create_result = gateway
+                        .create_application(&target.name, files, visibility)
+                        .await
+                        .map_err(|error| map_create_error(error, &target.name))?;
+                    SyncResult::from_create(target.name.clone(), create_result)
+                }
+                DeployMode::Upsert => {
+                    let upsert_result = gateway.upsert_application(&target.name, files).await?;
+                    SyncResult::from_upsert(upsert_result)
+                }
+            };
+
+            let action = if result.created { "Created" } else { "Updated" };
+            eprintln!("{action} application '{}'", result.name);
+
+            if let Some(ref url) = result.url {
+                eprintln!("URL: {url}");
+            }
+
+            let state = SyncState::new(result.id, result.name, result.url, result.auth_token)
+                .with_checksums(&checksums);
+
+            save_state(&dir, &state)?;
+
+            Ok(())
         }
     }
-
-    eprintln!(
-        "Syncing {} file{} to '{}'...",
-        files.len(),
-        if files.len() == 1 { "" } else { "s" },
-        target.name
-    );
-
-    let result = match target.mode {
-        DeployMode::Create => {
-            let create_result = gateway
-                .create_application(&target.name, files)
-                .await
-                .map_err(|error| map_create_error(error, &target.name))?;
-            SyncResult::from_create(target.name.clone(), create_result)
-        }
-        DeployMode::Upsert => {
-            let upsert_result = gateway.upsert_application(&target.name, files).await?;
-            SyncResult::from_upsert(upsert_result)
-        }
-    };
-
-    let action = if result.created { "Created" } else { "Updated" };
-    eprintln!("{action} application '{}'", result.name);
-
-    if let Some(ref url) = result.url {
-        eprintln!("URL: {url}");
-    }
-
-    let state = SyncState::new(result.id, result.name, result.url, result.auth_token)
-        .with_checksums(&checksums);
-
-    save_state(&dir, &state)?;
-
-    Ok(())
 }
 
 fn resolve_target(explicit_name: Option<String>, cached: Option<&SyncState>) -> SyncTarget {
@@ -204,7 +235,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    type CreateCall = (String, Vec<ApplicationFile>);
+    type CreateCall = (String, Vec<ApplicationFile>, Option<Visibility>);
     type UpsertCall = (String, Vec<ApplicationFile>);
     type RecordedCreateCalls = Arc<Mutex<Vec<CreateCall>>>;
     type RecordedUpsertCalls = Arc<Mutex<Vec<UpsertCall>>>;
@@ -240,11 +271,12 @@ mod tests {
             &self,
             name: &str,
             files: Vec<ApplicationFile>,
+            visibility: Option<Visibility>,
         ) -> Result<DeployResult> {
             self.create_calls
                 .lock()
                 .expect("lock poisoned")
-                .push((name.to_string(), files));
+                .push((name.to_string(), files, visibility));
 
             if self.fail_create_with_name_taken {
                 return Err(Error::Gateway(GatewayError::Api {
@@ -289,16 +321,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_without_cached_state_creates_with_random_name() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("page.md"), "# Hello").expect("write");
-
+    async fn sync_without_path_creates_empty_app() {
         let (mock, create_calls, upsert_calls) =
+            MockSyncGateway::new(deploy_result("test-app"), upsert_result(false, "unused"));
+
+        let args = AppSyncArgs {
+            path: None,
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        run_sync(args, mock).await.expect("run_sync");
+
+        let recorded = create_calls.lock().expect("lock");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].0, "test-app");
+        assert!(recorded[0].1.is_empty()); // No files
+        assert!(upsert_calls.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_without_path_uses_random_name() {
+        let (mock, create_calls, _) =
             MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
 
         let args = AppSyncArgs {
-            path: dir.path().to_path_buf(),
+            path: None,
             name: None,
+            visibility: None,
         };
 
         run_sync(args, mock).await.expect("run_sync");
@@ -307,9 +357,24 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_ne!(recorded[0].0, "unused");
         assert!(recorded[0].0.contains('-'));
-        assert_eq!(recorded[0].1.len(), 1);
-        assert_eq!(recorded[0].1[0].path, "page.md");
-        assert!(upsert_calls.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn sync_without_path_passes_visibility() {
+        let (mock, create_calls, _) =
+            MockSyncGateway::new(deploy_result("test"), upsert_result(false, "unused"));
+
+        let args = AppSyncArgs {
+            path: None,
+            name: Some("test".to_string()),
+            visibility: Some(Visibility::Private),
+        };
+
+        run_sync(args, mock).await.expect("run_sync");
+
+        let recorded = create_calls.lock().expect("lock");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].2, Some(Visibility::Private));
     }
 
     #[tokio::test]
@@ -333,8 +398,9 @@ mod tests {
             MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "cached-app"));
 
         let args = AppSyncArgs {
-            path: dir.path().to_path_buf(),
+            path: Some(dir.path().to_path_buf()),
             name: None,
+            visibility: None,
         };
 
         run_sync(args, mock).await.expect("run_sync");
@@ -361,8 +427,9 @@ mod tests {
             MockSyncGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
 
         let args = AppSyncArgs {
-            path: dir.path().to_path_buf(),
+            path: Some(dir.path().to_path_buf()),
             name: Some("bar".to_string()),
+            visibility: None,
         };
 
         run_sync(args, mock).await.expect("run_sync");
@@ -383,8 +450,9 @@ mod tests {
         mock.fail_create_with_name_taken = true;
 
         let args = AppSyncArgs {
-            path: dir.path().to_path_buf(),
+            path: Some(dir.path().to_path_buf()),
             name: Some("taken-name".to_string()),
+            visibility: None,
         };
 
         let error = run_sync(args, mock)

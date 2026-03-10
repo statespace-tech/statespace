@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+use crate::gateway::applications::Visibility;
+
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
 #[command(about = "Statespace CLI - deploy and manage applications")]
@@ -89,9 +91,6 @@ pub(crate) enum TokenOutputFormat {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AppCommands {
-    /// Create a new application
-    Create(AppCreateArgs),
-
     /// Deploy an application (create-or-update, alias for top-level deploy)
     #[command(hide = true)]
     Deploy(AppSyncArgs),
@@ -127,9 +126,12 @@ pub(crate) struct AppSshArgs {
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppSyncArgs {
-    /// Directory to sync (default: current directory)
-    #[arg(default_value = ".")]
-    pub path: PathBuf,
+    /// Directory to sync. If omitted, creates an empty application.
+    pub path: Option<PathBuf>,
+
+    /// Application visibility (defaults: private for paid-tier, public for free-tier).
+    #[arg(long, value_enum)]
+    pub visibility: Option<Visibility>,
 
     /// Application name (default: randomly generated on first run, then reused from .statespace/state.json)
     #[arg(long, short)]
@@ -157,28 +159,6 @@ pub(crate) struct ServeArgs {
     /// Load environment variables from a file
     #[arg(long = "env-file", value_name = "PATH")]
     pub env_file: Option<PathBuf>,
-}
-
-#[derive(Debug, Parser)]
-pub(crate) struct AppCreateArgs {
-    /// Directory containing markdown files (optional — omit to create an empty application)
-    pub path: Option<PathBuf>,
-
-    /// Application name (default: directory name, or randomly generated)
-    #[arg(long, short)]
-    pub name: Option<String>,
-
-    /// Make the application public
-    #[arg(long, conflicts_with = "private")]
-    pub public: bool,
-
-    /// Make the application private
-    #[arg(long, conflicts_with = "public")]
-    pub private: bool,
-
-    /// Wait for the application to become ready
-    #[arg(long)]
-    pub verify: bool,
 }
 
 #[derive(Debug, Parser)]
