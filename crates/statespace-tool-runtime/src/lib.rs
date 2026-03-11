@@ -11,6 +11,7 @@
 //! let output = executor.execute(&tool).await?;
 //! ```
 
+pub mod env_validation;
 pub mod error;
 pub mod eval;
 pub mod executor;
@@ -22,6 +23,7 @@ pub mod spec;
 pub mod tools;
 pub mod validation;
 
+pub use env_validation::{EnvValidationError, validate_env_map};
 pub use error::{Error, Result};
 pub use executor::{ExecutionLimits, FileInfo, ToolExecutor, ToolOutput};
 pub use frontmatter::{Frontmatter, parse_frontmatter};

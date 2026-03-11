@@ -27,6 +27,10 @@ impl Default for SandboxEnv {
 }
 
 impl SandboxEnv {
+    /// Build a deterministic process environment for tool/eval subprocesses.
+    ///
+    /// This is a runtime hygiene boundary (`env_clear` + fixed defaults), not a
+    /// hardware/VM sandbox. Isolation still comes from the host deployment.
     #[must_use]
     pub fn from_host_process() -> Self {
         let mut env = Self::default();

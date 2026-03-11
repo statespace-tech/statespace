@@ -244,6 +244,41 @@ async fn statespace_serve_loads_config_env_and_preserves_precedence() -> TestRes
 }
 
 #[tokio::test]
+async fn statespace_serve_expands_tool_env_from_config() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join("README.md"),
+        "---\ntools:\n  - [echo, $DATABASE_URL]\n---\n",
+    )?;
+
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[env]\nDATABASE_URL = \"postgresql://gateway:gateway@localhost:5432/gateway_dev\"\n",
+    )?;
+
+    let extra_args = vec![
+        "--config".to_string(),
+        config_path.to_string_lossy().to_string(),
+    ];
+
+    let (_server, base_url) = spawn_server_owned(dir.path(), &extra_args)?;
+    wait_until_ready(&base_url).await?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base_url}/README.md"))
+        .json(&serde_json::json!({ "command": ["echo", "$DATABASE_URL"] }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body = response.text().await?;
+    assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+    Ok(())
+}
+
+#[tokio::test]
 async fn statespace_serve_rejects_reserved_query_keys() -> TestResult {
     let dir = tempfile::tempdir()?;
     std::fs::write(

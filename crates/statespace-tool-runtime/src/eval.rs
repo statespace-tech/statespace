@@ -1,5 +1,6 @@
 //! Component block processing for dynamic markdown content.
 
+use crate::env_validation::is_reserved_env_key;
 use crate::sandbox::SandboxEnv;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -101,19 +102,6 @@ fn find_closing_fence(content: &str) -> Option<usize> {
 
 fn is_eval_info_string(info: &str) -> bool {
     info == "component"
-}
-
-const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HANDLER"];
-const RESERVED_ENV_KEYS: &[&str] = &[
-    "HOME",
-    "LANG",
-    "PATH",
-    "STATESPACE_SCRATCH",
-    "STATESPACE_WORKSPACE",
-];
-
-fn is_reserved_env_key(key: &str) -> bool {
-    RESERVED_ENV_KEYS.contains(&key) || RESERVED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
 }
 
 /// Merge request-scoped env vars with trusted env vars for eval execution.
