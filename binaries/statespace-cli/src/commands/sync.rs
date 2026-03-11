@@ -117,10 +117,10 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
             let cached = load_state(&dir)?;
             let target = resolve_target(args.name, cached.as_ref());
 
-            let files = GatewayClient::scan_markdown_files(&dir)?;
+            let files = GatewayClient::scan_deploy_files(&dir)?;
 
             if files.is_empty() {
-                eprintln!("No .md files found in {}", dir.display());
+                eprintln!("No files found in {}", dir.display());
                 return Ok(());
             }
 
@@ -417,6 +417,36 @@ mod tests {
             .expect("state exists");
         assert_eq!(state.name, "cached-app");
         assert_eq!(state.deployment_id, "id-1");
+    }
+
+    #[tokio::test]
+    async fn sync_with_path_uploads_non_markdown_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("create assets dir");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write readme");
+        std::fs::write(dir.path().join("assets/config.json"), "{\"enabled\":true}")
+            .expect("write json");
+
+        let (mock, create_calls, upsert_calls) =
+            MockSyncGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
+
+        let args = AppSyncArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: Some("bar".to_string()),
+            visibility: None,
+        };
+
+        run_sync(args, mock).await.expect("run_sync");
+
+        let recorded_creates = create_calls.lock().expect("lock");
+        assert_eq!(recorded_creates.len(), 1);
+        let uploaded_paths: Vec<&str> = recorded_creates[0]
+            .1
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect();
+        assert_eq!(uploaded_paths, vec!["README.md", "assets/config.json"]);
+        assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
