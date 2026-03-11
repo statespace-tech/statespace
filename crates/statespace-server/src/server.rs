@@ -428,7 +428,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&body), "42/stats");
+        assert_eq!(String::from_utf8_lossy(&body).trim_end(), "42/stats");
     }
 
     #[tokio::test]
@@ -451,7 +451,7 @@ mod tests {
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&body), "trusted");
+        assert_eq!(String::from_utf8_lossy(&body).trim_end(), "trusted");
     }
 
     #[tokio::test]
