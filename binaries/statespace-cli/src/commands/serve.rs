@@ -2,9 +2,12 @@ use crate::args::ServeArgs;
 use crate::config::load_config;
 use crate::error::{Error, Result};
 use statespace_server::{ServerConfig, build_router, initialize_templates};
-use std::collections::HashMap;
+use statespace_tool_runtime::{SandboxEnv, parse_frontmatter};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::OsStr;
 use std::path::Path;
 use tokio::net::TcpListener;
+use walkdir::WalkDir;
 
 pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()> {
     let dir = args
@@ -18,11 +21,15 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
 
     let config_env = load_config(config_path)?.map(|c| c.env).unwrap_or_default();
     let env = parse_env_vars(config_env, &args.env_vars, args.env_file.as_deref()).await?;
+    let sandbox_env = SandboxEnv::from_host_process();
+
+    emit_missing_tool_warnings(&dir, &sandbox_env);
 
     let config = ServerConfig::new(dir)
         .with_host(args.host)
         .with_port(args.port)
-        .with_env(env);
+        .with_env(env)
+        .with_sandbox_env(sandbox_env);
 
     initialize_templates(&config.content_root).await?;
 
@@ -42,6 +49,84 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
         .await
         .map_err(|e| Error::cli(format!("Server error: {e}")))?;
     Ok(())
+}
+
+fn emit_missing_tool_warnings(content_root: &Path, sandbox_env: &SandboxEnv) {
+    let declared_tools = collect_declared_exec_tools(content_root);
+    if declared_tools.is_empty() {
+        return;
+    }
+
+    let missing: Vec<(&String, &BTreeSet<String>)> = declared_tools
+        .iter()
+        .filter(|(command, _)| !command_exists_in_path(command, sandbox_env.path()))
+        .collect();
+
+    if missing.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "Warning: {} tool command(s) declared in markdown are not available in the serve runtime PATH.",
+        missing.len()
+    );
+    eprintln!(
+        "         Requests using these commands will fail until the binaries are installed or PATH is updated."
+    );
+    for (command, files) in missing {
+        let locations = files.iter().cloned().collect::<Vec<_>>().join(", ");
+        eprintln!("  - {} (declared in: {})", command, locations);
+    }
+}
+
+fn collect_declared_exec_tools(content_root: &Path) -> BTreeMap<String, BTreeSet<String>> {
+    let mut tools: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    for entry in WalkDir::new(content_root)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        let path = entry.path();
+        if !entry.file_type().is_file() || path.extension() != Some(OsStr::new("md")) {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let Ok(frontmatter) = parse_frontmatter(&content) else {
+            continue;
+        };
+
+        let relative = path
+            .strip_prefix(content_root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+
+        for tool_name in frontmatter.tool_names() {
+            if matches!(tool_name, "glob" | "curl") {
+                continue;
+            }
+            if tool_name.contains('/') {
+                continue;
+            }
+
+            tools
+                .entry(tool_name.to_string())
+                .or_default()
+                .insert(relative.clone());
+        }
+    }
+
+    tools
+}
+
+fn command_exists_in_path(command: &str, path: &str) -> bool {
+    std::env::split_paths(OsStr::new(path)).any(|dir| {
+        let candidate = dir.join(command);
+        candidate.is_file()
+    })
 }
 
 async fn parse_env_vars(
@@ -86,8 +171,9 @@ async fn parse_env_vars(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::Write;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     #[tokio::test]
     async fn parse_env_file_with_comments_and_blanks() {
@@ -153,5 +239,34 @@ mod tests {
 
         let result = parse_env_vars(HashMap::new(), &[], Some(f.path())).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn collect_declared_exec_tools_ignores_non_exec_commands() {
+        let dir = TempDir::new().unwrap();
+
+        fs::write(
+            dir.path().join("README.md"),
+            "---\ntools:\n  - [curl, https://example.com]\n  - [glob, '*.md']\n  - [psql, $DATABASE_URL, -c, SELECT 1]\n---\n",
+        )
+        .unwrap();
+
+        let tools = collect_declared_exec_tools(dir.path());
+
+        assert_eq!(tools.len(), 1);
+        assert!(tools.contains_key("psql"));
+        assert!(!tools.contains_key("curl"));
+        assert!(!tools.contains_key("glob"));
+    }
+
+    #[test]
+    fn command_exists_in_path_checks_explicit_path_list() {
+        let dir = TempDir::new().unwrap();
+        let binary = dir.path().join("custom-tool");
+        fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+
+        let path = dir.path().display().to_string();
+        assert!(command_exists_in_path("custom-tool", &path));
+        assert!(!command_exists_in_path("missing-tool", &path));
     }
 }

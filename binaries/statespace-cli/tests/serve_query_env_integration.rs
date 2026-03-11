@@ -1,4 +1,6 @@
 use std::io::BufRead;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -124,6 +126,34 @@ fn spawn_server_owned(
     Ok((ChildGuard { child }, base_url))
 }
 
+fn spawn_server_with_env(
+    content_dir: &Path,
+    extra_args: &[&str],
+    env_overrides: &[(String, String)],
+) -> TestResult<(ChildGuard, String)> {
+    let bin = statespace_bin_path()?;
+
+    let mut cmd = Command::new(bin);
+    cmd.arg("serve")
+        .arg(content_dir)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg("0")
+        .args(extra_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    for (key, value) in env_overrides {
+        cmd.env(key, value);
+    }
+
+    let mut child = cmd.spawn()?;
+    let base_url = wait_for_base_url(&mut child)?;
+    Ok((ChildGuard { child }, base_url))
+}
+
 async fn wait_until_ready(base_url: &str) -> TestResult {
     let client = reqwest::Client::new();
 
@@ -243,5 +273,71 @@ async fn statespace_serve_rejects_malformed_query_env_entries() -> TestResult {
 
     let response = reqwest::get(format!("{base_url}/README.md?A%3DB=1")).await?;
     assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
+#[tokio::test]
+async fn statespace_serve_exec_uses_host_path_entries() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join("README.md"),
+        "---\ntools:\n  - [customhello]\n---\n",
+    )?;
+
+    let bin_dir = tempfile::tempdir()?;
+    let custom_bin = bin_dir.path().join("customhello");
+    std::fs::write(&custom_bin, "#!/bin/sh\necho custom-ok\n")?;
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&custom_bin)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&custom_bin, perms)?;
+    }
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let merged_path = if inherited_path.is_empty() {
+        bin_dir.path().display().to_string()
+    } else {
+        format!("{}:{inherited_path}", bin_dir.path().display())
+    };
+    let env_overrides = vec![("PATH".to_string(), merged_path)];
+
+    let (_server, base_url) = spawn_server_with_env(dir.path(), &[], &env_overrides)?;
+    wait_until_ready(&base_url).await?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base_url}/README.md"))
+        .json(&serde_json::json!({ "command": ["customhello"] }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body = response.text().await?;
+    assert!(body.contains("custom-ok"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn statespace_serve_missing_binary_returns_helpful_error() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join("README.md"),
+        "---\ntools:\n  - [definitely-not-a-real-binary]\n---\n",
+    )?;
+
+    let (_server, base_url) = spawn_server(dir.path(), &[])?;
+    wait_until_ready(&base_url).await?;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("{base_url}/README.md"))
+        .json(&serde_json::json!({ "command": ["definitely-not-a-real-binary"] }))
+        .send()
+        .await?;
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let body = response.text().await?;
+    assert!(body.contains("not found in PATH"));
     Ok(())
 }
