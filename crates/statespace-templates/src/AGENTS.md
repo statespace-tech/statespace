@@ -1,6 +1,6 @@
-# Statespace Application Instructions
+# App Instructions
 
-This web application exposes content and tools over HTTP. Follow these instructions exactly.
+This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
 
 ## Quick Start
 
