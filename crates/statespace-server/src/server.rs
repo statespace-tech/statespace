@@ -14,7 +14,7 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor, eval,
     expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
 };
 use std::collections::HashMap;
@@ -32,6 +32,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub limits: ExecutionLimits,
     pub env: HashMap<String, String>,
+    pub sandbox_env: SandboxEnv,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -42,6 +43,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("port", &self.port)
             .field("limits", &self.limits)
             .field("env_keys", &self.env.len())
+            .field("sandbox_path", &self.sandbox_env.path())
             .finish()
     }
 }
@@ -55,6 +57,7 @@ impl ServerConfig {
             port: 8000,
             limits: ExecutionLimits::default(),
             env: HashMap::new(),
+            sandbox_env: SandboxEnv::default(),
         }
     }
 
@@ -83,6 +86,12 @@ impl ServerConfig {
     }
 
     #[must_use]
+    pub fn with_sandbox_env(mut self, sandbox_env: SandboxEnv) -> Self {
+        self.sandbox_env = sandbox_env;
+        self
+    }
+
+    #[must_use]
     pub fn socket_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -99,6 +108,7 @@ pub struct ServerState {
     pub limits: ExecutionLimits,
     pub content_root: PathBuf,
     pub env: Arc<HashMap<String, String>>,
+    pub sandbox_env: Arc<SandboxEnv>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -107,6 +117,7 @@ impl std::fmt::Debug for ServerState {
             .field("limits", &self.limits)
             .field("content_root", &self.content_root)
             .field("env_keys", &self.env.len())
+            .field("sandbox_path", &self.sandbox_env.path())
             .finish_non_exhaustive()
     }
 }
@@ -121,6 +132,7 @@ impl ServerState {
             limits: config.limits.clone(),
             content_root: config.content_root.clone(),
             env: Arc::new(config.env.clone()),
+            sandbox_env: Arc::new(config.sandbox_env.clone()),
         })
     }
 }
@@ -222,7 +234,13 @@ async fn serve_page(
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
     let has_eval = !eval::parse_eval_blocks(&content).is_empty();
     let merged_env = eval::merge_eval_env(state.env.as_ref(), query_env);
-    let rendered = eval::process_eval_blocks(&content, working_dir, &merged_env).await;
+    let rendered = eval::process_eval_blocks_with_sandbox(
+        &content,
+        working_dir,
+        &merged_env,
+        &state.sandbox_env,
+    )
+    .await;
 
     if wants_html(headers) {
         if has_eval {
@@ -324,7 +342,8 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
     };
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
-    let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone());
+    let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
+        .with_sandbox_env((*state.sandbox_env).clone());
 
     info!("Executing tool: {:?}", tool);
 
