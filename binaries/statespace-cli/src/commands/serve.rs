@@ -75,7 +75,7 @@ fn emit_missing_tool_warnings(content_root: &Path, sandbox_env: &SandboxEnv) {
     );
     for (command, files) in missing {
         let locations = files.iter().cloned().collect::<Vec<_>>().join(", ");
-        eprintln!("  - {} (declared in: {})", command, locations);
+        eprintln!("  - {command} (declared in: {locations})");
     }
 }
 
