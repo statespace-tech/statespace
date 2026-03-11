@@ -123,10 +123,43 @@ fn collect_declared_exec_tools(content_root: &Path) -> BTreeMap<String, BTreeSet
 }
 
 fn command_exists_in_path(command: &str, path: &str) -> bool {
-    std::env::split_paths(OsStr::new(path)).any(|dir| {
-        let candidate = dir.join(command);
-        candidate.is_file()
-    })
+    std::env::split_paths(OsStr::new(path)).any(|dir| command_is_executable(&dir.join(command)))
+}
+
+#[cfg(unix)]
+fn command_is_executable(candidate: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(metadata) = std::fs::metadata(candidate) else {
+        return false;
+    };
+
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(windows)]
+fn command_is_executable(candidate: &Path) -> bool {
+    if candidate.extension().is_some() {
+        return candidate.is_file();
+    }
+
+    let pathext = std::env::var_os("PATHEXT")
+        .unwrap_or_else(|| OsStr::new(".COM;.EXE;.BAT;.CMD").to_os_string());
+
+    pathext
+        .to_string_lossy()
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .any(|ext| {
+            let ext = ext.trim_start_matches('.');
+            candidate.with_extension(ext).is_file()
+        })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn command_is_executable(candidate: &Path) -> bool {
+    candidate.is_file()
 }
 
 async fn parse_env_vars(
@@ -176,6 +209,8 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::{NamedTempFile, TempDir};
 
     #[tokio::test]
@@ -276,6 +311,12 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let binary = dir.path().join("custom-tool");
         fs::write(&binary, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&binary).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&binary, perms).unwrap();
+        }
 
         let path = dir.path().display().to_string();
         assert!(command_exists_in_path("custom-tool", &path));

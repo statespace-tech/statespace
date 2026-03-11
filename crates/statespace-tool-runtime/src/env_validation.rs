@@ -9,6 +9,7 @@ const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HA
 const RESERVED_ENV_KEYS: &[&str] = &[
     "HOME",
     "LANG",
+    "LC_ALL",
     "PATH",
     "STATESPACE_SCRATCH",
     "STATESPACE_WORKSPACE",
@@ -107,7 +108,7 @@ fn display_key(key: &str) -> String {
     if key.is_empty() {
         "<empty>".to_string()
     } else {
-        key.to_string()
+        key.chars().flat_map(char::escape_default).collect()
     }
 }
 
@@ -161,7 +162,13 @@ mod tests {
     #[test]
     fn recognizes_reserved_env_keys() {
         assert!(is_reserved_env_key("HOME"));
+        assert!(is_reserved_env_key("LC_ALL"));
         assert!(is_reserved_env_key("AWS_ACCESS_KEY_ID"));
         assert!(!is_reserved_env_key("USER_ID"));
+    }
+
+    #[test]
+    fn display_key_escapes_control_characters() {
+        assert_eq!(display_key("BAD\nKEY"), "BAD\\nKEY");
     }
 }

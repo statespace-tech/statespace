@@ -15,7 +15,7 @@ use axum::{
 };
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor,
-    ToolPart, ToolSpec, eval, expand_env_vars, expand_placeholders, parse_frontmatter,
+    ToolPart, ToolSpec, eval, expand_placeholders, find_matching_spec, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
@@ -297,44 +297,6 @@ fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
     (status, Json(response)).into_response()
 }
 
-fn command_matches_spec(command: &[String], spec: &ToolSpec) -> bool {
-    if command.len() < spec.parts.len() {
-        return false;
-    }
-
-    if command.len() > spec.parts.len() && spec.options_disabled {
-        return false;
-    }
-
-    for (index, part) in spec.parts.iter().enumerate() {
-        let command_part = &command[index];
-
-        match part {
-            ToolPart::Literal(literal) => {
-                if command_part != literal {
-                    return false;
-                }
-            }
-            ToolPart::Placeholder { regex: None } => {}
-            ToolPart::Placeholder {
-                regex: Some(compiled),
-            } => {
-                if !compiled.regex.is_match(command_part) {
-                    return false;
-                }
-            }
-        }
-    }
-
-    true
-}
-
-fn find_matching_spec<'a>(command: &[String], specs: &'a [ToolSpec]) -> Option<&'a ToolSpec> {
-    specs
-        .iter()
-        .find(|spec| command_matches_spec(command, spec))
-}
-
 fn expand_literal_segment(segment: &str, env: &HashMap<String, String>) -> String {
     let mut expanded = segment.to_string();
     for (key, value) in env {
@@ -365,7 +327,7 @@ fn expand_command_for_execution(
             .collect();
     }
 
-    expand_env_vars(command, env)
+    command.to_vec()
 }
 
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {

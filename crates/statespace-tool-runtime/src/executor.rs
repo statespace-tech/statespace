@@ -130,6 +130,13 @@ impl ToolExecutor {
                     ));
                 }
 
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Error::InvalidCommand(format!(
+                        "Command '{command}' not executable in PATH: {}",
+                        self.sandbox_env.path()
+                    ));
+                }
+
                 Error::Internal(format!("Failed to execute {command}: {e}"))
             })?;
 
