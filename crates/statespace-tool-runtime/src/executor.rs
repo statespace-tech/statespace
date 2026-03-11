@@ -1,6 +1,7 @@
 //! Tool execution with sandboxing and resource limits.
 
 use crate::error::Error;
+use crate::sandbox::SandboxEnv;
 use crate::security::{is_private_or_restricted_ip, validate_url_initial};
 use crate::tools::{BuiltinTool, HttpMethod};
 use std::path::PathBuf;
@@ -58,12 +59,23 @@ pub struct FileInfo {
 pub struct ToolExecutor {
     root: PathBuf,
     limits: ExecutionLimits,
+    sandbox_env: SandboxEnv,
 }
 
 impl ToolExecutor {
     #[must_use]
-    pub const fn new(root: PathBuf, limits: ExecutionLimits) -> Self {
-        Self { root, limits }
+    pub fn new(root: PathBuf, limits: ExecutionLimits) -> Self {
+        Self {
+            root,
+            limits,
+            sandbox_env: SandboxEnv::default(),
+        }
+    }
+
+    #[must_use]
+    pub fn with_sandbox_env(mut self, sandbox_env: SandboxEnv) -> Self {
+        self.sandbox_env = sandbox_env;
+        self
     }
 
     /// # Errors
@@ -104,13 +116,29 @@ impl ToolExecutor {
             .args(args)
             .current_dir(&self.root)
             .env_clear()
-            .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-            .env("HOME", "/tmp")
-            .env("LANG", "C.UTF-8")
-            .env("LC_ALL", "C.UTF-8")
+            .env("PATH", self.sandbox_env.path())
+            .env("HOME", self.sandbox_env.home())
+            .env("LANG", self.sandbox_env.lang())
+            .env("LC_ALL", self.sandbox_env.lc_all())
             .output()
             .await
-            .map_err(|e| Error::Internal(format!("Failed to execute {command}: {e}")))?;
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    return Error::InvalidCommand(format!(
+                        "Command '{command}' not found in PATH: {}",
+                        self.sandbox_env.path()
+                    ));
+                }
+
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    return Error::InvalidCommand(format!(
+                        "Command '{command}' not executable in PATH: {}",
+                        self.sandbox_env.path()
+                    ));
+                }
+
+                Error::Internal(format!("Failed to execute {command}: {e}"))
+            })?;
 
         let mut result = String::from_utf8_lossy(&output.stdout).into_owned();
         if !output.stderr.is_empty() {
@@ -256,6 +284,7 @@ impl ToolExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::SandboxEnv;
 
     fn test_executor() -> ToolExecutor {
         ToolExecutor::new(PathBuf::from("/tmp/test-mount"), ExecutionLimits::default())
@@ -295,5 +324,23 @@ mod tests {
 
         let result = executor.execute(&tool).await;
         assert!(!matches!(result, Err(Error::Security(_))));
+    }
+
+    #[tokio::test]
+    async fn missing_binary_returns_clear_invalid_command_error() {
+        let executor =
+            ToolExecutor::new(PathBuf::from("/tmp/test-mount"), ExecutionLimits::default())
+                .with_sandbox_env(SandboxEnv::default());
+        let tool = BuiltinTool::Exec {
+            command: "definitely-not-a-real-binary".to_string(),
+            args: vec![],
+        };
+
+        let result = executor.execute(&tool).await;
+        assert!(matches!(
+            result,
+            Err(Error::InvalidCommand(message))
+                if message.contains("not found in PATH")
+        ));
     }
 }

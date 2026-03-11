@@ -1,5 +1,7 @@
 //! Component block processing for dynamic markdown content.
 
+use crate::env_validation::is_reserved_env_key;
+use crate::sandbox::SandboxEnv;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
@@ -102,19 +104,6 @@ fn is_eval_info_string(info: &str) -> bool {
     info == "component"
 }
 
-const RESERVED_ENV_PREFIXES: &[&str] = &["AWS_", "LD_", "DYLD_", "_LAMBDA", "_HANDLER"];
-const RESERVED_ENV_KEYS: &[&str] = &[
-    "HOME",
-    "LANG",
-    "PATH",
-    "STATESPACE_SCRATCH",
-    "STATESPACE_WORKSPACE",
-];
-
-fn is_reserved_env_key(key: &str) -> bool {
-    RESERVED_ENV_KEYS.contains(&key) || RESERVED_ENV_PREFIXES.iter().any(|p| key.starts_with(p))
-}
-
 /// Merge request-scoped env vars with trusted env vars for eval execution.
 ///
 /// Untrusted caller-provided keys are applied first, then trusted keys are
@@ -150,14 +139,35 @@ pub async fn execute_eval_block(
     workspace_dir: Option<&Path>,
     user_env: &HashMap<String, String>,
 ) -> EvalResult {
+    execute_eval_block_with_sandbox(
+        block,
+        working_dir,
+        scratch_dir,
+        workspace_dir,
+        user_env,
+        &SandboxEnv::default(),
+    )
+    .await
+}
+
+#[allow(clippy::implicit_hasher)]
+pub async fn execute_eval_block_with_sandbox(
+    block: &EvalBlock,
+    working_dir: &Path,
+    scratch_dir: Option<&Path>,
+    workspace_dir: Option<&Path>,
+    user_env: &HashMap<String, String>,
+    sandbox_env: &SandboxEnv,
+) -> EvalResult {
     let mut command = Command::new("sh");
     command
         .args(["-c", &block.code])
         .current_dir(working_dir)
         .env_clear()
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("HOME", "/tmp")
-        .env("LANG", "C.UTF-8")
+        .env("PATH", sandbox_env.path())
+        .env("HOME", sandbox_env.home())
+        .env("LANG", sandbox_env.lang())
+        .env("LC_ALL", sandbox_env.lc_all())
         .kill_on_drop(true);
 
     for (k, v) in user_env {
@@ -245,6 +255,16 @@ pub async fn process_eval_blocks(
     working_dir: &Path,
     user_env: &HashMap<String, String>,
 ) -> String {
+    process_eval_blocks_with_sandbox(content, working_dir, user_env, &SandboxEnv::default()).await
+}
+
+#[allow(clippy::implicit_hasher)]
+pub async fn process_eval_blocks_with_sandbox(
+    content: &str,
+    working_dir: &Path,
+    user_env: &HashMap<String, String>,
+    sandbox_env: &SandboxEnv,
+) -> String {
     let mut blocks = parse_eval_blocks(content);
 
     if blocks.is_empty() {
@@ -267,6 +287,7 @@ pub async fn process_eval_blocks(
         .collect();
 
     let user_env = std::sync::Arc::new(user_env.clone());
+    let sandbox_env = std::sync::Arc::new(sandbox_env.clone());
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
     let mut set = tokio::task::JoinSet::new();
 
@@ -274,6 +295,7 @@ pub async fn process_eval_blocks(
         let sem = sem.clone();
         let wd = working_dir.to_path_buf();
         let env = user_env.clone();
+        let sandbox_env = sandbox_env.clone();
         set.spawn(async move {
             let Ok(_permit) = sem.acquire().await else {
                 return (
@@ -285,7 +307,8 @@ pub async fn process_eval_blocks(
                     },
                 );
             };
-            let result = execute_eval_block(&block, &wd, None, None, &env).await;
+            let result =
+                execute_eval_block_with_sandbox(&block, &wd, None, None, &env, &sandbox_env).await;
             (i, block.range, result)
         });
     }

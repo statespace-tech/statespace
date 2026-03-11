@@ -1,5 +1,6 @@
 //! Tool execution request/response protocol.
 
+use crate::validate_env_map;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -20,6 +21,7 @@ impl ActionRequest {
         if self.command.is_empty() {
             return Err("command cannot be empty".to_string());
         }
+        validate_env_map(&self.env).map_err(|e| e.to_string())?;
         Ok(())
     }
 }
@@ -64,12 +66,19 @@ mod tests {
         };
         assert!(valid.validate().is_ok());
 
-        let invalid = ActionRequest {
+        let invalid_command = ActionRequest {
             command: vec![],
             args: HashMap::new(),
             env: HashMap::new(),
         };
-        assert!(invalid.validate().is_err());
+        assert!(invalid_command.validate().is_err());
+
+        let invalid_env = ActionRequest {
+            command: vec!["ls".to_string()],
+            args: HashMap::new(),
+            env: HashMap::from([("USER-ID".to_string(), "42".to_string())]),
+        };
+        assert!(invalid_env.validate().is_err());
     }
 
     #[test]

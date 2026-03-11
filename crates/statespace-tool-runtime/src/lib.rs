@@ -11,22 +11,28 @@
 //! let output = executor.execute(&tool).await?;
 //! ```
 
+pub mod env_validation;
 pub mod error;
 pub mod eval;
 pub mod executor;
 pub mod frontmatter;
 pub mod protocol;
+pub mod sandbox;
 pub mod security;
 pub mod spec;
 pub mod tools;
 pub mod validation;
 
+pub use env_validation::{EnvValidationError, validate_env_map};
 pub use error::{Error, Result};
 pub use executor::{ExecutionLimits, FileInfo, ToolExecutor, ToolOutput};
 pub use frontmatter::{Frontmatter, parse_frontmatter};
 pub use protocol::{ActionRequest, ActionResponse};
+pub use sandbox::SandboxEnv;
 pub use security::{is_private_or_restricted_ip, validate_url_initial};
-pub use spec::{CompiledRegex, SpecError, ToolPart, ToolSpec, is_valid_tool_call};
+pub use spec::{
+    CompiledRegex, SpecError, ToolPart, ToolSpec, find_matching_spec, is_valid_tool_call,
+};
 pub use tools::{BuiltinTool, HttpMethod};
 pub use validation::{
     expand_env_vars, expand_placeholders, validate_command, validate_command_with_specs,

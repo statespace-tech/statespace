@@ -14,8 +14,9 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, ToolExecutor, eval,
-    expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor,
+    ToolPart, ToolSpec, eval, expand_placeholders, find_matching_spec, parse_frontmatter,
+    validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,6 +33,7 @@ pub struct ServerConfig {
     pub port: u16,
     pub limits: ExecutionLimits,
     pub env: HashMap<String, String>,
+    pub sandbox_env: SandboxEnv,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -42,6 +44,7 @@ impl std::fmt::Debug for ServerConfig {
             .field("port", &self.port)
             .field("limits", &self.limits)
             .field("env_keys", &self.env.len())
+            .field("sandbox_path", &self.sandbox_env.path())
             .finish()
     }
 }
@@ -55,6 +58,7 @@ impl ServerConfig {
             port: 8000,
             limits: ExecutionLimits::default(),
             env: HashMap::new(),
+            sandbox_env: SandboxEnv::default(),
         }
     }
 
@@ -83,6 +87,12 @@ impl ServerConfig {
     }
 
     #[must_use]
+    pub fn with_sandbox_env(mut self, sandbox_env: SandboxEnv) -> Self {
+        self.sandbox_env = sandbox_env;
+        self
+    }
+
+    #[must_use]
     pub fn socket_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
@@ -99,6 +109,7 @@ pub struct ServerState {
     pub limits: ExecutionLimits,
     pub content_root: PathBuf,
     pub env: Arc<HashMap<String, String>>,
+    pub sandbox_env: Arc<SandboxEnv>,
 }
 
 impl std::fmt::Debug for ServerState {
@@ -107,6 +118,7 @@ impl std::fmt::Debug for ServerState {
             .field("limits", &self.limits)
             .field("content_root", &self.content_root)
             .field("env_keys", &self.env.len())
+            .field("sandbox_path", &self.sandbox_env.path())
             .finish_non_exhaustive()
     }
 }
@@ -121,6 +133,7 @@ impl ServerState {
             limits: config.limits.clone(),
             content_root: config.content_root.clone(),
             env: Arc::new(config.env.clone()),
+            sandbox_env: Arc::new(config.sandbox_env.clone()),
         })
     }
 }
@@ -187,20 +200,14 @@ async fn file_handler(
     serve_page(&path, &headers, &query_env, &state).await
 }
 
-fn has_invalid_query_env_entry(query_env: &HashMap<String, String>) -> bool {
-    query_env.iter().any(|(key, value)| {
-        key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0')
-    })
-}
-
 async fn serve_page(
     path: &str,
     headers: &HeaderMap,
     query_env: &HashMap<String, String>,
     state: &ServerState,
 ) -> Response {
-    if has_invalid_query_env_entry(query_env) {
-        return (StatusCode::BAD_REQUEST, "Invalid query parameter").into_response();
+    if let Err(e) = validate_env_map(query_env) {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
@@ -222,7 +229,13 @@ async fn serve_page(
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
     let has_eval = !eval::parse_eval_blocks(&content).is_empty();
     let merged_env = eval::merge_eval_env(state.env.as_ref(), query_env);
-    let rendered = eval::process_eval_blocks(&content, working_dir, &merged_env).await;
+    let rendered = eval::process_eval_blocks_with_sandbox(
+        &content,
+        working_dir,
+        &merged_env,
+        &state.sandbox_env,
+    )
+    .await;
 
     if wants_html(headers) {
         if has_eval {
@@ -284,6 +297,39 @@ fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
     (status, Json(response)).into_response()
 }
 
+fn expand_literal_segment(segment: &str, env: &HashMap<String, String>) -> String {
+    let mut expanded = segment.to_string();
+    for (key, value) in env {
+        let variable = format!("${key}");
+        expanded = expanded.replace(&variable, value);
+    }
+    expanded
+}
+
+fn expand_command_for_execution(
+    command: &[String],
+    specs: &[ToolSpec],
+    env: &HashMap<String, String>,
+) -> Vec<String> {
+    // Only spec-declared literal segments are eligible for trusted env expansion.
+    // Placeholder-derived values stay opaque so callers cannot smuggle `$SECRET`
+    // into flexible args and force secret expansion at runtime.
+    if let Some(spec) = find_matching_spec(command, specs) {
+        return command
+            .iter()
+            .enumerate()
+            .map(|(index, part)| match spec.parts.get(index) {
+                Some(ToolPart::Literal(literal)) if literal == part && literal.contains('$') => {
+                    expand_literal_segment(part, env)
+                }
+                _ => part.clone(),
+            })
+            .collect();
+    }
+
+    command.to_vec()
+}
+
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {
     if let Err(msg) = request.validate() {
         return error_response(StatusCode::BAD_REQUEST, &msg);
@@ -304,13 +350,19 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
         Err(e) => return error_to_action_response(&e),
     };
 
-    let expanded_command = expand_placeholders(&request.command, &request.args);
-    let expanded_command = expand_env_vars(&expanded_command, &request.env);
+    let command_with_placeholders = expand_placeholders(&request.command, &request.args);
+    let merged_env = eval::merge_eval_env(state.env.as_ref(), &request.env);
+    let expanded_command =
+        expand_command_for_execution(&command_with_placeholders, &frontmatter.specs, &merged_env);
 
-    if let Err(e) = validate_command_with_specs(&frontmatter.specs, &expanded_command) {
+    let validation_result =
+        validate_command_with_specs(&frontmatter.specs, &command_with_placeholders)
+            .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
+
+    if let Err(e) = validation_result {
         warn!(
-            "Command not allowed by frontmatter: {:?} (file: {})",
-            expanded_command, path
+            "Command not allowed by frontmatter: {:?} (expanded: {:?}, file: {})",
+            command_with_placeholders, expanded_command, path
         );
         return error_to_action_response(&e);
     }
@@ -324,7 +376,8 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
     };
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
-    let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone());
+    let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
+        .with_sandbox_env((*state.sandbox_env).clone());
 
     info!("Executing tool: {:?}", tool);
 
@@ -350,6 +403,7 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use axum::body;
     use std::collections::HashMap;
 
     fn headers_with_ua(ua: &str) -> HeaderMap {
@@ -369,6 +423,13 @@ mod tests {
         headers.insert(header::USER_AGENT, ua.parse().unwrap());
         headers.insert(header::ACCEPT, accept.parse().unwrap());
         headers
+    }
+
+    async fn response_text(response: Response) -> String {
+        let bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     #[test]
@@ -573,5 +634,66 @@ mod tests {
 
         let response = serve_page("README.md", &headers, &query, &state).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn action_expands_trusted_literal_env_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "---\ntools:\n  - [echo, $DATABASE_URL]\n---\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf())
+            .with_env(HashMap::from([(
+                "DATABASE_URL".to_string(),
+                "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
+            )]))
+            .with_sandbox_env(SandboxEnv::from_host_process());
+        let state = ServerState::from_config(&config).unwrap();
+
+        let request = ActionRequest {
+            command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
+            args: HashMap::new(),
+            env: HashMap::new(),
+        };
+
+        let response = execute_action("README.md", &state, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+    }
+
+    #[tokio::test]
+    async fn action_does_not_expand_placeholders_into_trusted_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "---\ntools:\n  - [echo, { }]\n---\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf())
+            .with_env(HashMap::from([(
+                "DATABASE_URL".to_string(),
+                "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
+            )]))
+            .with_sandbox_env(SandboxEnv::from_host_process());
+        let state = ServerState::from_config(&config).unwrap();
+
+        let request = ActionRequest {
+            command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
+            args: HashMap::new(),
+            env: HashMap::new(),
+        };
+
+        let response = execute_action("README.md", &state, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("$DATABASE_URL"));
+        assert!(!body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
     }
 }

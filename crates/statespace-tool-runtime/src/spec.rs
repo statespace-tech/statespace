@@ -116,7 +116,12 @@ pub fn is_valid_tool_call(command: &[String], specs: &[ToolSpec]) -> bool {
     if command.is_empty() {
         return false;
     }
-    specs.iter().any(|spec| matches_spec(command, spec))
+    find_matching_spec(command, specs).is_some()
+}
+
+#[must_use]
+pub fn find_matching_spec<'a>(command: &[String], specs: &'a [ToolSpec]) -> Option<&'a ToolSpec> {
+    specs.iter().find(|spec| matches_spec(command, spec))
 }
 
 fn matches_spec(command: &[String], spec: &ToolSpec) -> bool {

@@ -1773,6 +1773,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "statespace-server",
+ "statespace-tool-runtime",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
