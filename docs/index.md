@@ -145,18 +145,6 @@ Alternatively, run the app locally:
 
     Search documents with `grep`, `cat`, or your APIs.
 
--   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
-
-    ---
-
-    Query databases with read-only access.
-
--   :lucide-bot-message-square:{ .md .middle .jade } &nbsp; **Chatbots**
-
-    ---
-
-    Build multi-turn conversational flows.
-
 -   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
 
     ---
@@ -167,12 +155,24 @@ Alternatively, run the app locally:
 
     ---
 
-    Package tools into reusable skills.
+    Package tools and context into reusable skills.
 
--   :lucide-workflow:{ .md .middle .jade } &nbsp; **Workflows**
+-   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
+
+    ---
+
+    Query databases with read-only access.
+
+-   :lucide-workflow:{ .md .middle .jade } &nbsp; **AI Workflows**
 
     ---
 
     Chain actions into multi-step flows.
+
+-   :lucide-bot-message-square:{ .md .middle .jade } &nbsp; **Chatbots**
+
+    ---
+
+    Build multi-turn conversational flows.
 
 </div>
