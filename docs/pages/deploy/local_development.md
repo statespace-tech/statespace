@@ -2,9 +2,9 @@
 icon: lucide/server
 ---
 
-# Self-hosting
+# Local development
 
-Run apps on your own infrastructure.
+Run apps on your own machine for development or self-hosting.
 
 ## Serve
 
@@ -23,7 +23,7 @@ $ statespace serve <PATH> --host 0.0.0.0 --port 8080
 
 ## Docker
 
-Create a `Dockerfile` to containerize your app:
+Run apps in a container for self-hosting:
 
 ```dockerfile title="Dockerfile"
 FROM debian:bookworm-slim

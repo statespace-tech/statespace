@@ -66,14 +66,14 @@ echo "User ID: $USER"
 ```
 ````
 
-You can set secrets for a deployed app with the [CLI](../reference/cli.md):
+Pass them with the [CLI](../reference/cli.md) when serving locally or deploying:
 
 ```console
-$ statespace secrets set --app <APP> USER=admin
+$ statespace serve|deploy --env USER=admin
+$ statespace serve|deploy --env-file .env
 ```
 
-Or pass them as query parameters when [fetching pages](../reference/api.md#get):
-
+You can also pass them as query parameters when [fetching pages](../reference/api.md#get):
 
 ```bash
 curl "https://example.statespace.app/page.md?USER=admin"
@@ -81,4 +81,4 @@ curl "https://example.statespace.app/page.md?USER=admin"
 
 !!! warning
 
-    Query parameters can be exposed iduring transit. For sensitive values, set secrets with the CLI, or use tools.
+    Query parameters can be exposed during transit. For sensitive values, use `--env` or `--env-file` instead.

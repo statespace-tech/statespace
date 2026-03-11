@@ -87,7 +87,7 @@ app/
 
 ## Running apps
 
-[Serve apps locally](pages/deploy/self_hosting.md) for development:
+[Serve apps locally](pages/deploy/local_development.md) for development or self-hosting:
 
 ```console
 $ statespace serve app/
@@ -102,8 +102,7 @@ $ statespace deploy app/
 ## Next steps
 
 - Learn more about [tools](pages/develop/tools.md), [components](pages/develop/components.md), and [instructions](pages/develop/instructions.md)
-- [Deploy to the cloud](pages/deploy/cloud.md) or [self-host](pages/deploy/self_hosting.md) your apps
+- [Deploy to the cloud](pages/deploy/cloud.md) or [run locally](pages/deploy/local_development.md)
 - [Secure](pages/deploy/security.md) your apps with token-based authentication
 - [Connect your agents](pages/connect/agents.md) to running applications
-- [Tunnel via SSH](pages/connect/ssh.md) to debug and patch deployed apps live
 - Explore Statespace's [CLI](pages/reference/cli.md) and [REST API](pages/reference/api.md)

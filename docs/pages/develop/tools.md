@@ -116,13 +116,14 @@ tools:
 ---
 ```
 
-You can set secrets for a deployed app with the [CLI](../reference/cli.md):
+Pass them with the [CLI](../reference/cli.md) when serving locally or deploying:
 
 ```console
-$ statespace secrets set --app <APP> USER=admin DB=mydb
+$ statespace serve|deploy --env USER=admin --env DB=mydb
+$ statespace serve|deploy --env-file .env
 ```
 
-Or pass them in the request body of [tool calls](../reference/api.md#post):
+You can also pass them in the request body of [tool calls](../reference/api.md#post):
 
 ```bash
 curl -X POST \
