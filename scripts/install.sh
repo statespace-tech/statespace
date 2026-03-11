@@ -387,7 +387,7 @@ main() {
 
     trap 'rm -rf -- "$TMP_DIR"' EXIT
 
-    ln -sfn -- "$BINARY_NAME" "$BIN_DIR/s2"
+    ln -sfn -- "$BINARY_NAME" "$BIN_DIR/ssp"
 
     info "installed to $BIN_DIR/$BINARY_NAME"
 
