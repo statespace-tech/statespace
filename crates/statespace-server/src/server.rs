@@ -236,13 +236,17 @@ async fn serve_page(
             [
                 (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
                 (header::CACHE_CONTROL, "no-store"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             rendered,
         )
             .into_response()
     } else {
         (
-            [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            [
+                (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            ],
             rendered,
         )
             .into_response()
