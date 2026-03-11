@@ -72,12 +72,6 @@ fn find_next_eval_block(content: &str, start: usize) -> Option<EvalBlock> {
         let code = &content[code_start..code_start + close_pos];
         let block_end = code_start + close_pos + 3; // skip closing ```
 
-        let block_end = if block_end < content.len() && content.as_bytes()[block_end] == b'\n' {
-            block_end + 1
-        } else {
-            block_end
-        };
-
         return Some(EvalBlock {
             range: (abs_fence_start, block_end),
             code: code.trim_end_matches('\n').to_string(),
@@ -415,13 +409,17 @@ mod tests {
     #[test]
     fn component_block_preserves_range() {
         let prefix = "# Title\n\n";
-        let block = "```component\necho hi\n```\n";
+        let block_with_newline = "```component\necho hi\n```\n";
+        let block_without_newline = "```component\necho hi\n```";
         let suffix = "\nMore text\n";
-        let md = format!("{prefix}{block}{suffix}");
+        let md = format!("{prefix}{block_with_newline}{suffix}");
         let blocks = parse_eval_blocks(&md);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].range.0, prefix.len());
-        assert_eq!(blocks[0].range.1, prefix.len() + block.len());
+        assert_eq!(
+            blocks[0].range.1,
+            prefix.len() + block_without_newline.len()
+        );
     }
 
     #[tokio::test]

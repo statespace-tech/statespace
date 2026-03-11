@@ -2,4 +2,4 @@
 //!
 //! Re-exported from the shared `statespace-templates` crate.
 
-pub use statespace_templates::{AGENTS_MD, FAVICON_SVG, OPENGRAPH_PNG, render_page_html};
+pub use statespace_templates::{AGENTS_MD, FAVICON_SVG, OPENGRAPH_PNG};

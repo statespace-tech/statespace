@@ -2,15 +2,12 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-#[cfg(test)]
-use crate::semantics::is_browser_request;
-use crate::semantics::{render_markdown_to_html, wants_html};
 use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode, header},
-    response::{Html, IntoResponse, Response},
+    http::{StatusCode, header},
+    response::{IntoResponse, Response},
     routing::get,
 };
 use statespace_tool_runtime::{
@@ -161,11 +158,10 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 }
 
 async fn index_handler(
-    headers: HeaderMap,
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
 ) -> Response {
-    serve_page("AGENTS.md", &headers, &query_env, &state).await
+    serve_page("AGENTS.md", &query_env, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {
@@ -193,16 +189,14 @@ async fn opengraph_handler(State(state): State<ServerState>) -> Response {
 
 async fn file_handler(
     Path(path): Path<String>,
-    headers: HeaderMap,
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
 ) -> Response {
-    serve_page(&path, &headers, &query_env, &state).await
+    serve_page(&path, &query_env, &state).await
 }
 
 async fn serve_page(
     path: &str,
-    headers: &HeaderMap,
     query_env: &HashMap<String, String>,
     state: &ServerState,
 ) -> Response {
@@ -237,29 +231,12 @@ async fn serve_page(
     )
     .await;
 
-    if wants_html(headers) {
-        if has_eval {
-            (
-                [
-                    (header::CACHE_CONTROL, "no-store"),
-                    (header::VARY, "Accept, User-Agent"),
-                ],
-                Html(render_markdown_to_html(&rendered)),
-            )
-                .into_response()
-        } else {
-            (
-                [(header::VARY, "Accept, User-Agent")],
-                Html(render_markdown_to_html(&rendered)),
-            )
-                .into_response()
-        }
-    } else if has_eval {
+    if has_eval {
         (
             [
                 (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
                 (header::CACHE_CONTROL, "no-store"),
-                (header::VARY, "Accept, User-Agent"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             rendered,
         )
@@ -268,7 +245,7 @@ async fn serve_page(
         (
             [
                 (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
-                (header::VARY, "Accept, User-Agent"),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             rendered,
         )
@@ -406,135 +383,11 @@ mod tests {
     use axum::body;
     use std::collections::HashMap;
 
-    fn headers_with_ua(ua: &str) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::USER_AGENT, ua.parse().unwrap());
-        headers
-    }
-
-    fn headers_with_accept(accept: &str) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::ACCEPT, accept.parse().unwrap());
-        headers
-    }
-
-    fn headers_with_ua_and_accept(ua: &str, accept: &str) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(header::USER_AGENT, ua.parse().unwrap());
-        headers.insert(header::ACCEPT, accept.parse().unwrap());
-        headers
-    }
-
     async fn response_text(response: Response) -> String {
         let bytes = body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         String::from_utf8_lossy(&bytes).to_string()
-    }
-
-    #[test]
-    fn browser_detected_chrome() {
-        let h = headers_with_ua(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        );
-        assert!(is_browser_request(&h));
-    }
-
-    #[test]
-    fn browser_detected_firefox() {
-        let h = headers_with_ua(
-            "Mozilla/5.0 (X11; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
-        );
-        assert!(is_browser_request(&h));
-    }
-
-    #[test]
-    fn browser_detected_safari() {
-        let h = headers_with_ua(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-        );
-        assert!(is_browser_request(&h));
-    }
-
-    #[test]
-    fn not_browser_curl() {
-        let h = headers_with_ua("curl/8.4.0");
-        assert!(!is_browser_request(&h));
-    }
-
-    #[test]
-    fn not_browser_python_requests() {
-        let h = headers_with_ua("python-requests/2.31.0");
-        assert!(!is_browser_request(&h));
-    }
-
-    #[test]
-    fn not_browser_go_http() {
-        let h = headers_with_ua("Go-http-client/2.0");
-        assert!(!is_browser_request(&h));
-    }
-
-    #[test]
-    fn not_browser_missing_ua() {
-        let h = HeaderMap::new();
-        assert!(!is_browser_request(&h));
-    }
-
-    #[test]
-    fn not_browser_mozilla_only() {
-        let h = headers_with_ua("Mozilla/5.0");
-        assert!(!is_browser_request(&h));
-    }
-
-    #[test]
-    fn wants_html_accept_text_html() {
-        let h = headers_with_accept("text/html,application/xhtml+xml,*/*;q=0.8");
-        assert!(wants_html(&h));
-    }
-
-    #[test]
-    fn wants_html_accept_text_markdown() {
-        let h = headers_with_accept("text/markdown");
-        assert!(!wants_html(&h));
-    }
-
-    #[test]
-    fn wants_html_accept_text_plain() {
-        let h = headers_with_accept("text/plain");
-        assert!(!wants_html(&h));
-    }
-
-    #[test]
-    fn wants_html_accept_wildcard_with_browser_ua() {
-        let h = headers_with_ua_and_accept("Mozilla/5.0 Chrome/120.0.0.0 Safari/537.36", "*/*");
-        assert!(wants_html(&h));
-    }
-
-    #[test]
-    fn wants_html_accept_wildcard_with_curl_ua() {
-        let h = headers_with_ua_and_accept("curl/8.4.0", "*/*");
-        assert!(!wants_html(&h));
-    }
-
-    #[test]
-    fn wants_html_no_headers() {
-        let h = HeaderMap::new();
-        assert!(!wants_html(&h));
-    }
-
-    #[test]
-    fn markdown_renders_to_html() {
-        let result = render_markdown_to_html("# Hello\n\nworld");
-        assert!(result.contains("<h1>Hello</h1>"));
-        assert!(result.contains("<p>world</p>"));
-        assert!(result.contains("<!DOCTYPE html>"));
-    }
-
-    #[test]
-    fn markdown_sanitizes_script_tags() {
-        let result = render_markdown_to_html("<script>alert('xss')</script>");
-        assert!(!result.contains("<script>"));
-        assert!(!result.contains("alert('xss')"));
     }
 
     #[tokio::test]
@@ -548,9 +401,8 @@ mod tests {
 
         let config = ServerConfig::new(dir.path().to_path_buf());
         let state = ServerState::from_config(&config).unwrap();
-        let headers = headers_with_accept("text/markdown");
 
-        let response = serve_page("README.md", &headers, &HashMap::new(), &state).await;
+        let response = serve_page("README.md", &HashMap::new(), &state).await;
         assert_eq!(response.status(), StatusCode::OK);
 
         let cache_control = response
@@ -571,17 +423,16 @@ mod tests {
 
         let config = ServerConfig::new(dir.path().to_path_buf());
         let state = ServerState::from_config(&config).unwrap();
-        let headers = headers_with_accept("text/markdown");
         let query = HashMap::from([
             ("USER_ID".to_string(), "42".to_string()),
             ("PAGE".to_string(), "stats".to_string()),
         ]);
 
-        let response = serve_page("README.md", &headers, &query, &state).await;
+        let response = serve_page("README.md", &query, &state).await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&body), "42/stats");
+        assert_eq!(String::from_utf8_lossy(&body).trim_end(), "42/stats");
     }
 
     #[tokio::test]
@@ -598,14 +449,13 @@ mod tests {
             "trusted".to_string(),
         )]));
         let state = ServerState::from_config(&config).unwrap();
-        let headers = headers_with_accept("text/markdown");
         let query = HashMap::from([("USER_ID".to_string(), "untrusted".to_string())]);
 
-        let response = serve_page("README.md", &headers, &query, &state).await;
+        let response = serve_page("README.md", &query, &state).await;
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(String::from_utf8_lossy(&body), "trusted");
+        assert_eq!(String::from_utf8_lossy(&body).trim_end(), "trusted");
     }
 
     #[tokio::test]
@@ -615,10 +465,9 @@ mod tests {
 
         let config = ServerConfig::new(dir.path().to_path_buf());
         let state = ServerState::from_config(&config).unwrap();
-        let headers = headers_with_accept("text/markdown");
         let query = HashMap::from([("A=B".to_string(), "1".to_string())]);
 
-        let response = serve_page("README.md", &headers, &query, &state).await;
+        let response = serve_page("README.md", &query, &state).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -629,10 +478,9 @@ mod tests {
 
         let config = ServerConfig::new(dir.path().to_path_buf());
         let state = ServerState::from_config(&config).unwrap();
-        let headers = headers_with_accept("text/markdown");
         let query = HashMap::from([("USER_ID".to_string(), "abc\0def".to_string())]);
 
-        let response = serve_page("README.md", &headers, &query, &state).await;
+        let response = serve_page("README.md", &query, &state).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
