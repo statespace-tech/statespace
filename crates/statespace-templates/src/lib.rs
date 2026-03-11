@@ -12,8 +12,8 @@ mod tests {
 
     #[test]
     fn agents_md_contains_instructions() {
-        assert!(AGENTS_MD.contains("Quick Start"));
-        assert!(AGENTS_MD.contains("Execute tools"));
+        assert!(AGENTS_MD.contains("App instructions"));
+        assert!(AGENTS_MD.contains("Quick start"));
     }
 
     #[test]
