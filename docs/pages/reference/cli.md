@@ -37,7 +37,7 @@ statespace deploy [OPTIONS] [PATH]
 : Application name (default: randomly generated on first run, then reused from `.statespace/state.json`)
 
 `--visibility`
-: Application visibility: `public` or `private` (defaults: private for paid-tier, public for free-tier)
+: Application visibility: `public` or `private` (default: public on free-tier, otherwise private)
 
 `--env, -e`
 : Environment variables for component blocks (`KEY=VALUE`, can be specified multiple times)

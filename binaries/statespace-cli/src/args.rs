@@ -128,7 +128,7 @@ pub(crate) struct AppSyncArgs {
     /// Directory to sync. If omitted, creates an empty application.
     pub path: Option<PathBuf>,
 
-    /// Application visibility (defaults: private for paid-tier, public for free-tier).
+    /// Application visibility (default: public on free-tier, otherwise private).
     #[arg(long, value_enum)]
     pub visibility: Option<Visibility>,
 

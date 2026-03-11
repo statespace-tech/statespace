@@ -29,8 +29,8 @@ Creating 'myapp'...
 Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md#access-tokens)):
 
 ```console
-$ statespace deploy ./myapp --public
-$ statespace deploy ./myapp --private
+$ statespace deploy ./myapp --visibility public
+$ statespace deploy ./myapp --visibility private
 ```
 
 To access **private** apps, include the token in the `Authorization` header:
