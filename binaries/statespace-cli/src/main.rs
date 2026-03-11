@@ -9,7 +9,7 @@ mod state;
 
 use args::{AppCommands, Cli, Commands};
 use clap::Parser;
-use config::resolve_credentials;
+use config::{CredentialOverrides, resolve_config_path, resolve_credentials};
 use error::Result;
 use gateway::GatewayClient;
 
@@ -22,23 +22,36 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let Cli {
+        api_key,
+        org_id,
+        api_url,
+        config,
+        command,
+    } = Cli::parse();
+
+    let config_path = resolve_config_path(config.as_deref());
 
     let build_gateway = || -> Result<GatewayClient> {
         let creds = resolve_credentials(
-            cli.api_url.as_deref(),
-            cli.api_key.as_deref(),
-            cli.org_id.as_deref(),
+            CredentialOverrides {
+                api_url: api_url.as_deref(),
+                api_key: api_key.as_deref(),
+                org_id: org_id.as_deref(),
+            },
+            &config_path,
         )?;
         GatewayClient::new(creds)
     };
 
-    match cli.command {
-        Commands::Auth { command } => commands::auth::run(command, cli.api_url.as_deref()).await,
+    match command {
+        Commands::Auth { command } => {
+            commands::auth::run(command, api_url.as_deref(), &config_path).await
+        }
 
         Commands::Deploy(args) => commands::sync::run_sync(args, build_gateway()?).await,
 
-        Commands::Serve(args) => commands::serve::run_serve(args).await,
+        Commands::Serve(args) => commands::serve::run_serve(args, &config_path).await,
 
         Commands::App { command } => match command {
             AppCommands::Deploy(args) => commands::sync::run_sync(args, build_gateway()?).await,
@@ -51,11 +64,11 @@ async fn run() -> Result<()> {
 
         Commands::Tokens { command } => commands::tokens::run(command, build_gateway()?).await,
 
-        Commands::Secrets { command } => commands::secrets::run(command, build_gateway()?).await,
-
         #[cfg(feature = "ssh")]
         Commands::Ssh { command } => match command {
-            args::SshCommands::Setup { yes } => commands::ssh_config::run_setup(yes).await,
+            args::SshCommands::Setup { yes } => {
+                commands::ssh_config::run_setup(yes, &config_path).await
+            }
             args::SshCommands::Uninstall { yes } => commands::ssh_config::run_uninstall(yes),
             args::SshCommands::Keys { command } => {
                 commands::ssh_key::run(command, build_gateway()?).await

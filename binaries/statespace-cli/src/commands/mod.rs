@@ -1,6 +1,5 @@
 pub(crate) mod app;
 pub(crate) mod auth;
-pub(crate) mod secrets;
 pub(crate) mod serve;
 #[cfg(feature = "ssh")]
 pub(crate) mod ssh;

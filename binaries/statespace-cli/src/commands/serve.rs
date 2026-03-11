@@ -1,10 +1,12 @@
 use crate::args::ServeArgs;
+use crate::config::load_config;
 use crate::error::{Error, Result};
 use statespace_server::{ServerConfig, build_router, initialize_templates};
 use std::collections::HashMap;
+use std::path::Path;
 use tokio::net::TcpListener;
 
-pub(crate) async fn run_serve(args: ServeArgs) -> Result<()> {
+pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()> {
     let dir = args
         .path
         .canonicalize()
@@ -14,7 +16,8 @@ pub(crate) async fn run_serve(args: ServeArgs) -> Result<()> {
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
     }
 
-    let env = parse_env_vars(&args.env_vars, args.env_file.as_deref()).await?;
+    let config_env = load_config(config_path)?.map(|c| c.env).unwrap_or_default();
+    let env = parse_env_vars(config_env, &args.env_vars, args.env_file.as_deref()).await?;
 
     let config = ServerConfig::new(dir)
         .with_host(args.host)
@@ -42,11 +45,10 @@ pub(crate) async fn run_serve(args: ServeArgs) -> Result<()> {
 }
 
 async fn parse_env_vars(
+    mut env: HashMap<String, String>,
     flags: &[String],
     file: Option<&std::path::Path>,
 ) -> Result<HashMap<String, String>> {
-    let mut env = HashMap::new();
-
     if let Some(path) = file {
         let content = tokio::fs::read_to_string(path).await.map_err(|e| {
             Error::cli(format!("Failed to read env file '{}': {e}", path.display()))
@@ -96,7 +98,9 @@ mod tests {
         writeln!(f, "  # another comment").unwrap();
         writeln!(f, "API_KEY=sk_test_123").unwrap();
 
-        let result = parse_env_vars(&[], Some(f.path())).await.unwrap();
+        let result = parse_env_vars(HashMap::new(), &[], Some(f.path()))
+            .await
+            .unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result["DB"], "postgres://localhost/test");
         assert_eq!(result["API_KEY"], "sk_test_123");
@@ -108,13 +112,36 @@ mod tests {
         writeln!(f, "DB=from_file").unwrap();
 
         let flags = vec!["DB=from_flag".to_string()];
-        let result = parse_env_vars(&flags, Some(f.path())).await.unwrap();
+        let result = parse_env_vars(HashMap::new(), &flags, Some(f.path()))
+            .await
+            .unwrap();
         assert_eq!(result["DB"], "from_flag");
     }
 
     #[tokio::test]
+    async fn merge_order_is_flags_then_file_then_config() {
+        let mut f = NamedTempFile::new().unwrap();
+        writeln!(f, "A=from_file").unwrap();
+        writeln!(f, "B=from_file").unwrap();
+
+        let mut config_env = HashMap::new();
+        config_env.insert("A".to_string(), "from_config".to_string());
+        config_env.insert("C".to_string(), "from_config".to_string());
+
+        let flags = vec!["A=from_flag".to_string(), "D=from_flag".to_string()];
+        let result = parse_env_vars(config_env, &flags, Some(f.path()))
+            .await
+            .unwrap();
+
+        assert_eq!(result["A"], "from_flag");
+        assert_eq!(result["B"], "from_file");
+        assert_eq!(result["C"], "from_config");
+        assert_eq!(result["D"], "from_flag");
+    }
+
+    #[tokio::test]
     async fn invalid_flag_format_returns_error() {
-        let result = parse_env_vars(&["NO_EQUALS".to_string()], None).await;
+        let result = parse_env_vars(HashMap::new(), &["NO_EQUALS".to_string()], None).await;
         assert!(result.is_err());
     }
 
@@ -124,7 +151,7 @@ mod tests {
         writeln!(f, "GOOD=value").unwrap();
         writeln!(f, "bad line no equals").unwrap();
 
-        let result = parse_env_vars(&[], Some(f.path())).await;
+        let result = parse_env_vars(HashMap::new(), &[], Some(f.path())).await;
         assert!(result.is_err());
     }
 }

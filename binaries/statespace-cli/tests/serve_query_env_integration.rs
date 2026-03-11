@@ -101,6 +101,29 @@ fn spawn_server(content_dir: &Path, extra_args: &[&str]) -> TestResult<(ChildGua
     Ok((ChildGuard { child }, base_url))
 }
 
+fn spawn_server_owned(
+    content_dir: &Path,
+    extra_args: &[String],
+) -> TestResult<(ChildGuard, String)> {
+    let bin = statespace_bin_path()?;
+
+    let mut cmd = Command::new(bin);
+    cmd.arg("serve")
+        .arg(content_dir)
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg("0")
+        .args(extra_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn()?;
+    let base_url = wait_for_base_url(&mut child)?;
+    Ok((ChildGuard { child }, base_url))
+}
+
 async fn wait_until_ready(base_url: &str) -> TestResult {
     let client = reqwest::Client::new();
 
@@ -154,6 +177,39 @@ async fn statespace_serve_trusted_env_overrides_query_params() -> TestResult {
         .await?;
 
     assert_eq!(body.trim(), "trusted");
+    Ok(())
+}
+
+#[tokio::test]
+async fn statespace_serve_loads_config_env_and_preserves_precedence() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join("README.md"),
+        "```component\nprintf '%s|%s' \"$USER_ID\" \"$FROM_CONFIG\"\n```\n",
+    )?;
+
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[env]\nUSER_ID = \"from_config\"\nFROM_CONFIG = \"yes\"\n",
+    )?;
+
+    let extra_args = vec![
+        "--config".to_string(),
+        config_path.to_string_lossy().to_string(),
+        "--env".to_string(),
+        "USER_ID=from_flag".to_string(),
+    ];
+
+    let (_server, base_url) = spawn_server_owned(dir.path(), &extra_args)?;
+    wait_until_ready(&base_url).await?;
+
+    let body = reqwest::get(format!("{base_url}/README.md?USER_ID=from_query"))
+        .await?
+        .text()
+        .await?;
+
+    assert_eq!(body.trim(), "from_flag|yes");
     Ok(())
 }
 

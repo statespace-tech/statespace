@@ -21,8 +21,8 @@ Host *.statespace
 # --- END STATESPACE MANAGED ---
 ";
 
-pub(crate) async fn run_setup(yes: bool) -> Result<()> {
-    let Some(stored) = load_stored_credentials()? else {
+pub(crate) async fn run_setup(yes: bool, config_path: &Path) -> Result<()> {
+    let Some(stored) = load_stored_credentials(config_path)? else {
         eprintln!("Not logged in. Run 'statespace auth login' first.");
         std::process::exit(1);
     };
