@@ -2,7 +2,7 @@ use crate::args::ServeArgs;
 use crate::config::load_config;
 use crate::error::{Error, Result};
 use statespace_server::{ServerConfig, build_router, initialize_templates};
-use statespace_tool_runtime::{SandboxEnv, parse_frontmatter};
+use statespace_tool_runtime::{SandboxEnv, parse_frontmatter, validate_env_map};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
 use std::path::Path;
@@ -164,6 +164,9 @@ async fn parse_env_vars(
         }
     }
 
+    validate_env_map(&env)
+        .map_err(|e| Error::cli(format!("Invalid serve environment configuration: {e}")))?;
+
     Ok(env)
 }
 
@@ -238,6 +241,15 @@ mod tests {
         writeln!(f, "bad line no equals").unwrap();
 
         let result = parse_env_vars(HashMap::new(), &[], Some(f.path())).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn invalid_env_key_returns_error() {
+        let mut config_env = HashMap::new();
+        config_env.insert("USER-ID".to_string(), "42".to_string());
+
+        let result = parse_env_vars(config_env, &[], None).await;
         assert!(result.is_err());
     }
 

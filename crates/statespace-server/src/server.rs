@@ -14,8 +14,9 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor, eval,
-    expand_env_vars, expand_placeholders, parse_frontmatter, validate_command_with_specs,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor,
+    ToolPart, ToolSpec, eval, expand_env_vars, expand_placeholders, parse_frontmatter,
+    validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -199,20 +200,14 @@ async fn file_handler(
     serve_page(&path, &headers, &query_env, &state).await
 }
 
-fn has_invalid_query_env_entry(query_env: &HashMap<String, String>) -> bool {
-    query_env.iter().any(|(key, value)| {
-        key.is_empty() || key.contains('=') || key.contains('\0') || value.contains('\0')
-    })
-}
-
 async fn serve_page(
     path: &str,
     headers: &HeaderMap,
     query_env: &HashMap<String, String>,
     state: &ServerState,
 ) -> Response {
-    if has_invalid_query_env_entry(query_env) {
-        return (StatusCode::BAD_REQUEST, "Invalid query parameter").into_response();
+    if let Err(e) = validate_env_map(query_env) {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
@@ -302,6 +297,77 @@ fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
     (status, Json(response)).into_response()
 }
 
+fn command_matches_spec(command: &[String], spec: &ToolSpec) -> bool {
+    if command.len() < spec.parts.len() {
+        return false;
+    }
+
+    if command.len() > spec.parts.len() && spec.options_disabled {
+        return false;
+    }
+
+    for (index, part) in spec.parts.iter().enumerate() {
+        let command_part = &command[index];
+
+        match part {
+            ToolPart::Literal(literal) => {
+                if command_part != literal {
+                    return false;
+                }
+            }
+            ToolPart::Placeholder { regex: None } => {}
+            ToolPart::Placeholder {
+                regex: Some(compiled),
+            } => {
+                if !compiled.regex.is_match(command_part) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
+fn find_matching_spec<'a>(command: &[String], specs: &'a [ToolSpec]) -> Option<&'a ToolSpec> {
+    specs
+        .iter()
+        .find(|spec| command_matches_spec(command, spec))
+}
+
+fn expand_literal_segment(segment: &str, env: &HashMap<String, String>) -> String {
+    let mut expanded = segment.to_string();
+    for (key, value) in env {
+        let variable = format!("${key}");
+        expanded = expanded.replace(&variable, value);
+    }
+    expanded
+}
+
+fn expand_command_for_execution(
+    command: &[String],
+    specs: &[ToolSpec],
+    env: &HashMap<String, String>,
+) -> Vec<String> {
+    // Only spec-declared literal segments are eligible for trusted env expansion.
+    // Placeholder-derived values stay opaque so callers cannot smuggle `$SECRET`
+    // into flexible args and force secret expansion at runtime.
+    if let Some(spec) = find_matching_spec(command, specs) {
+        return command
+            .iter()
+            .enumerate()
+            .map(|(index, part)| match spec.parts.get(index) {
+                Some(ToolPart::Literal(literal)) if literal == part && literal.contains('$') => {
+                    expand_literal_segment(part, env)
+                }
+                _ => part.clone(),
+            })
+            .collect();
+    }
+
+    expand_env_vars(command, env)
+}
+
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {
     if let Err(msg) = request.validate() {
         return error_response(StatusCode::BAD_REQUEST, &msg);
@@ -322,13 +388,19 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
         Err(e) => return error_to_action_response(&e),
     };
 
-    let expanded_command = expand_placeholders(&request.command, &request.args);
-    let expanded_command = expand_env_vars(&expanded_command, &request.env);
+    let command_with_placeholders = expand_placeholders(&request.command, &request.args);
+    let merged_env = eval::merge_eval_env(state.env.as_ref(), &request.env);
+    let expanded_command =
+        expand_command_for_execution(&command_with_placeholders, &frontmatter.specs, &merged_env);
 
-    if let Err(e) = validate_command_with_specs(&frontmatter.specs, &expanded_command) {
+    let validation_result =
+        validate_command_with_specs(&frontmatter.specs, &command_with_placeholders)
+            .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
+
+    if let Err(e) = validation_result {
         warn!(
-            "Command not allowed by frontmatter: {:?} (file: {})",
-            expanded_command, path
+            "Command not allowed by frontmatter: {:?} (expanded: {:?}, file: {})",
+            command_with_placeholders, expanded_command, path
         );
         return error_to_action_response(&e);
     }
@@ -369,6 +441,7 @@ fn error_response(status: StatusCode, message: &str) -> Response {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use axum::body;
     use std::collections::HashMap;
 
     fn headers_with_ua(ua: &str) -> HeaderMap {
@@ -388,6 +461,13 @@ mod tests {
         headers.insert(header::USER_AGENT, ua.parse().unwrap());
         headers.insert(header::ACCEPT, accept.parse().unwrap());
         headers
+    }
+
+    async fn response_text(response: Response) -> String {
+        let bytes = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8_lossy(&bytes).to_string()
     }
 
     #[test]
@@ -592,5 +672,66 @@ mod tests {
 
         let response = serve_page("README.md", &headers, &query, &state).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn action_expands_trusted_literal_env_segments() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "---\ntools:\n  - [echo, $DATABASE_URL]\n---\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf())
+            .with_env(HashMap::from([(
+                "DATABASE_URL".to_string(),
+                "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
+            )]))
+            .with_sandbox_env(SandboxEnv::from_host_process());
+        let state = ServerState::from_config(&config).unwrap();
+
+        let request = ActionRequest {
+            command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
+            args: HashMap::new(),
+            env: HashMap::new(),
+        };
+
+        let response = execute_action("README.md", &state, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+    }
+
+    #[tokio::test]
+    async fn action_does_not_expand_placeholders_into_trusted_env() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("README.md"),
+            "---\ntools:\n  - [echo, { }]\n---\n",
+        )
+        .unwrap();
+
+        let config = ServerConfig::new(dir.path().to_path_buf())
+            .with_env(HashMap::from([(
+                "DATABASE_URL".to_string(),
+                "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
+            )]))
+            .with_sandbox_env(SandboxEnv::from_host_process());
+        let state = ServerState::from_config(&config).unwrap();
+
+        let request = ActionRequest {
+            command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
+            args: HashMap::new(),
+            env: HashMap::new(),
+        };
+
+        let response = execute_action("README.md", &state, request).await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response_text(response).await;
+        assert!(body.contains("$DATABASE_URL"));
+        assert!(!body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
     }
 }
