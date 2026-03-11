@@ -416,7 +416,10 @@ mod tests {
         let blocks = parse_eval_blocks(&md);
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].range.0, prefix.len());
-        assert_eq!(blocks[0].range.1, prefix.len() + block_without_newline.len());
+        assert_eq!(
+            blocks[0].range.1,
+            prefix.len() + block_without_newline.len()
+        );
     }
 
     #[tokio::test]
