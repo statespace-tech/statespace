@@ -12,7 +12,7 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::Duration;
 
 const USER_AGENT: &str = concat!("statespace-cli/", env!("CARGO_PKG_VERSION"));
@@ -71,14 +71,11 @@ impl GatewayClient {
         }
     }
 
-    pub(crate) fn scan_markdown_files(dir: &Path) -> Result<Vec<ApplicationFile>> {
+    pub(crate) fn scan_deploy_files(dir: &Path) -> Result<Vec<ApplicationFile>> {
         let mut files = Vec::new();
 
         for path in collect_files(dir)? {
             if !path.is_file() {
-                continue;
-            }
-            if path.extension().and_then(|s| s.to_str()) != Some("md") {
                 continue;
             }
 
@@ -342,9 +339,27 @@ impl GatewayClient {
     }
 }
 
+fn is_ignored_deploy_path(root: &Path, path: &Path) -> bool {
+    const IGNORED_DIRS: [&str; 2] = [".git", ".statespace"];
+
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+
+    relative.components().any(|component| match component {
+        Component::Normal(name) => IGNORED_DIRS
+            .iter()
+            .any(|ignored| name == std::ffi::OsStr::new(ignored)),
+        _ => false,
+    })
+}
+
 fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     let mut results = Vec::new();
-    for entry in walkdir::WalkDir::new(dir) {
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_deploy_path(dir, entry.path()))
+    {
         let entry = entry
             .map_err(|e| crate::error::Error::cli(format!("Failed to walk directory: {e}")))?;
         if entry.file_type().is_file() {
@@ -496,5 +511,56 @@ impl AuthClient {
             .await?;
 
         parse_api_response(resp).await
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn write_file(dir: &TempDir, rel_path: &str, bytes: &[u8]) {
+        let path = dir.path().join(rel_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create parent directory");
+        }
+        std::fs::write(path, bytes).expect("write file");
+    }
+
+    #[test]
+    fn scan_deploy_files_includes_non_markdown_files() {
+        let dir = TempDir::new().expect("tempdir");
+        write_file(&dir, "README.md", b"# Hello");
+        write_file(&dir, "assets/logo.bin", &[0, 1, 2, 3]);
+        write_file(&dir, "data/config.json", br#"{"key":"value"}"#);
+
+        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+
+        assert_eq!(
+            paths,
+            vec!["README.md", "assets/logo.bin", "data/config.json"]
+        );
+
+        let logo = files
+            .iter()
+            .find(|file| file.path == "assets/logo.bin")
+            .expect("logo file should be present");
+        let decoded = BASE64.decode(&logo.content).expect("decode base64 content");
+        assert_eq!(decoded, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn scan_deploy_files_excludes_internal_metadata_directories() {
+        let dir = TempDir::new().expect("tempdir");
+        write_file(&dir, "README.md", b"# Hello");
+        write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
+        write_file(&dir, ".git/config", b"[core]");
+
+        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+
+        assert_eq!(paths, vec!["README.md"]);
     }
 }
