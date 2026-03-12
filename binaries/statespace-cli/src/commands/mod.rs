@@ -7,5 +7,5 @@ pub(crate) mod ssh;
 pub(crate) mod ssh_config;
 #[cfg(feature = "ssh")]
 pub(crate) mod ssh_key;
-pub(crate) mod sync;
+pub(crate) mod deploy;
 pub(crate) mod tokens;
