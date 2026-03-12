@@ -7,20 +7,21 @@ use std::path::Path;
 const STATE_DIR: &str = ".statespace";
 const STATE_FILE: &str = "state.json";
 
-/// Local sync state stored in `.statespace/state.json` within the project directory.
+/// Local deploy state stored in `.statespace/state.json` within the project directory.
 /// Enables incremental deploys by caching deployment IDs and file checksums.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SyncState {
+pub(crate) struct DeployState {
     pub deployment_id: String,
     pub name: String,
     pub url: Option<String>,
     pub auth_token: Option<String>,
-    pub last_synced: DateTime<Utc>,
+    #[serde(alias = "last_synced")]
+    pub last_deployed: DateTime<Utc>,
     #[serde(default)]
     pub checksums: HashMap<String, String>,
 }
 
-impl SyncState {
+impl DeployState {
     pub(crate) fn new(
         deployment_id: String,
         name: String,
@@ -32,14 +33,14 @@ impl SyncState {
             name,
             url,
             auth_token,
-            last_synced: Utc::now(),
+            last_deployed: Utc::now(),
             checksums: HashMap::new(),
         }
     }
 
     pub(crate) fn with_checksums(mut self, files: &[(String, String)]) -> Self {
         self.checksums = files.iter().cloned().collect();
-        self.last_synced = Utc::now();
+        self.last_deployed = Utc::now();
         self
     }
 }
@@ -52,7 +53,7 @@ fn state_dir_path(project_dir: &Path) -> std::path::PathBuf {
     project_dir.join(STATE_DIR)
 }
 
-pub(crate) fn load_state(project_dir: &Path) -> Result<Option<SyncState>> {
+pub(crate) fn load_state(project_dir: &Path) -> Result<Option<DeployState>> {
     let path = state_file_path(project_dir);
 
     if !path.exists() {
@@ -66,7 +67,7 @@ pub(crate) fn load_state(project_dir: &Path) -> Result<Option<SyncState>> {
         ))
     })?;
 
-    let state: SyncState = serde_json::from_str(&content).map_err(|e| {
+    let state: DeployState = serde_json::from_str(&content).map_err(|e| {
         Error::cli(format!(
             "Failed to parse state file '{}': {e}",
             path.display()
@@ -76,7 +77,7 @@ pub(crate) fn load_state(project_dir: &Path) -> Result<Option<SyncState>> {
     Ok(Some(state))
 }
 
-pub(crate) fn save_state(project_dir: &Path, state: &SyncState) -> Result<()> {
+pub(crate) fn save_state(project_dir: &Path, state: &DeployState) -> Result<()> {
     let dir_path = state_dir_path(project_dir);
     let file_path = state_file_path(project_dir);
 
@@ -124,8 +125,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_state_new() {
-        let state = SyncState::new(
+    fn test_deploy_state_new() {
+        let state = DeployState::new(
             "abc123".to_string(),
             "my-app".to_string(),
             Some("https://example.com".to_string()),
@@ -138,8 +139,8 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_state_with_checksums() {
-        let state = SyncState::new("abc123".to_string(), "my-app".to_string(), None, None);
+    fn test_deploy_state_with_checksums() {
+        let state = DeployState::new("abc123".to_string(), "my-app".to_string(), None, None);
 
         let files = vec![
             ("README.md".to_string(), "sha256:abc".to_string()),
@@ -165,7 +166,7 @@ mod tests {
     fn test_save_and_load_state() {
         let dir = TempDir::new().unwrap();
 
-        let state = SyncState::new(
+        let state = DeployState::new(
             "abc123".to_string(),
             "my-app".to_string(),
             Some("https://example.com".to_string()),
@@ -184,7 +185,7 @@ mod tests {
     fn test_save_creates_gitignore() {
         let dir = TempDir::new().unwrap();
 
-        let state = SyncState::new("abc123".to_string(), "my-app".to_string(), None, None);
+        let state = DeployState::new("abc123".to_string(), "my-app".to_string(), None, None);
 
         save_state(dir.path(), &state).unwrap();
 

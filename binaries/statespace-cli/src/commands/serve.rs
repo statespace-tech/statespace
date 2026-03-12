@@ -33,6 +33,12 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
 
     initialize_templates(&config.content_root).await?;
 
+    if !config.content_root.join("README.md").is_file() {
+        return Err(Error::cli(
+            "README.md not found. Create it before serving your app.".to_string(),
+        ));
+    }
+
     let addr = config.socket_addr();
     let router =
         build_router(&config).map_err(|e| Error::cli(format!("Failed to build router: {e}")))?;

@@ -1,11 +1,12 @@
-use crate::args::AppSyncArgs;
+use crate::args::AppDeployArgs;
 use crate::error::{ApiErrorCode, Error, GatewayError, Result};
 use crate::gateway::GatewayClient;
 use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult, Visibility};
 use crate::names::generate_name;
-use crate::state::{SyncState, load_state, save_state};
+use crate::state::{DeployState, load_state, save_state};
+use statespace_server::initialize_templates;
 
-pub(crate) trait SyncGateway {
+pub(crate) trait DeployGateway {
     fn create_application(
         &self,
         name: &str,
@@ -20,7 +21,7 @@ pub(crate) trait SyncGateway {
     ) -> impl std::future::Future<Output = Result<UpsertResult>> + Send;
 }
 
-impl SyncGateway for GatewayClient {
+impl DeployGateway for GatewayClient {
     async fn create_application(
         &self,
         name: &str,
@@ -46,13 +47,13 @@ enum DeployMode {
 }
 
 #[derive(Debug, Clone)]
-struct SyncTarget {
+struct DeployTarget {
     name: String,
     mode: DeployMode,
 }
 
 #[derive(Debug, Clone)]
-struct SyncResult {
+struct DeployOutcome {
     created: bool,
     id: String,
     name: String,
@@ -60,7 +61,7 @@ struct SyncResult {
     auth_token: Option<String>,
 }
 
-impl SyncResult {
+impl DeployOutcome {
     fn from_create(name: String, result: DeployResult) -> Self {
         Self {
             created: true,
@@ -82,7 +83,7 @@ impl SyncResult {
     }
 }
 
-pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Result<()> {
+pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway) -> Result<()> {
     let visibility = args.visibility;
 
     match args.path {
@@ -109,10 +110,24 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
             Ok(())
         }
         Some(path) => {
-            // Sync files from directory
+            // Deploy files from directory
             let dir = path.canonicalize().map_err(|e| {
                 crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
             })?;
+
+            if !dir.is_dir() {
+                return Err(Error::cli(format!("Not a directory: {}", dir.display())));
+            }
+
+            initialize_templates(&dir)
+                .await
+                .map_err(|e| Error::cli(format!("Failed to initialize templates: {e}")))?;
+
+            if !dir.join("README.md").is_file() {
+                return Err(Error::cli(
+                    "README.md not found. Create it before deploying your app.".to_string(),
+                ));
+            }
 
             let cached = load_state(&dir)?;
             let target = resolve_target(args.name, cached.as_ref());
@@ -143,14 +158,14 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
                             .any(|(p, c)| prev_map.get(p.as_str()) != Some(&c.as_str()));
 
                     if !changed {
-                        eprintln!("No changes detected, skipping sync.");
+                        eprintln!("No changes detected, skipping deploy.");
                         return Ok(());
                     }
                 }
             }
 
             eprintln!(
-                "Syncing {} file{} to '{}'...",
+                "Deploying {} file{} to '{}'...",
                 files.len(),
                 if files.len() == 1 { "" } else { "s" },
                 target.name
@@ -162,11 +177,11 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
                         .create_application(&target.name, files, visibility)
                         .await
                         .map_err(|error| map_create_error(error, &target.name))?;
-                    SyncResult::from_create(target.name.clone(), create_result)
+                    DeployOutcome::from_create(target.name.clone(), create_result)
                 }
                 DeployMode::Upsert => {
                     let upsert_result = gateway.upsert_application(&target.name, files).await?;
-                    SyncResult::from_upsert(upsert_result)
+                    DeployOutcome::from_upsert(upsert_result)
                 }
             };
 
@@ -177,7 +192,7 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
                 eprintln!("URL: {url}");
             }
 
-            let state = SyncState::new(result.id, result.name, result.url, result.auth_token)
+            let state = DeployState::new(result.id, result.name, result.url, result.auth_token)
                 .with_checksums(&checksums);
 
             save_state(&dir, &state)?;
@@ -187,7 +202,7 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
     }
 }
 
-fn resolve_target(explicit_name: Option<String>, cached: Option<&SyncState>) -> SyncTarget {
+fn resolve_target(explicit_name: Option<String>, cached: Option<&DeployState>) -> DeployTarget {
     match explicit_name {
         Some(name) => {
             let mode = if cached.is_some_and(|state| state.name == name) {
@@ -195,14 +210,14 @@ fn resolve_target(explicit_name: Option<String>, cached: Option<&SyncState>) -> 
             } else {
                 DeployMode::Create
             };
-            SyncTarget { name, mode }
+            DeployTarget { name, mode }
         }
         None => match cached {
-            Some(state) => SyncTarget {
+            Some(state) => DeployTarget {
                 name: state.name.clone(),
                 mode: DeployMode::Upsert,
             },
-            None => SyncTarget {
+            None => DeployTarget {
                 name: generate_name(),
                 mode: DeployMode::Create,
             },
@@ -240,7 +255,7 @@ mod tests {
     type RecordedCreateCalls = Arc<Mutex<Vec<CreateCall>>>;
     type RecordedUpsertCalls = Arc<Mutex<Vec<UpsertCall>>>;
 
-    struct MockSyncGateway {
+    struct MockDeployGateway {
         create_result: DeployResult,
         upsert_result: UpsertResult,
         fail_create_with_name_taken: bool,
@@ -248,7 +263,7 @@ mod tests {
         upsert_calls: RecordedUpsertCalls,
     }
 
-    impl MockSyncGateway {
+    impl MockDeployGateway {
         fn new(
             create_result: DeployResult,
             upsert_result: UpsertResult,
@@ -266,7 +281,7 @@ mod tests {
         }
     }
 
-    impl SyncGateway for MockSyncGateway {
+    impl DeployGateway for MockDeployGateway {
         async fn create_application(
             &self,
             name: &str,
@@ -322,17 +337,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_without_path_creates_empty_app() {
+    async fn deploy_without_path_creates_empty_app() {
         let (mock, create_calls, upsert_calls) =
-            MockSyncGateway::new(deploy_result("test-app"), upsert_result(false, "unused"));
+            MockDeployGateway::new(deploy_result("test-app"), upsert_result(false, "unused"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: None,
             name: Some("test-app".to_string()),
             visibility: None,
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded = create_calls.lock().expect("lock");
         assert_eq!(recorded.len(), 1);
@@ -342,17 +357,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_without_path_uses_random_name() {
+    async fn deploy_without_path_uses_random_name() {
         let (mock, create_calls, _) =
-            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: None,
             name: None,
             visibility: None,
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded = create_calls.lock().expect("lock");
         assert_eq!(recorded.len(), 1);
@@ -361,17 +376,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_without_path_passes_visibility() {
+    async fn deploy_without_path_passes_visibility() {
         let (mock, create_calls, _) =
-            MockSyncGateway::new(deploy_result("test"), upsert_result(false, "unused"));
+            MockDeployGateway::new(deploy_result("test"), upsert_result(false, "unused"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: None,
             name: Some("test".to_string()),
             visibility: Some(Visibility::Private),
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded = create_calls.lock().expect("lock");
         assert_eq!(recorded.len(), 1);
@@ -379,14 +394,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_with_cached_state_uses_upsert() {
+    async fn deploy_with_cached_state_uses_upsert() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
         let canonical_dir = dir.path().canonicalize().expect("canon");
         save_state(
             &canonical_dir,
-            &SyncState::new(
+            &DeployState::new(
                 "id-1".to_string(),
                 "cached-app".to_string(),
                 Some("https://cached-app.app.statespace.com".to_string()),
@@ -396,15 +411,15 @@ mod tests {
         .expect("save state");
 
         let (mock, create_calls, upsert_calls) =
-            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "cached-app"));
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "cached-app"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
             name: None,
             visibility: None,
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         assert!(create_calls.lock().expect("lock").is_empty());
 
@@ -420,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_with_path_uploads_non_markdown_files() {
+    async fn deploy_with_path_uploads_non_markdown_files() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("assets")).expect("create assets dir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write readme");
@@ -428,15 +443,15 @@ mod tests {
             .expect("write json");
 
         let (mock, create_calls, upsert_calls) =
-            MockSyncGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
+            MockDeployGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
             name: Some("bar".to_string()),
             visibility: None,
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded_creates = create_calls.lock().expect("lock");
         assert_eq!(recorded_creates.len(), 1);
@@ -445,25 +460,26 @@ mod tests {
             .iter()
             .map(|file| file.path.as_str())
             .collect();
-        assert_eq!(uploaded_paths, vec!["README.md", "assets/config.json"]);
+        assert!(uploaded_paths.contains(&"README.md"));
+        assert!(uploaded_paths.contains(&"assets/config.json"));
         assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
-    async fn sync_with_explicit_name_creates_target() {
+    async fn deploy_with_explicit_name_creates_target() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
         let (mock, create_calls, upsert_calls) =
-            MockSyncGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
+            MockDeployGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
             name: Some("bar".to_string()),
             visibility: None,
         };
 
-        run_sync(args, mock).await.expect("run_sync");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded_creates = create_calls.lock().expect("lock");
         assert_eq!(recorded_creates.len(), 1);
@@ -472,21 +488,81 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sync_name_taken_returns_suggestion() {
+    async fn deploy_with_file_path_returns_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("page.md"), "# Hello").expect("write");
+        let file_path = dir.path().join("somefile.txt");
+        std::fs::write(&file_path, "not a dir").expect("write");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(file_path),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected not-a-directory error");
+        assert!(error.to_string().contains("Not a directory"));
+    }
+
+    #[tokio::test]
+    async fn deploy_missing_readme_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected missing README error");
+        assert!(error.to_string().contains("README.md not found"));
+    }
+
+    #[tokio::test]
+    async fn deploy_readme_is_directory_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("README.md")).expect("create README.md dir");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected README.md dir error");
+        assert!(error.to_string().contains("README.md not found"));
+    }
+
+    #[tokio::test]
+    async fn deploy_name_taken_returns_suggestion() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "# Hello").expect("write");
 
         let (mut mock, _, _) =
-            MockSyncGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
         mock.fail_create_with_name_taken = true;
 
-        let args = AppSyncArgs {
+        let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
             name: Some("taken-name".to_string()),
             visibility: None,
         };
 
-        let error = run_sync(args, mock)
+        let error = run_deploy(args, mock)
             .await
             .expect_err("expected taken-name error");
         let message = error.to_string();

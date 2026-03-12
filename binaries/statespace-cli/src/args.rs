@@ -42,7 +42,7 @@ pub(crate) enum Commands {
     },
 
     /// Deploy an app (create or update)
-    Deploy(AppSyncArgs),
+    Deploy(AppDeployArgs),
 
     /// Serve a local app (no account required)
     Serve(ServeArgs),
@@ -91,7 +91,7 @@ pub(crate) enum TokenOutputFormat {
 pub(crate) enum AppCommands {
     /// Deploy an application (create-or-update, alias for top-level deploy)
     #[command(hide = true)]
-    Deploy(AppSyncArgs),
+    Deploy(AppDeployArgs),
 
     /// List all applications
     List,
@@ -124,8 +124,8 @@ pub(crate) struct AppSshArgs {
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct AppSyncArgs {
-    /// Directory to sync. If omitted, creates an empty application.
+pub(crate) struct AppDeployArgs {
+    /// Directory to deploy. If omitted, creates an empty application.
     pub path: Option<PathBuf>,
 
     /// Application visibility (default: public on free-tier, otherwise private).
