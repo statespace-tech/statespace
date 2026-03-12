@@ -340,7 +340,7 @@ impl GatewayClient {
 }
 
 fn is_ignored_deploy_path(root: &Path, path: &Path) -> bool {
-    const IGNORED_DIRS: [&str; 2] = [".git", ".statespace"];
+    const IGNORED_DIRS: [&str; 1] = [".git"];
 
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
@@ -552,10 +552,9 @@ mod tests {
     }
 
     #[test]
-    fn scan_deploy_files_excludes_internal_metadata_directories() {
+    fn scan_deploy_files_excludes_git_directory() {
         let dir = TempDir::new().expect("tempdir");
         write_file(&dir, "README.md", b"# Hello");
-        write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
         write_file(&dir, ".git/config", b"[core]");
 
         let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");

@@ -3,7 +3,6 @@ use crate::error::{ApiErrorCode, Error, GatewayError, Result};
 use crate::gateway::GatewayClient;
 use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult, Visibility};
 use crate::names::generate_name;
-use crate::state::{DeployState, load_state, save_state};
 use statespace_server::initialize_templates;
 
 pub(crate) trait DeployGateway {
@@ -40,55 +39,11 @@ impl DeployGateway for GatewayClient {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeployMode {
-    Create,
-    Upsert,
-}
-
-#[derive(Debug, Clone)]
-struct DeployTarget {
-    name: String,
-    mode: DeployMode,
-}
-
-#[derive(Debug, Clone)]
-struct DeployOutcome {
-    created: bool,
-    id: String,
-    name: String,
-    url: Option<String>,
-    auth_token: Option<String>,
-}
-
-impl DeployOutcome {
-    fn from_create(name: String, result: DeployResult) -> Self {
-        Self {
-            created: true,
-            id: result.id,
-            name,
-            url: result.url,
-            auth_token: result.auth_token,
-        }
-    }
-
-    fn from_upsert(result: UpsertResult) -> Self {
-        Self {
-            created: result.created,
-            id: result.id,
-            name: result.name,
-            url: result.url,
-            auth_token: result.auth_token,
-        }
-    }
-}
-
 pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway) -> Result<()> {
     let visibility = args.visibility;
 
     match args.path {
         None => {
-            // Create empty app (no files, no state file)
             let name = args.name.unwrap_or_else(generate_name);
             eprintln!("Creating empty application '{name}'...");
 
@@ -110,7 +65,6 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
             Ok(())
         }
         Some(path) => {
-            // Deploy files from directory
             let dir = path.canonicalize().map_err(|e| {
                 crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
             })?;
@@ -129,99 +83,43 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                 ));
             }
 
-            let cached = load_state(&dir)?;
-            let target = resolve_target(args.name, cached.as_ref());
-
             let files = GatewayClient::scan_deploy_files(&dir)?;
 
-            if files.is_empty() {
-                eprintln!("No files found in {}", dir.display());
-                return Ok(());
-            }
+            if let Some(name) = args.name {
+                eprintln!(
+                    "Deploying {} file{} to '{name}'...",
+                    files.len(),
+                    if files.len() == 1 { "" } else { "s" },
+                );
 
-            let checksums: Vec<(String, String)> = files
-                .iter()
-                .map(|f| (f.path.clone(), f.checksum.clone()))
-                .collect();
+                let result = gateway.upsert_application(&name, files).await?;
+                let action = if result.created { "Created" } else { "Updated" };
+                eprintln!("{action} application '{}'", result.name);
 
-            if let Some(ref prev) = cached {
-                let same_target = prev.name == target.name;
-                if same_target {
-                    let prev_map: std::collections::HashMap<&str, &str> = prev
-                        .checksums
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), v.as_str()))
-                        .collect();
-                    let changed = checksums.len() != prev.checksums.len()
-                        || checksums
-                            .iter()
-                            .any(|(p, c)| prev_map.get(p.as_str()) != Some(&c.as_str()));
+                if let Some(ref url) = result.url {
+                    eprintln!("URL: {url}");
+                }
+            } else {
+                let name = generate_name();
+                eprintln!(
+                    "Deploying {} file{} to '{name}'...",
+                    files.len(),
+                    if files.len() == 1 { "" } else { "s" },
+                );
 
-                    if !changed {
-                        eprintln!("No changes detected, skipping deploy.");
-                        return Ok(());
-                    }
+                let result = gateway
+                    .create_application(&name, files, visibility)
+                    .await
+                    .map_err(|e| map_create_error(e, &name))?;
+
+                eprintln!("Created application '{name}'");
+                if let Some(ref url) = result.url {
+                    eprintln!("URL: {url}");
                 }
             }
-
-            eprintln!(
-                "Deploying {} file{} to '{}'...",
-                files.len(),
-                if files.len() == 1 { "" } else { "s" },
-                target.name
-            );
-
-            let result = match target.mode {
-                DeployMode::Create => {
-                    let create_result = gateway
-                        .create_application(&target.name, files, visibility)
-                        .await
-                        .map_err(|error| map_create_error(error, &target.name))?;
-                    DeployOutcome::from_create(target.name.clone(), create_result)
-                }
-                DeployMode::Upsert => {
-                    let upsert_result = gateway.upsert_application(&target.name, files).await?;
-                    DeployOutcome::from_upsert(upsert_result)
-                }
-            };
-
-            let action = if result.created { "Created" } else { "Updated" };
-            eprintln!("{action} application '{}'", result.name);
-
-            if let Some(ref url) = result.url {
-                eprintln!("URL: {url}");
-            }
-
-            let state = DeployState::new(result.id, result.name, result.url, result.auth_token)
-                .with_checksums(&checksums);
-
-            save_state(&dir, &state)?;
 
             Ok(())
         }
-    }
-}
-
-fn resolve_target(explicit_name: Option<String>, cached: Option<&DeployState>) -> DeployTarget {
-    match explicit_name {
-        Some(name) => {
-            let mode = if cached.is_some_and(|state| state.name == name) {
-                DeployMode::Upsert
-            } else {
-                DeployMode::Create
-            };
-            DeployTarget { name, mode }
-        }
-        None => match cached {
-            Some(state) => DeployTarget {
-                name: state.name.clone(),
-                mode: DeployMode::Upsert,
-            },
-            None => DeployTarget {
-                name: generate_name(),
-                mode: DeployMode::Create,
-            },
-        },
     }
 }
 
@@ -394,28 +292,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deploy_with_cached_state_uses_upsert() {
+    async fn deploy_with_path_uploads_non_markdown_files() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
-
-        let canonical_dir = dir.path().canonicalize().expect("canon");
-        save_state(
-            &canonical_dir,
-            &DeployState::new(
-                "id-1".to_string(),
-                "cached-app".to_string(),
-                Some("https://cached-app.app.statespace.com".to_string()),
-                None,
-            ),
-        )
-        .expect("save state");
+        std::fs::create_dir_all(dir.path().join("assets")).expect("create assets dir");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write readme");
+        std::fs::write(dir.path().join("assets/config.json"), "{\"enabled\":true}")
+            .expect("write json");
 
         let (mock, create_calls, upsert_calls) =
-            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "cached-app"));
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "bar"));
 
         let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
-            name: None,
+            name: Some("bar".to_string()),
             visibility: None,
         };
 
@@ -425,53 +314,22 @@ mod tests {
 
         let recorded_upserts = upsert_calls.lock().expect("lock");
         assert_eq!(recorded_upserts.len(), 1);
-        assert_eq!(recorded_upserts[0].0, "cached-app");
-
-        let state = load_state(&canonical_dir)
-            .expect("load")
-            .expect("state exists");
-        assert_eq!(state.name, "cached-app");
-        assert_eq!(state.deployment_id, "id-1");
-    }
-
-    #[tokio::test]
-    async fn deploy_with_path_uploads_non_markdown_files() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(dir.path().join("assets")).expect("create assets dir");
-        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write readme");
-        std::fs::write(dir.path().join("assets/config.json"), "{\"enabled\":true}")
-            .expect("write json");
-
-        let (mock, create_calls, upsert_calls) =
-            MockDeployGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
-
-        let args = AppDeployArgs {
-            path: Some(dir.path().to_path_buf()),
-            name: Some("bar".to_string()),
-            visibility: None,
-        };
-
-        run_deploy(args, mock).await.expect("run_deploy");
-
-        let recorded_creates = create_calls.lock().expect("lock");
-        assert_eq!(recorded_creates.len(), 1);
-        let uploaded_paths: Vec<&str> = recorded_creates[0]
+        let uploaded_paths: Vec<&str> = recorded_upserts[0]
             .1
             .iter()
             .map(|file| file.path.as_str())
             .collect();
         assert!(uploaded_paths.contains(&"README.md"));
         assert!(uploaded_paths.contains(&"assets/config.json"));
-        assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
-    async fn deploy_with_explicit_name_creates_target() {
+    async fn deploy_with_explicit_name_upserts() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
         let (mock, create_calls, upsert_calls) =
-            MockDeployGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "bar"));
 
         let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
@@ -481,9 +339,32 @@ mod tests {
 
         run_deploy(args, mock).await.expect("run_deploy");
 
+        assert!(create_calls.lock().expect("lock").is_empty());
+
+        let recorded_upserts = upsert_calls.lock().expect("lock");
+        assert_eq!(recorded_upserts.len(), 1);
+        assert_eq!(recorded_upserts[0].0, "bar");
+    }
+
+    #[tokio::test]
+    async fn deploy_without_name_creates_with_random_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "# Hello").expect("write");
+
+        let (mock, create_calls, upsert_calls) =
+            MockDeployGateway::new(deploy_result("random-name"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: None,
+            visibility: None,
+        };
+
+        run_deploy(args, mock).await.expect("run_deploy");
+
         let recorded_creates = create_calls.lock().expect("lock");
         assert_eq!(recorded_creates.len(), 1);
-        assert_eq!(recorded_creates[0].0, "bar");
+        assert!(recorded_creates[0].0.contains('-'));
         assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
@@ -558,7 +439,7 @@ mod tests {
 
         let args = AppDeployArgs {
             path: Some(dir.path().to_path_buf()),
-            name: Some("taken-name".to_string()),
+            name: None,
             visibility: None,
         };
 
