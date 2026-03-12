@@ -1,0 +1,22 @@
+name: Notify gateway of statespace updates
+
+on:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+jobs:
+  dispatch-gateway:
+    name: Dispatch statespace update to gateway
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    steps:
+      - name: Send repository_dispatch event to gateway
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GATEWAY_REPO_DISPATCH_TOKEN }}
+          repository: statespace-tech/gateway
+          event-type: statespace-main-updated
+          client-payload: >-
+            {"statespace_sha":"${{ github.sha }}","statespace_ref":"${{ github.ref_name }}","source_run_id":"${{ github.run_id }}"}
