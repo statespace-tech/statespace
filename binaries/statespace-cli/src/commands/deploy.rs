@@ -488,6 +488,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deploy_with_file_path_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("somefile.txt");
+        std::fs::write(&file_path, "not a dir").expect("write");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(file_path),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected not-a-directory error");
+        assert!(error.to_string().contains("Not a directory"));
+    }
+
+    #[tokio::test]
     async fn deploy_missing_readme_returns_error() {
         let dir = tempfile::tempdir().expect("tempdir");
 
