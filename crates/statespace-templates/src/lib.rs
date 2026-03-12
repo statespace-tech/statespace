@@ -2,6 +2,8 @@
 
 pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 
+pub const README_MD: &str = include_str!("README.md");
+
 pub const FAVICON_SVG: &str = include_str!("favicon.svg");
 
 pub const OPENGRAPH_PNG: &[u8] = include_bytes!("opengraph.png");
