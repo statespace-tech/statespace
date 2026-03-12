@@ -115,6 +115,10 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                 crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
             })?;
 
+            if !dir.is_dir() {
+                return Err(Error::cli(format!("Not a directory: {}", dir.display())));
+            }
+
             initialize_templates(&dir)
                 .await
                 .map_err(|e| Error::cli(format!("Failed to initialize templates: {e}")))?;
@@ -481,6 +485,25 @@ mod tests {
         assert_eq!(recorded_creates.len(), 1);
         assert_eq!(recorded_creates[0].0, "bar");
         assert!(upsert_calls.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
+    async fn deploy_missing_readme_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected missing README error");
+        assert!(error.to_string().contains("README.md not found"));
     }
 
     #[tokio::test]
