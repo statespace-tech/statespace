@@ -392,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn deploy_with_cached_state_uses_upsert() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
         let canonical_dir = dir.path().canonicalize().expect("canon");
         save_state(
@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn deploy_with_explicit_name_creates_target() {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("readme.md"), "# Updated").expect("write");
+        std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
         let (mock, create_calls, upsert_calls) =
             MockDeployGateway::new(deploy_result("bar"), upsert_result(false, "bar"));
