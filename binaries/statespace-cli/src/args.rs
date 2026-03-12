@@ -132,7 +132,7 @@ pub(crate) struct AppDeployArgs {
     #[arg(long, value_enum)]
     pub visibility: Option<Visibility>,
 
-    /// Application name (default: randomly generated on first run, then reused from .statespace/state.json)
+    /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]
     pub name: Option<String>,
 }

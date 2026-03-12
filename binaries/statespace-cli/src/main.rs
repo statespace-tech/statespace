@@ -5,7 +5,6 @@ mod error;
 mod gateway;
 mod identifiers;
 mod names;
-mod state;
 
 use args::{AppCommands, Cli, Commands};
 use clap::Parser;

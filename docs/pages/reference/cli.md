@@ -34,7 +34,7 @@ statespace deploy [OPTIONS] [PATH]
 **Options:**
 
 `--name, -n`
-: Application name (default: randomly generated on first run, then reused from `.statespace/state.json`)
+: Application name. Creates a new app with a random name if omitted; pass `--name` to update an existing app.
 
 `--visibility`
 : Application visibility: `public` or `private` (default: public on free-tier, otherwise private)

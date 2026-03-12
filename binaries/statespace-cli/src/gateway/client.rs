@@ -552,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_deploy_files_excludes_internal_metadata_directories() {
+    fn scan_deploy_files_excludes_internal_directories() {
         let dir = TempDir::new().expect("tempdir");
         write_file(&dir, "README.md", b"# Hello");
         write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);

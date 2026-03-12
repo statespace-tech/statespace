@@ -15,6 +15,7 @@ pub(crate) struct DeployResult {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 pub(crate) struct UpsertResult {
     pub created: bool,
     pub id: String,
