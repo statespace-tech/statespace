@@ -123,7 +123,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                 .await
                 .map_err(|e| Error::cli(format!("Failed to initialize templates: {e}")))?;
 
-            if !dir.join("README.md").exists() {
+            if !dir.join("README.md").is_file() {
                 return Err(Error::cli(
                     "README.md not found. Create it before deploying your app.".to_string(),
                 ));
@@ -524,6 +524,26 @@ mod tests {
         let error = run_deploy(args, mock)
             .await
             .expect_err("expected missing README error");
+        assert!(error.to_string().contains("README.md not found"));
+    }
+
+    #[tokio::test]
+    async fn deploy_readme_is_directory_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join("README.md")).expect("create README.md dir");
+
+        let (mock, _, _) =
+            MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
+
+        let args = AppDeployArgs {
+            path: Some(dir.path().to_path_buf()),
+            name: Some("test-app".to_string()),
+            visibility: None,
+        };
+
+        let error = run_deploy(args, mock)
+            .await
+            .expect_err("expected README.md dir error");
         assert!(error.to_string().contains("README.md not found"));
     }
 
