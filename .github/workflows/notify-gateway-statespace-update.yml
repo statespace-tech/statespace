@@ -13,7 +13,7 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2204
     steps:
       - name: Send repository_dispatch event to gateway
-        uses: peter-evans/repository-dispatch@v3
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
         with:
           token: ${{ secrets.GATEWAY_REPO_DISPATCH_TOKEN }}
           repository: statespace-tech/gateway
