@@ -4,6 +4,7 @@ use crate::gateway::GatewayClient;
 use crate::gateway::applications::{ApplicationFile, DeployResult, UpsertResult, Visibility};
 use crate::names::generate_name;
 use crate::state::{SyncState, load_state, save_state};
+use statespace_server::initialize_templates;
 
 pub(crate) trait SyncGateway {
     fn create_application(
@@ -113,6 +114,16 @@ pub(crate) async fn run_sync(args: AppSyncArgs, gateway: impl SyncGateway) -> Re
             let dir = path.canonicalize().map_err(|e| {
                 crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
             })?;
+
+            initialize_templates(&dir)
+                .await
+                .map_err(|e| Error::cli(format!("Failed to initialize templates: {e}")))?;
+
+            if !dir.join("README.md").exists() {
+                return Err(Error::cli(
+                    "README.md not found. Create it before deploying your app.".to_string(),
+                ));
+            }
 
             let cached = load_state(&dir)?;
             let target = resolve_target(args.name, cached.as_ref());
