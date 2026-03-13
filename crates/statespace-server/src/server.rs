@@ -2,7 +2,7 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::{FAVICON_SVG, OPENGRAPH_PNG};
+use crate::templates::FAVICON_SVG;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -179,12 +179,15 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
 }
 
 async fn opengraph_handler(State(state): State<ServerState>) -> Response {
-    let bytes = match fs::read(state.content_root.join("opengraph.png")).await {
-        Ok(custom) => custom,
-        Err(_) => OPENGRAPH_PNG.to_vec(),
-    };
-
-    (StatusCode::OK, [(header::CONTENT_TYPE, "image/png")], bytes).into_response()
+    match fs::read(state.content_root.join("opengraph.png")).await {
+        Ok(custom) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/png")],
+            custom,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn file_handler(
