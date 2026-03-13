@@ -1,9 +1,10 @@
 use crate::args::ServeArgs;
-use crate::config::load_config;
+use crate::commands::env::resolve_env_overrides;
+use crate::config::load_merged_app_env;
 use crate::error::{Error, Result};
 use statespace_server::{ServerConfig, build_router, initialize_templates};
-use statespace_tool_runtime::{SandboxEnv, parse_frontmatter, validate_env_map};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use statespace_tool_runtime::{SandboxEnv, parse_frontmatter};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
 use tokio::net::TcpListener;
@@ -19,8 +20,13 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
     }
 
-    let config_env = load_config(config_path)?.map(|c| c.env).unwrap_or_default();
-    let env = parse_env_vars(config_env, &args.env_vars, args.env_file.as_deref()).await?;
+    let config_env = load_merged_app_env(config_path, Some(&dir))?;
+    let env = resolve_env_overrides(
+        config_env,
+        &args.env_vars,
+        args.env_file.as_deref(),
+        "serve",
+    )?;
     let sandbox_env = SandboxEnv::from_host_process();
 
     emit_missing_tool_warnings(&dir, &sandbox_env);
@@ -168,130 +174,38 @@ fn command_is_executable(candidate: &Path) -> bool {
     candidate.is_file()
 }
 
-async fn parse_env_vars(
-    mut env: HashMap<String, String>,
-    flags: &[String],
-    file: Option<&std::path::Path>,
-) -> Result<HashMap<String, String>> {
-    if let Some(path) = file {
-        let content = tokio::fs::read_to_string(path).await.map_err(|e| {
-            Error::cli(format!("Failed to read env file '{}': {e}", path.display()))
-        })?;
-        for (idx, raw_line) in content.lines().enumerate() {
-            let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                continue;
-            }
-            let Some((key, value)) = line.split_once('=') else {
-                return Err(Error::cli(format!(
-                    "Invalid env file entry at {}:{}: expected KEY=VALUE",
-                    path.display(),
-                    idx + 1
-                )));
-            };
-            env.insert(key.trim().to_string(), value.trim().to_string());
-        }
-    }
-
-    for flag in flags {
-        if let Some((key, value)) = flag.split_once('=') {
-            env.insert(key.to_string(), value.to_string());
-        } else {
-            return Err(Error::cli(format!(
-                "Invalid env var format '{flag}': expected KEY=VALUE"
-            )));
-        }
-    }
-
-    validate_env_map(&env)
-        .map_err(|e| Error::cli(format!("Invalid serve environment configuration: {e}")))?;
-
-    Ok(env)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::fs;
-    use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::TempDir;
 
-    #[tokio::test]
-    async fn parse_env_file_with_comments_and_blanks() {
-        let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, "# comment").unwrap();
-        writeln!(f).unwrap();
-        writeln!(f, "DB=postgres://localhost/test").unwrap();
-        writeln!(f, "  # another comment").unwrap();
-        writeln!(f, "API_KEY=sk_test_123").unwrap();
+    #[test]
+    fn app_config_env_overrides_global_config_env() {
+        let workspace = TempDir::new().unwrap();
+        let global_config_path = workspace.path().join("global-config.toml");
+        let app_dir = workspace.path().join("app");
+        fs::create_dir_all(&app_dir).unwrap();
 
-        let result = parse_env_vars(HashMap::new(), &[], Some(f.path()))
-            .await
-            .unwrap();
-        assert_eq!(result.len(), 2);
-        assert_eq!(result["DB"], "postgres://localhost/test");
-        assert_eq!(result["API_KEY"], "sk_test_123");
-    }
+        fs::write(
+            &global_config_path,
+            "[env]\nUSER_ID = \"global\"\nGLOBAL_ONLY = \"present\"\n",
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("config.toml"),
+            "[env]\nUSER_ID = \"app\"\nAPP_ONLY = \"present\"\n",
+        )
+        .unwrap();
 
-    #[tokio::test]
-    async fn cli_flags_override_file_values() {
-        let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, "DB=from_file").unwrap();
+        let env = load_merged_app_env(&global_config_path, Some(&app_dir)).unwrap();
 
-        let flags = vec!["DB=from_flag".to_string()];
-        let result = parse_env_vars(HashMap::new(), &flags, Some(f.path()))
-            .await
-            .unwrap();
-        assert_eq!(result["DB"], "from_flag");
-    }
-
-    #[tokio::test]
-    async fn merge_order_is_flags_then_file_then_config() {
-        let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, "A=from_file").unwrap();
-        writeln!(f, "B=from_file").unwrap();
-
-        let mut config_env = HashMap::new();
-        config_env.insert("A".to_string(), "from_config".to_string());
-        config_env.insert("C".to_string(), "from_config".to_string());
-
-        let flags = vec!["A=from_flag".to_string(), "D=from_flag".to_string()];
-        let result = parse_env_vars(config_env, &flags, Some(f.path()))
-            .await
-            .unwrap();
-
-        assert_eq!(result["A"], "from_flag");
-        assert_eq!(result["B"], "from_file");
-        assert_eq!(result["C"], "from_config");
-        assert_eq!(result["D"], "from_flag");
-    }
-
-    #[tokio::test]
-    async fn invalid_flag_format_returns_error() {
-        let result = parse_env_vars(HashMap::new(), &["NO_EQUALS".to_string()], None).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn malformed_env_file_line_returns_error() {
-        let mut f = NamedTempFile::new().unwrap();
-        writeln!(f, "GOOD=value").unwrap();
-        writeln!(f, "bad line no equals").unwrap();
-
-        let result = parse_env_vars(HashMap::new(), &[], Some(f.path())).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn invalid_env_key_returns_error() {
-        let mut config_env = HashMap::new();
-        config_env.insert("USER-ID".to_string(), "42".to_string());
-
-        let result = parse_env_vars(config_env, &[], None).await;
-        assert!(result.is_err());
+        assert_eq!(env["USER_ID"], "app");
+        assert_eq!(env["GLOBAL_ONLY"], "present");
+        assert_eq!(env["APP_ONLY"], "present");
     }
 
     #[test]

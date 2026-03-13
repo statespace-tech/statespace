@@ -244,6 +244,27 @@ async fn statespace_serve_loads_config_env_and_preserves_precedence() -> TestRes
 }
 
 #[tokio::test]
+async fn statespace_serve_does_not_auto_load_dotenv() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join("README.md"),
+        "```component\nprintf '<%s>' \"$FROM_DOTENV\"\n```\n",
+    )?;
+    std::fs::write(dir.path().join(".env"), "FROM_DOTENV=secret\n")?;
+
+    let (_server, base_url) = spawn_server(dir.path(), &[])?;
+    wait_until_ready(&base_url).await?;
+
+    let body = reqwest::get(format!("{base_url}/README.md"))
+        .await?
+        .text()
+        .await?;
+
+    assert_eq!(body.trim(), "<>");
+    Ok(())
+}
+
+#[tokio::test]
 async fn statespace_serve_expands_tool_env_from_config() -> TestResult {
     let dir = tempfile::tempdir()?;
     std::fs::write(
