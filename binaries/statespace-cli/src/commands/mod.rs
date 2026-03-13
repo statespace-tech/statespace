@@ -1,6 +1,7 @@
 pub(crate) mod app;
 pub(crate) mod auth;
 pub(crate) mod deploy;
+pub(crate) mod docs;
 pub(crate) mod env;
 pub(crate) mod serve;
 #[cfg(feature = "ssh")]
