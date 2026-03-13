@@ -10,25 +10,16 @@ Run apps on your own machine for development or self-hosting.
 
 Serve your app locally:
 
-```console
-$ statespace serve <PATH>
+```bash
+statespace serve <PATH>
 Serving 'myapp' at http://127.0.0.1:8000
 ```
 
 Optionally, bind the app to a specific host and port:
 
-```console
-$ statespace serve <PATH> --host 0.0.0.0 --port 8080
+```bash
+statespace serve <PATH> --host 0.0.0.0 --port 8080
 ```
-
-Pass one-off runtime values with `--env` or `--env-file`:
-
-```console
-$ statespace serve <PATH> --env API_BASE=https://api.internal --env LOG_LEVEL=debug
-$ statespace serve <PATH> --env-file .env.local
-```
-
-For `serve`, merge order is `--env` > `--env-file` > config `[env]` (from `config.toml`), and flag/file values are not persisted.
 
 ## Docker
 
@@ -53,7 +44,7 @@ CMD ["statespace", "serve", ".", "--host", "0.0.0.0"]
 
 Build and run:
 
-```console
-$ docker build -t myapp .
-$ docker run -p 8000:8000 myapp
+```bash
+docker build -t myapp .
+docker run -p 8000:8000 myapp
 ```

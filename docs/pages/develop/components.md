@@ -66,19 +66,15 @@ echo "User ID: $USER"
 ```
 ````
 
-Pass them with the [CLI](../reference/cli.md) when serving locally or deploying:
+[Configure them](../deploy/security.md#secrets) when serving or deploying apps:
 
-```console
-$ statespace serve|deploy --env USER=admin
-$ statespace serve|deploy --env-file .env
+```bash
+statespace serve|deploy --env USER=admin
+statespace serve|deploy --env-file .env
 ```
 
-You can also pass them as query parameters when [fetching pages](../reference/api.md#get):
+Alternatively, them as query parameters when [fetching pages](../reference/api.md#get):
 
 ```bash
 curl "https://example.statespace.app/page.md?USER=admin"
 ```
-
-!!! warning
-
-    Query parameters can be exposed during transit. For sensitive values, use `--env` or `--env-file` instead.

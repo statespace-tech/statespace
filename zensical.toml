@@ -20,7 +20,7 @@ nav = [
     {"Instructions" = "pages/develop/instructions.md"},
   ]},
   {"Deploy" = [
-    {"Cloud deployment" = "pages/deploy/cloud.md"},
+    {"Cloud deployment" = "pages/deploy/cloud_deployment.md"},
     {"Local development" = "pages/deploy/local_development.md"},
     {"Security" = "pages/deploy/security.md"},
   ]},
@@ -31,6 +31,7 @@ nav = [
   {"Reference" = [
     {"CLI" = "pages/reference/cli.md"},
     {"REST API" = "pages/reference/api.md"},
+    {"Configuration" = "pages/reference/configuration.md"},
   ]},
 ]
 copyright = "Copyright &copy; 2026 Statespace Technologies, Inc."

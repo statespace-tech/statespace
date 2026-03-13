@@ -9,26 +9,27 @@ Connect agents to your applications.
 !!! warning "Warning"
 
     Always sandbox agents when connecting to public apps. Agents may have access to sensitive local data (e.g. environment variables, credentials, files), and a malicious app could use prompt injection to exfiltrate it.
+
 ## Coding agents
 
-Coding agents natively support HTTP requests. Simply include the app URL in your prompt:
+Coding agents natively support HTTP requests — simply include the app URL in your prompt:
 
 === ":simple-claude: &nbsp; Claude Code"
 
-    ```console
-    $ claude "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    claude "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
 
-    ```console
-    $ agent "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    agent "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
-    ```console
-    $ copilot -p "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    copilot -p "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 
@@ -72,8 +73,8 @@ Custom agents need an HTTP request tool to interact with apps:
 
 Private apps require an [access token](../deploy/security.md#access-tokens) — pass it directly to your coding agents:
 
-```console
-$ claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"
+```bash
+claude "Use 'Bearer sk-xxx' to authenticate with https://myapp.statespace.app"
 ```
 
 For custom agents, add it to the `Authorization` header in your HTTP requests:

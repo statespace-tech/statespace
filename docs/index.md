@@ -12,47 +12,45 @@ Build and share RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots
 
 ## Example
 
-The following app is running on [https://demo.statespace.app](https://demo.statespace.app):
+The following app is running on [https://demo-api.statespace.app](https://demo-api.statespace.app):
 
 ````yaml title="README.md"
 ---
 tools:
-  - [expr]
+  - [grep]
 ---
 
 ```component
-echo "Random number: $RANDOM"
+echo "There are $(ls ./logs/* | wc -l | xargs) files under ./logs"
 ```
 
-# Instructions
-- The component loads a random number when the page loads
-- Use the `expr` tool to perform calculations with it
+Use `grep` to search through them
 ````
 
 Pass the app URL to any agent that can make HTTP requests:
 
 === ":simple-claude: &nbsp; Claude Code"
 
-    ```console
-    $ claude "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    claude "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
 
-    ```console
-    $ agent "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    agent "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
-    ```console
-    $ copilot -p "Multiply the random number in https://demo.statespace.app by 256"
+    ```bash
+    copilot -p "Search the logs at https://demo-api.statespace.app for any errors"
     ```
 
 Alternatively, run the app locally:
 
 1. Save the example above as `myapp/README.md`
-2. Run `statespace serve myapp/`
+2. Install Statespace, and run `statespace serve myapp/`
 3. Point your agent to [`http://127.0.0.1:8000`](http://127.0.0.1:8000)
 
 ## Concepts
@@ -131,7 +129,7 @@ Alternatively, run the app locally:
 
 **Universal** - Works immediately with [any agent](pages/connect/agents.md) that can make HTTPS requests.
 
-**Portable** - [Deploy apps to the cloud](pages/deploy/cloud.md) for a public URL, or [run them locally](pages/deploy/self_hosting.md).
+**Portable** - [Deploy apps to the cloud](pages/deploy/cloud_deployment.md) for a public URL, or [run them locally](pages/deploy/self_hosting.md).
 
 **Secure** - Restrict access to your private apps with [token-based authentication](pages/deploy/security.md).
 

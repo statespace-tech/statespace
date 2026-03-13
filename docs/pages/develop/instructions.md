@@ -51,14 +51,13 @@ tools:
 `AGENTS.md` teaches agents how to interact with your app through the [REST API](../reference/api.md):
 
 ```markdown title="AGENTS.md"
-# Statespace Application Instructions
+# App instructions
 
-This web application exposes content and tools over HTTP. 
-Follow these instructions exactly.
+This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
 
-## Quick Start
+## Quick start
 
-1. **GET `/README.md`** — discover what this application does and where to navigate.
+1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
 2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
 3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
@@ -67,9 +66,9 @@ Follow these instructions exactly.
 
 While `AGENTS.md` is served at the root URL for onboarding, `README.md` is served normally:
 
-```console
-$ curl https://example.statespace.app/            # returns AGENTS.md
-$ curl https://example.statespace.app/README.md   # returns README.md
+```bash
+curl https://example.statespace.app/            # returns AGENTS.md
+curl https://example.statespace.app/README.md   # returns README.md
 ```
 
 ## Links

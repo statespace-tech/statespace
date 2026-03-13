@@ -14,36 +14,36 @@ SSH directly into private apps for debugging and hotfixes.
 
 Open an interactive shell on your deployed app:
 
-```console
-$ ssh <APP>@ssh.statespace.app
+```bash
+ssh <APP>@ssh.statespace.app
 ```
 
 Once connected, you can directly edit files and install packages:
 
-```console
-$ mkdir -p data/
-$ echo "# Updated" > README.md
-$ apt-get install -y python3
+```bash
+mkdir -p data/
+echo "# Updated" > README.md
+apt-get install -y python3
 ```
 
 ## Run commands
 
 Execute individual commands on your remote apps:
 
-```console
-$ ssh <APP>@ssh.statespace.app "cat README.md"
+```bash
+ssh <APP>@ssh.statespace.app "cat README.md"
 ```
 
 ## Sync files
 
 Use `rsync` to copy files between your local machine and the deployed app:
 
-```console
-$ rsync -avz ./data/ <APP>@ssh.statespace.app:data/
+```bash
+rsync -avz ./data/ <APP>@ssh.statespace.app:data/
 ```
 
 Pull files from the app:
 
-```console
-$ rsync -avz <APP>@ssh.statespace.app:logs/ ./logs/
+```bash
+rsync -avz <APP>@ssh.statespace.app:logs/ ./logs/
 ```
