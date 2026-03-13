@@ -45,6 +45,10 @@ walkdir = "2.5.0"
 petname = { version = "2", default-features = false, features = ["default-rng", "default-words"] }
 statespace-tool-runtime = { version = "0.1.6", path = "../../crates/statespace-tool-runtime" }
 ignore = "0.4.25"
+semver = "1.0.27"
+flate2 = "1.1.9"
+tar = "0.4.44"
+hex = "0.4.3"
 
 [dev-dependencies]
 tempfile = "3"

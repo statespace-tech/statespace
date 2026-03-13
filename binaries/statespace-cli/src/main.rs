@@ -68,6 +68,8 @@ async fn run() -> Result<()> {
 
         Commands::Tokens { command } => commands::tokens::run(command, build_gateway()?).await,
 
+        Commands::Update => commands::update::run_update().await,
+
         #[cfg(feature = "ssh")]
         Commands::Ssh { command } => match command {
             args::SshCommands::Setup { yes } => {

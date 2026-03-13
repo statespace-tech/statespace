@@ -59,6 +59,9 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: TokensCommands,
     },
+
+    /// Update to the latest version
+    Update,
 }
 
 #[derive(Debug, Subcommand)]
