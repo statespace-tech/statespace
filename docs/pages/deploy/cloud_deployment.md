@@ -66,7 +66,7 @@ Names must follow DNS label rules:
 
 Names are globally unique and map directly to your app's subdomain:
 
-```bash
+```
 https://{name}.statespace.app
 ```
 
@@ -83,7 +83,6 @@ https://{name}.statespace.app
 
 By default, apps come with standard Unix utilities like `ls`, `cat`, `grep`, `curl`, and `date`:
 
-
 ````yaml title="README.md"
 ---
 tools:
@@ -98,7 +97,6 @@ tools:
 echo "Today's date: $(date)"
 ```
 ````
-
 
 Include an optional `Dockerfile` to customize the environment for your apps:
 
