@@ -43,7 +43,7 @@ sha2 = "0.10.9"
 urlencoding = "2.1.3"
 walkdir = "2.5.0"
 petname = { version = "2", default-features = false, features = ["default-rng", "default-words"] }
-statespace-tool-runtime = { version = "0.1.5", path = "../../crates/statespace-tool-runtime" }
+statespace-tool-runtime = { version = "0.1.6", path = "../../crates/statespace-tool-runtime" }
 ignore = "0.4.25"
 
 [dev-dependencies]

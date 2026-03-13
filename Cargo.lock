@@ -1822,7 +1822,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "statespace"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "axum",
  "base64",
@@ -1849,7 +1849,7 @@ dependencies = [
 
 [[package]]
 name = "statespace-server"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "ammonia",
  "async-trait",
@@ -1869,11 +1869,11 @@ dependencies = [
 
 [[package]]
 name = "statespace-templates"
-version = "0.1.5"
+version = "0.1.6"
 
 [[package]]
 name = "statespace-tool-runtime"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "chrono",
