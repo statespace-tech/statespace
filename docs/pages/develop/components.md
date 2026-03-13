@@ -69,8 +69,8 @@ echo "User ID: $USER"
 [Configure them](../deploy/security.md#secrets) when serving or deploying apps:
 
 ```bash
-statespace serve|deploy --env USER=admin
-statespace serve|deploy --env-file .env
+statespace {serve,deploy} --env USER=admin
+statespace {serve,deploy} --env-file .env
 ```
 
 Alternatively, pass them as query parameters when [fetching pages](../reference/api.md#get):

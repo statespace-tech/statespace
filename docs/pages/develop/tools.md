@@ -119,8 +119,8 @@ tools:
 [Configure them](../deploy/security.md#secrets) when serving or deploying apps:
 
 ```bash
-statespace serve|deploy --env USER=admin --env DB=mydb
-statespace serve|deploy --env-file .env
+statespace {serve,deploy} --env USER=admin --env DB=mydb
+statespace {serve,deploy} --env-file .env
 ```
 
 Alternatively, pass them in the request body of [tool calls](../reference/api.md#post):
