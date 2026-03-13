@@ -60,6 +60,9 @@ pub(crate) enum Commands {
         command: TokensCommands,
     },
 
+    /// Open the Statespace documentation in your browser
+    Docs,
+
     /// Update to the latest version
     Update,
 }
