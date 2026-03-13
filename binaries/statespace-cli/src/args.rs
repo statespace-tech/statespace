@@ -135,6 +135,14 @@ pub(crate) struct AppDeployArgs {
     /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]
     pub name: Option<String>,
+
+    /// Environment variables for deployed app secrets (KEY=VALUE)
+    #[arg(long = "env", short = 'e', value_name = "KEY=VALUE")]
+    pub env_vars: Vec<String>,
+
+    /// Load deployed app secrets from a file
+    #[arg(long = "env-file", value_name = "PATH")]
+    pub env_file: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]

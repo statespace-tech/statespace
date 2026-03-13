@@ -5,6 +5,7 @@ mod error;
 mod gateway;
 mod identifiers;
 mod names;
+mod state;
 
 use args::{AppCommands, Cli, Commands};
 use clap::Parser;
@@ -48,12 +49,16 @@ async fn run() -> Result<()> {
             commands::auth::run(command, api_url.as_deref(), &config_path).await
         }
 
-        Commands::Deploy(args) => commands::deploy::run_deploy(args, build_gateway()?).await,
+        Commands::Deploy(args) => {
+            commands::deploy::run_deploy(args, &config_path, build_gateway()?).await
+        }
 
         Commands::Serve(args) => commands::serve::run_serve(args, &config_path).await,
 
         Commands::App { command } => match command {
-            AppCommands::Deploy(args) => commands::deploy::run_deploy(args, build_gateway()?).await,
+            AppCommands::Deploy(args) => {
+                commands::deploy::run_deploy(args, &config_path, build_gateway()?).await
+            }
             AppCommands::List => commands::app::run_list(build_gateway()?).await,
             AppCommands::Get(args) => commands::app::run_get(args, build_gateway()?).await,
             AppCommands::Delete(args) => commands::app::run_delete(args, build_gateway()?).await,

@@ -8,6 +8,7 @@ use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 use crate::gateway::ssh::SshKey;
 use crate::gateway::tokens::{Token, TokenCreateResult};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
@@ -176,6 +177,55 @@ impl GatewayClient {
         check_api_response(resp).await
     }
 
+    pub(crate) async fn list_secret_keys(&self, environment_id: &str) -> Result<Vec<String>> {
+        let url = format!(
+            "{}/api/v1/environments/{}/secrets",
+            self.base_url,
+            urlencoding::encode(environment_id)
+        );
+        let resp = self.with_headers(self.http.get(&url)).send().await?;
+
+        parse_api_list_response(resp).await
+    }
+
+    pub(crate) async fn set_secret(
+        &self,
+        environment_id: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<()> {
+        #[derive(Serialize)]
+        struct Payload<'a> {
+            value: &'a str,
+        }
+
+        let url = format!(
+            "{}/api/v1/environments/{}/secrets/{}",
+            self.base_url,
+            urlencoding::encode(environment_id),
+            urlencoding::encode(key)
+        );
+        let resp = self
+            .with_headers(self.http.put(&url))
+            .json(&Payload { value })
+            .send()
+            .await?;
+
+        check_api_response(resp).await
+    }
+
+    pub(crate) async fn delete_secret(&self, environment_id: &str, key: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/environments/{}/secrets/{}",
+            self.base_url,
+            urlencoding::encode(environment_id),
+            urlencoding::encode(key)
+        );
+        let resp = self.with_headers(self.http.delete(&url)).send().await?;
+
+        check_api_response(resp).await
+    }
+
     #[allow(clippy::items_after_statements)]
     pub(crate) async fn create_token(
         &self,
@@ -339,26 +389,78 @@ impl GatewayClient {
     }
 }
 
-fn is_ignored_deploy_path(root: &Path, path: &Path) -> bool {
+struct DeployIgnoreMatcher {
+    gitignore: Option<Gitignore>,
+}
+
+impl DeployIgnoreMatcher {
+    fn load(root: &Path) -> Result<Self> {
+        let path = root.join(".statespaceignore");
+        if !path.is_file() {
+            return Ok(Self { gitignore: None });
+        }
+
+        let mut builder = GitignoreBuilder::new(root);
+        builder.add(path);
+        let gitignore = builder
+            .build()
+            .map_err(|e| crate::error::Error::cli(format!("Invalid .statespaceignore: {e}")))?;
+
+        Ok(Self {
+            gitignore: Some(gitignore),
+        })
+    }
+
+    fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
+        self.gitignore.as_ref().is_some_and(|gitignore| {
+            gitignore
+                .matched_path_or_any_parents(path, is_dir)
+                .is_ignore()
+        })
+    }
+}
+
+fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &DeployIgnoreMatcher) -> bool {
     const IGNORED_DIRS: [&str; 2] = [".git", ".statespace"];
 
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
 
-    relative.components().any(|component| match component {
+    if relative.components().any(|component| match component {
         Component::Normal(name) => IGNORED_DIRS
             .iter()
             .any(|ignored| name == std::ffi::OsStr::new(ignored)),
         _ => false,
-    })
+    }) {
+        return true;
+    }
+
+    if relative == Path::new("config.toml") {
+        return true;
+    }
+
+    if relative == Path::new(".statespaceignore") {
+        return true;
+    }
+
+    if relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == ".env" || name.starts_with(".env."))
+    {
+        return true;
+    }
+
+    matcher.is_ignored(relative, path.is_dir())
 }
 
 fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
+    let matcher = DeployIgnoreMatcher::load(dir)?;
     let mut results = Vec::new();
     for entry in walkdir::WalkDir::new(dir)
         .into_iter()
-        .filter_entry(|entry| !is_ignored_deploy_path(dir, entry.path()))
+        .filter_entry(|entry| !is_ignored_deploy_path(dir, entry.path(), &matcher))
     {
         let entry = entry
             .map_err(|e| crate::error::Error::cli(format!("Failed to walk directory: {e}")))?;
@@ -562,5 +664,41 @@ mod tests {
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
 
         assert_eq!(paths, vec!["README.md"]);
+    }
+
+    #[test]
+    fn scan_deploy_files_excludes_local_config_and_env_files() {
+        let dir = TempDir::new().expect("tempdir");
+        write_file(&dir, "README.md", b"# Hello");
+        write_file(
+            &dir,
+            "config.toml",
+            b"[env]\nAPI_URL='http://localhost:3000'\n",
+        );
+        write_file(&dir, ".env", b"DATABASE_URL=postgres://localhost/dev\n");
+        write_file(&dir, ".env.production", b"DATABASE_URL=postgres://prod\n");
+        write_file(&dir, "nested/.env.test", b"API_KEY=test\n");
+        write_file(&dir, "nested/config.toml", b"keep me\n");
+
+        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+
+        assert_eq!(paths, vec!["README.md", "nested/config.toml"]);
+    }
+
+    #[test]
+    fn scan_deploy_files_respects_statespaceignore() {
+        let dir = TempDir::new().expect("tempdir");
+        write_file(&dir, "README.md", b"# Hello");
+        write_file(&dir, "keep.txt", b"keep\n");
+        write_file(&dir, "ignore.me", b"ignore\n");
+        write_file(&dir, "important.me", b"keep this\n");
+        write_file(&dir, "build/output.txt", b"ignored\n");
+        write_file(&dir, ".statespaceignore", b"*.me\n!important.me\nbuild/\n");
+
+        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+
+        assert_eq!(paths, vec!["README.md", "important.me", "keep.txt"]);
     }
 }
