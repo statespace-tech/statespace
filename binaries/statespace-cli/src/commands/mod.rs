@@ -10,3 +10,4 @@ pub(crate) mod ssh_config;
 #[cfg(feature = "ssh")]
 pub(crate) mod ssh_key;
 pub(crate) mod tokens;
+pub(crate) mod update;
