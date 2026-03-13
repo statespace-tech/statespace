@@ -129,7 +129,7 @@ Alternatively, run the app locally:
 
 **Universal** - Works immediately with [any agent](pages/connect/agents.md) that can make HTTPS requests.
 
-**Portable** - [Deploy apps to the cloud](pages/deploy/cloud_deployment.md) for a public URL, or [run them locally](pages/deploy/self_hosting.md).
+**Portable** - [Deploy apps to the cloud](pages/deploy/cloud_deployment.md) for a public URL, or [run them locally](pages/deploy/local_development.md).
 
 **Secure** - Restrict access to your private apps with [token-based authentication](pages/deploy/security.md).
 

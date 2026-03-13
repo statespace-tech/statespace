@@ -4,7 +4,11 @@ icon: lucide/settings
 
 # Configuration
 
-Running `statespace auth login` creates a config file at `~/.config/statespace/config.toml`:
+Running `statespace auth login` creates a config file. The CLI resolves the config path in this order:
+
+1. If `XDG_CONFIG_HOME` is set: `$XDG_CONFIG_HOME/statespace/config.toml`
+2. On Windows: `%USERPROFILE%\AppData\Roaming\statespace\config.toml`
+3. Otherwise: `~/.config/statespace/config.toml`
 
 ```toml title="~/.config/statespace/config.toml"
 [auth]

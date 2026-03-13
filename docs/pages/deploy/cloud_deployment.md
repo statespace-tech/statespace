@@ -73,7 +73,7 @@ https://{name}.statespace.app
 !!! tip
 
     Some agents use web fetch tools that summarize pages instead of returning raw HTTP responses. 
-    To interact with Statespace apps, agents need to work with the unflitered HTTP responses. You can do this by:
+    To interact with Statespace apps, agents need to work with the unfiltered HTTP responses. You can do this by:
 
     - Explicitly telling agents to use `curl`
     - Including `api` in your app's name (e.g. `https://demo-api.statespace.app`)

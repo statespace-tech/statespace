@@ -73,7 +73,7 @@ statespace serve|deploy --env USER=admin
 statespace serve|deploy --env-file .env
 ```
 
-Alternatively, them as query parameters when [fetching pages](../reference/api.md#get):
+Alternatively, pass them as query parameters when [fetching pages](../reference/api.md#get):
 
 ```bash
 curl "https://example.statespace.app/page.md?USER=admin"
