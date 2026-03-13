@@ -11,8 +11,8 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor,
-    ToolPart, ToolSpec, eval, expand_placeholders, find_matching_spec, parse_frontmatter,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor, eval,
+    expand_command_for_execution, expand_placeholders, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
@@ -272,39 +272,6 @@ fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
     let status = e.status_code();
     let response = ActionResponse::error(e.user_message());
     (status, Json(response)).into_response()
-}
-
-fn expand_literal_segment(segment: &str, env: &HashMap<String, String>) -> String {
-    let mut expanded = segment.to_string();
-    for (key, value) in env {
-        let variable = format!("${key}");
-        expanded = expanded.replace(&variable, value);
-    }
-    expanded
-}
-
-fn expand_command_for_execution(
-    command: &[String],
-    specs: &[ToolSpec],
-    env: &HashMap<String, String>,
-) -> Vec<String> {
-    // Only spec-declared literal segments are eligible for trusted env expansion.
-    // Placeholder-derived values stay opaque so callers cannot smuggle `$SECRET`
-    // into flexible args and force secret expansion at runtime.
-    if let Some(spec) = find_matching_spec(command, specs) {
-        return command
-            .iter()
-            .enumerate()
-            .map(|(index, part)| match spec.parts.get(index) {
-                Some(ToolPart::Literal(literal)) if literal == part && literal.contains('$') => {
-                    expand_literal_segment(part, env)
-                }
-                _ => part.clone(),
-            })
-            .collect();
-    }
-
-    command.to_vec()
 }
 
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {
