@@ -32,14 +32,14 @@ echo "Server time: $(date)"
 
 Agents can read pages and files with `GET` requests:
 
-```console
-$ curl https://example.statespace.app/page.md
+```bash
+curl https://example.statespace.app/page.md
 ```
 
 And call tools with `POST` requests:
 
-```console
-$ curl -X POST https://example.statespace.app -d '{"command": ["grep", "error"]}'
+```bash
+curl -X POST https://example.statespace.app -d '{"command": ["grep", "error"]}'
 ```
 
 ## Base structure
@@ -89,20 +89,20 @@ app/
 
 [Serve apps locally](pages/deploy/local_development.md) for development or self-hosting:
 
-```console
-$ statespace serve app/
+```bash
+statespace serve app/
 ```
 
-Or [deploy to the cloud](pages/deploy/cloud.md) for a public URL:
+Or [deploy to the cloud](pages/deploy/cloud_deployment.md) for a public URL:
 
-```console
-$ statespace deploy app/
+```bash
+statespace deploy app/
 ```
 
 ## Next steps
 
 - Learn more about [tools](pages/develop/tools.md), [components](pages/develop/components.md), and [instructions](pages/develop/instructions.md)
-- [Deploy to the cloud](pages/deploy/cloud.md) or [run locally](pages/deploy/local_development.md)
+- [Deploy to the cloud](pages/deploy/cloud_deployment.md) or [run locally](pages/deploy/local_development.md)
 - [Secure](pages/deploy/security.md) your apps with token-based authentication
 - [Connect your agents](pages/connect/agents.md) to running applications
 - Explore Statespace's [CLI](pages/reference/cli.md) and [REST API](pages/reference/api.md)

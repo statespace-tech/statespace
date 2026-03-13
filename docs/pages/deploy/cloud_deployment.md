@@ -15,8 +15,8 @@ Deploy apps to get a shareable URL.
 
 Run `statespace deploy` to deploy your app:
 
-```console
-$ statespace deploy ./myapp
+```bash
+statespace deploy ./myapp
 Creating 'myapp'...
 
   ID:  myapp
@@ -28,29 +28,60 @@ Creating 'myapp'...
 
 Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md#access-tokens)):
 
-```console
-$ statespace deploy ./myapp --visibility public
-$ statespace deploy ./myapp --visibility private
+```bash
+statespace deploy ./myapp --visibility public
+statespace deploy ./myapp --visibility private
 ```
 
 To access **private** apps, include the token in the `Authorization` header:
 
-```console
-$ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
+```bash
+curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
 You can manage deployed apps from the [CLI](../reference/cli.md#app-management):
 
-```console
-$ statespace app list
-$ statespace app get <APP>
-$ statespace app delete <APP>
+```bash
+statespace app list
+statespace app get <APP>
+statespace app delete <APP>
 ```
+
+## Naming
+
+Use `--name` (or `-n`) to give your app a specific name:
+
+```bash
+statespace deploy ./myapp --name my-cool-project
+Deploying 7 files to 'my-cool-project'...
+Created application 'my-cool-project'
+URL: https://my-cool-project.statespace.app
+```
+
+Names must follow DNS label rules:
+
+- 3–63 characters, lowercase letters, digits, and hyphens only
+- Cannot start or end with a hyphen
+- Cannot contain consecutive hyphens (`--`)
+
+Names are globally unique and map directly to your app's subdomain:
+
+```
+https://{name}.statespace.app
+```
+
+!!! tip
+
+    Some agents use web fetch tools that summarize pages instead of returning raw HTTP responses. 
+    To interact with Statespace apps, agents need to work with the unfiltered HTTP responses. You can do this by:
+
+    - Explicitly telling agents to use `curl`
+    - Including `api` in your app's name (e.g. `https://demo-api.statespace.app`)
+    - Disabling web fetch tools that summarize content (e.g., `WebFetch` for Claude Code)
 
 ## Dependencies
 
 By default, apps come with standard Unix utilities like `ls`, `cat`, `grep`, `curl`, and `date`:
-
 
 ````yaml title="README.md"
 ---
@@ -67,7 +98,6 @@ echo "Today's date: $(date)"
 ```
 ````
 
-
 Include an optional `Dockerfile` to customize the environment for your apps:
 
 ```text hl_lines="3"
@@ -76,7 +106,6 @@ myapp/
 ├── Dockerfile
 └── ...
 ```
-
 
 Use `RUN` to install additional CLI binaries.
 

@@ -116,14 +116,14 @@ tools:
 ---
 ```
 
-Pass them with the [CLI](../reference/cli.md) when serving locally or deploying:
+[Configure them](../deploy/security.md#secrets) when serving or deploying apps:
 
-```console
-$ statespace serve|deploy --env USER=admin --env DB=mydb
-$ statespace serve|deploy --env-file .env
+```bash
+statespace {serve,deploy} --env USER=admin --env DB=mydb
+statespace {serve,deploy} --env-file .env
 ```
 
-You can also pass them in the request body of [tool calls](../reference/api.md#post):
+Alternatively, pass them in the request body of [tool calls](../reference/api.md#post):
 
 ```bash
 curl -X POST \

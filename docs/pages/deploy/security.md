@@ -14,8 +14,8 @@ Manage authentication, access control, and secrets for your apps.
 
 Run `statespace auth login` to authenticate and save an API key locally:
 
-```console
-$ statespace auth login
+```bash
+statespace auth login
 Requesting authorization...
 
 Open this URL in your browser:
@@ -27,36 +27,24 @@ And enter code: QK8F-9FTJ
 
 Once logged in, all relevant [CLI commands](../reference/cli.md) use the saved credentials automatically:
 
-```console
-$ statespace deploy <PATH>
-$ statespace app list
-$ statespace app delete <APP>
+```bash
+statespace deploy <PATH>
+statespace app list
+statespace app delete <APP>
 ```
 
 Alternatively, pass an API key directly with `--api-key`:
 
-```console
-$ statespace app list --api-key <API_KEY>
+```bash
+statespace app list --api-key <API_KEY>
 ```
-
-For CI/CD, you can provide auth non-interactively in either style:
-
-```console
-# Explicit overrides per command
-$ statespace app list --api-key <API_KEY> --org-id <ORG_ID> --api-url https://api.staging.statespace.com
-
-# Or point to a pre-written config file
-$ statespace --config /path/to/config.toml app list
-```
-
-`statespace serve --env` and `statespace serve --env-file` are runtime overrides for local serve only; they do not persist values back to `config.toml`.
 
 ## Access tokens
 
 Use tokens to control access to your private apps:
 
-```console
-$ statespace tokens create <NAME> --scope <SCOPE>
+```bash
+statespace tokens create <NAME> --scope <SCOPE>
 ```
 
 Tokens can be configured with three scopes:
@@ -69,40 +57,25 @@ Tokens can be configured with three scopes:
 
 Include the token in the `Authorization` header:
 
-```console
-$ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
+```bash
+curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
 You can list, rotate, and revoke tokens:
 
-```console
-$ statespace tokens list
-$ statespace tokens rotate <TOKEN>
-$ statespace tokens revoke <TOKEN>
+```bash
+statespace tokens list
+statespace tokens rotate <TOKEN>
+statespace tokens revoke <TOKEN>
 ```
 
 ## Secrets
 
-Reference environment `$VARIABLES` in [tools](../develop/tools.md) and [components](../develop/components.md) in your apps:
+Serve or deploy apps with environment `$VARIABLES`:
 
-````markdown title="page.md"
----
-tools:
-  - [psql, -U, $DB_USER, -d, $DB_NAME, -c, { }]
----
-
-# Dashboard
-
-```component
-echo "You are answering questions to: $DB_USER"
-```
-````
-
-Pass them with the CLI when serving or deploying:
-
-```console
-$ statespace serve|deploy --env DB_USER=admin --env DB_NAME=mydb
-$ statespace serve|deploy --env-file .env
+```bash
+statespace serve|deploy --env DB_USER=admin --env DB_NAME=mydb
+statespace serve|deploy --env-file .env
 ```
 
 For [tool calls](../reference/api.md#post), you can pass them in the request body:
