@@ -1,0 +1,6 @@
+2026-03-10T08:01:00Z INFO  path=/static/app.js size=142KB cache=HIT latency=2ms client=203.0.113.50
+2026-03-10T08:01:01Z INFO  path=/static/styles.css size=38KB cache=HIT latency=1ms client=198.51.100.22
+2026-03-10T08:01:03Z INFO  path=/images/hero.webp size=890KB cache=MISS latency=120ms client=192.0.2.10
+2026-03-10T08:01:05Z INFO  path=/static/app.js size=142KB cache=HIT latency=1ms client=10.0.0.88
+2026-03-10T08:01:09Z INFO  path=/fonts/inter.woff2 size=96KB cache=HIT latency=1ms client=172.16.5.3
+2026-03-10T08:01:14Z INFO  path=/images/logo.svg size=4KB cache=HIT latency=1ms client=203.0.113.50
