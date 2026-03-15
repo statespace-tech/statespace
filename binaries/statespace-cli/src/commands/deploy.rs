@@ -77,16 +77,9 @@ impl DeployGateway for GatewayClient {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeployMode {
-    Create,
-    Upsert,
-}
-
 #[derive(Debug, Clone)]
 struct DeployTarget {
     name: String,
-    mode: DeployMode,
 }
 
 #[derive(Debug, Clone)]
@@ -105,16 +98,6 @@ struct SecretSyncSummary {
 }
 
 impl DeployOutcome {
-    fn from_create(name: String, result: DeployResult) -> Self {
-        Self {
-            created: true,
-            id: result.id,
-            name,
-            url: result.url,
-            auth_token: result.auth_token,
-        }
-    }
-
     fn from_upsert(result: UpsertResult) -> Self {
         Self {
             created: result.created,
@@ -202,7 +185,7 @@ pub(crate) async fn run_deploy(
             }
 
             let cached = load_state(&dir)?;
-            let target = resolve_target(name, cached.as_ref());
+            let target = resolve_target(name)?;
 
             let files = GatewayClient::scan_deploy_files(&dir)?;
 
@@ -256,19 +239,8 @@ pub(crate) async fn run_deploy(
                 target.name
             );
 
-            let result = match target.mode {
-                DeployMode::Create => {
-                    let create_result = gateway
-                        .create_application(&target.name, files, visibility)
-                        .await
-                        .map_err(|error| map_create_error(error, &target.name))?;
-                    DeployOutcome::from_create(target.name.clone(), create_result)
-                }
-                DeployMode::Upsert => {
-                    let upsert_result = gateway.upsert_application(&target.name, files).await?;
-                    DeployOutcome::from_upsert(upsert_result)
-                }
-            };
+            let upsert_result = gateway.upsert_application(&target.name, files).await?;
+            let result = DeployOutcome::from_upsert(upsert_result);
 
             let sync = sync_environment_secrets(&gateway, &result.id, &deploy_env).await?;
 
@@ -342,27 +314,14 @@ fn checksum_env_map(env: &HashMap<String, String>) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn resolve_target(explicit_name: Option<String>, cached: Option<&DeployState>) -> DeployTarget {
-    match explicit_name {
-        Some(name) => {
-            let mode = if cached.is_some_and(|state| state.name == name) {
-                DeployMode::Upsert
-            } else {
-                DeployMode::Create
-            };
-            DeployTarget { name, mode }
-        }
-        None => match cached {
-            Some(state) => DeployTarget {
-                name: state.name.clone(),
-                mode: DeployMode::Upsert,
-            },
-            None => DeployTarget {
-                name: generate_name(),
-                mode: DeployMode::Create,
-            },
-        },
-    }
+fn resolve_target(explicit_name: Option<String>) -> Result<DeployTarget> {
+    let Some(name) = explicit_name else {
+        return Err(Error::cli(
+            "Application name is required for directory deploys. Pass --name <NAME>.".to_string(),
+        ));
+    };
+
+    Ok(DeployTarget { name })
 }
 
 fn map_create_error(error: Error, name: &str) -> Error {
@@ -590,7 +549,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deploy_with_cached_state_uses_upsert() {
+    async fn deploy_with_path_and_no_name_returns_error_even_with_cached_state() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
@@ -611,21 +570,14 @@ mod tests {
 
         let args = deploy_args(Some(dir.path().to_path_buf()), None);
 
-        run_deploy(args, Path::new(TEST_CONFIG_PATH), mock)
+        let error = run_deploy(args, Path::new(TEST_CONFIG_PATH), mock)
             .await
-            .expect("run_deploy");
+            .expect_err("missing --name should error");
+
+        assert!(error.to_string().contains("Application name is required"));
 
         assert!(create_calls.lock().expect("lock").is_empty());
-
-        let recorded_upserts = upsert_calls.lock().expect("lock");
-        assert_eq!(recorded_upserts.len(), 1);
-        assert_eq!(recorded_upserts[0].0, "cached-app");
-
-        let state = load_state(&canonical_dir)
-            .expect("load")
-            .expect("state exists");
-        assert_eq!(state.name, "cached-app");
-        assert_eq!(state.deployment_id, "id-1");
+        assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
@@ -645,20 +597,21 @@ mod tests {
             .await
             .expect("run_deploy");
 
-        let recorded_creates = create_calls.lock().expect("lock");
-        assert_eq!(recorded_creates.len(), 1);
-        let uploaded_paths: Vec<&str> = recorded_creates[0]
+        assert!(create_calls.lock().expect("lock").is_empty());
+
+        let recorded_upserts = upsert_calls.lock().expect("lock");
+        assert_eq!(recorded_upserts.len(), 1);
+        let uploaded_paths: Vec<&str> = recorded_upserts[0]
             .1
             .iter()
             .map(|file| file.path.as_str())
             .collect();
         assert!(uploaded_paths.contains(&"README.md"));
         assert!(uploaded_paths.contains(&"assets/config.json"));
-        assert!(upsert_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
-    async fn deploy_with_explicit_name_creates_target() {
+    async fn deploy_with_explicit_name_uses_upsert_target() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
@@ -671,10 +624,11 @@ mod tests {
             .await
             .expect("run_deploy");
 
-        let recorded_creates = create_calls.lock().expect("lock");
-        assert_eq!(recorded_creates.len(), 1);
-        assert_eq!(recorded_creates[0].0, "bar");
-        assert!(upsert_calls.lock().expect("lock").is_empty());
+        assert!(create_calls.lock().expect("lock").is_empty());
+
+        let recorded_upserts = upsert_calls.lock().expect("lock");
+        assert_eq!(recorded_upserts.len(), 1);
+        assert_eq!(recorded_upserts[0].0, "bar");
     }
 
     #[tokio::test]
@@ -726,15 +680,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deploy_name_taken_returns_suggestion() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("README.md"), "# Hello").expect("write");
-
+    async fn deploy_without_path_name_taken_returns_suggestion() {
         let (mut mock, _, _, _, _) =
             MockDeployGateway::new(deploy_result("unused"), upsert_result(false, "unused"));
         mock.fail_create_with_name_taken = true;
 
-        let args = deploy_args(Some(dir.path().to_path_buf()), Some("taken-name"));
+        let args = deploy_args(None, Some("taken-name"));
 
         let error = run_deploy(args, Path::new(TEST_CONFIG_PATH), mock)
             .await
