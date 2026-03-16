@@ -1,0 +1,246 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Statespace App API",
+    "description": "HTTP API for Statespace apps. Agents read pages with GET and execute declared tools with POST.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://{app}.statespace.app",
+      "variables": {
+        "app": {
+          "default": "my-app",
+          "description": "App name"
+        }
+      }
+    },
+    {
+      "url": "http://localhost:{port}",
+      "variables": {
+        "port": {
+          "default": "8080",
+          "description": "Local development port"
+        }
+      }
+    }
+  ],
+  "security": [],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API token for private apps. Obtain via `statespace tokens create`."
+      }
+    },
+    "schemas": {
+      "CommandRequest": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1,
+            "description": "Tool invocation as an argument array. The first element is the tool name; subsequent elements are arguments. Must match a tool declared in a Markdown page's frontmatter.",
+            "example": ["grep", "-r", "error", "logs/"]
+          }
+        }
+      },
+      "CommandResponse": {
+        "type": "object",
+        "required": ["stdout", "stderr", "returncode"],
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "description": "Standard output from the command."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Standard error from the command."
+          },
+          "returncode": {
+            "type": "integer",
+            "description": "Exit code of the command. 0 indicates success."
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message."
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/": {
+      "get": {
+        "summary": "Read root page",
+        "description": "Reads README.md — the app's entry point. Discover what the app does, its tools, and available pages.",
+        "operationId": "getRootPage",
+        "security": [
+          {},
+          { "bearerAuth": [] }
+        ],
+        "parameters": [
+          {
+            "name": "varName",
+            "in": "query",
+            "description": "Any query parameter is exposed as an environment variable to components rendered on the page (e.g., `?USER_ID=42` sets `$USER_ID`).",
+            "required": false,
+            "schema": { "type": "string" },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Page content.",
+            "content": {
+              "text/markdown": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token for a private app.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Page not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Execute a tool",
+        "description": "Executes a tool declared in any Markdown page's frontmatter. Tools are matched against all declared tools regardless of which page declared them. Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).",
+        "operationId": "executeTool",
+        "security": [
+          {},
+          { "bearerAuth": [] }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CommandRequest" },
+              "examples": {
+                "grep": {
+                  "summary": "Search files",
+                  "value": { "command": ["grep", "-r", "error", "logs/"] }
+                },
+                "sqlite3": {
+                  "summary": "Query a database",
+                  "value": { "command": ["sqlite3", "store.db", "SELECT count(*) FROM orders"] }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Command executed. Check `returncode` to determine success or failure.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CommandResponse" },
+                "example": {
+                  "stdout": "42 orders\n",
+                  "stderr": "",
+                  "returncode": 0
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Command does not match any declared tool, or argument validation failed.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token for a private app.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{path}": {
+      "get": {
+        "summary": "Read a page or file",
+        "description": "Reads any file served by the app — Markdown pages, data files, etc. Markdown pages with `component` code blocks execute those blocks on fetch and render their stdout inline.",
+        "operationId": "getPage",
+        "security": [
+          {},
+          { "bearerAuth": [] }
+        ],
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "Path to the file relative to the app root (e.g., `pages/search.md`, `data/users.csv`).",
+            "schema": { "type": "string" },
+            "example": "pages/search.md"
+          },
+          {
+            "name": "varName",
+            "in": "query",
+            "description": "Any query parameter is exposed as an environment variable to components rendered on the page (e.g., `?USER_ID=42` sets `$USER_ID`).",
+            "required": false,
+            "schema": { "type": "string" },
+            "style": "form"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content.",
+            "content": {
+              "text/markdown": {
+                "schema": { "type": "string" }
+              },
+              "text/plain": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid token for a private app.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
