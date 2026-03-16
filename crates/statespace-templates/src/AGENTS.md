@@ -2,10 +2,6 @@
 
 This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
 
-## IMPORTANT
-
-USE `curl` OR EQUIVALENT RAW HTTP CLIENT FOR ALL REQUESTS. Do not use AI-mediated fetch tools — they summarize responses and will cause you to miss critical details like declared tool names.
-
 ## Quick start
 
 1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
