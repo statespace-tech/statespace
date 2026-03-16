@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.amp/
+.claude/
+.DS_Store
+.direnv/
+result/
+*.log
+*.swp
+*.swo
+*~
