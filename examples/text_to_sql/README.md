@@ -1,6 +1,6 @@
 ---
 tools:
-  - [sqlite3, store.db, { regex: "^SELECT\\b.*" }]
+  - [sqlite3, store.db, { regex: "^\\s*SELECT\\b[^;]*(;\\s*)?$" }]
 ---
 
 # E-Commerce Store

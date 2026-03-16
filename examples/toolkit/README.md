@@ -1,11 +1,15 @@
 ---
 tools:
-  - [python3, scripts/fetch.py, { }, ;]
-  - [python3, scripts/wordcloud.py, { }, ;]
-  - [python3, scripts/compare.py, { }, { }, ;]
+  - [python3, scripts/fetch.py, { }]
+  - [python3, scripts/wordcloud.py, { }]
+  - [python3, scripts/compare.py, { }, { }]
 ---
 
 # Reddit Toolkit
+
+```component
+echo "Today is $(date)"
+```
 
 Query Reddit's public API. No authentication required.
 
@@ -17,7 +21,7 @@ Query Reddit's public API. No authentication required.
 
 **compare.py** `<sub1> <sub2> [sort] [limit]` — Compare two subreddits: engagement, activity, shared authors.
 
-`sort`: hot, top, new, rising (default: hot). `limit`: 1–25 (default: 10).
+`sort`: hot, top, new, rising (default: hot). `limit`: 1–25 (default: 20).
 
 ## Questions you can ask
 

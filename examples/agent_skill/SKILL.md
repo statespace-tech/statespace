@@ -11,7 +11,7 @@ Statespace apps are Markdown files served over HTTP. Agents read pages with GET 
 
 Every app needs a `README.md`. That's it. An `AGENTS.md` is auto-generated on first serve/deploy.
 
-```
+```text
 my-app/
 ├── AGENTS.md          # auto-generated (onboards agents)
 ├── README.md          # you write this

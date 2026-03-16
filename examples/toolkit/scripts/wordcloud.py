@@ -15,6 +15,7 @@ import urllib.request
 from collections import Counter
 
 USER_AGENT = "statespace-demo/1.0"
+SORTS = ["hot", "new", "top", "controversial", "rising"]
 
 STOP_WORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of",
@@ -67,7 +68,15 @@ if __name__ == "__main__":
 
     subreddit = sys.argv[1]
     sort = sys.argv[2] if len(sys.argv) > 2 else "hot"
-    limit = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+    try:
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+    except ValueError:
+        json.dump({"error": f"Invalid limit: {sys.argv[3]}"}, sys.stdout)
+        sys.exit(1)
+
+    if sort not in SORTS:
+        print(f"Invalid sort: {sort}. Choose from: {', '.join(SORTS)}", file=sys.stderr)
+        sys.exit(1)
 
     try:
         posts = fetch_posts(subreddit, sort)

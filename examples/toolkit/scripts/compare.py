@@ -56,10 +56,15 @@ if __name__ == "__main__":
 
     sub1, sub2 = sys.argv[1], sys.argv[2]
     sort = sys.argv[3] if len(sys.argv) > 3 else "hot"
-    limit = int(sys.argv[4]) if len(sys.argv) > 4 else 10
 
     if sort not in SORTS:
         print(f"Invalid sort: {sort}. Choose from: {', '.join(SORTS)}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        limit = int(sys.argv[4]) if len(sys.argv) > 4 else 10
+    except ValueError:
+        json.dump({"error": f"Invalid limit: {sys.argv[4]}"}, sys.stdout)
         sys.exit(1)
 
     limit = max(1, min(25, limit))

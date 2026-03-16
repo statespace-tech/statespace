@@ -10,18 +10,22 @@ This Statespace web application exposes content and tools over HTTP. Follow thes
 
 ## Tools
 
-Tools are declared in YAML frontmatter on Markdown files:
+Tools are declared in YAML frontmatters on Markdown pages:
 
-```yaml
+```markdown
 ---
 tools:
   - [ls]
   - [grep, -r, -i, { }, ../data/]
   - [cat, { regex: ".*\\.txt$" }]
 ---
+
+# My Markdown page
+...
 ```
 
-Execute any declared tool by POSTing `{"command": [...]}` to `/`. Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
+Execute declared tool on any Markdown page by POSTing `{"command": [...]}` to `/`. 
+Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
 
 ### Rules
 

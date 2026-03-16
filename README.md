@@ -60,7 +60,7 @@ Query the database for customer and order data, or search the logs for errors.
 
 Populate the directory with your app's files:
 
-```
+```text
 demo/
 ├── README.md
 ├── store.db
@@ -73,7 +73,7 @@ demo/
 ### 3. Serve it
 
 ```bash
-statespace serve edemo/
+statespace serve demo/
 ```
 
 ### 4. Ask it
