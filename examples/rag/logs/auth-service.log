@@ -1,0 +1,6 @@
+2026-03-10T08:00:59Z INFO  user=alice@example.com action=login result=success ip=192.168.1.42
+2026-03-10T08:01:03Z INFO  user=bob@example.com action=login result=success ip=10.0.0.15
+2026-03-10T08:01:11Z WARN  user=unknown action=login result=failed reason="invalid credentials" ip=203.0.113.77
+2026-03-10T08:01:14Z INFO  user=alice@example.com action=token_refresh result=success
+2026-03-10T08:01:19Z ERROR user=charlie@example.com action=login result=failed reason="account locked after 5 failed attempts" ip=198.51.100.3
+2026-03-10T08:01:25Z INFO  user=dana@example.com action=login result=success ip=172.16.0.8
