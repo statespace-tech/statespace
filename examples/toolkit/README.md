@@ -21,7 +21,7 @@ Query Reddit's public API. No authentication required.
 
 **compare.py** `<sub1> <sub2> [sort] [limit]` — Compare two subreddits: engagement, activity, shared authors.
 
-`sort`: hot, top, new, rising (default: hot). `limit`: 1–25 (default: 20).
+`sort`: hot, top, new, rising (default: hot). `limit`: 1–25 (default: 10).
 
 ## Questions you can ask
 

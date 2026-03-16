@@ -10,7 +10,7 @@ This Statespace web application exposes content and tools over HTTP. Follow thes
 
 ## Tools
 
-Tools are declared in YAML frontmatters on Markdown pages:
+Tools are declared in YAML frontmatter on Markdown pages:
 
 ```markdown
 ---

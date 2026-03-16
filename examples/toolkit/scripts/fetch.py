@@ -9,6 +9,7 @@ Usage: fetch.py <subreddit> [sort] [limit]
 """
 
 import json
+import re
 import sys
 import urllib.request
 
@@ -17,6 +18,8 @@ USER_AGENT = "statespace-demo/1.0"
 
 
 def fetch(subreddit, sort="hot", limit=10):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", subreddit):
+        raise ValueError(f"Invalid subreddit name: {subreddit!r}")
     url = f"https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&t=week"
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=10) as resp:
@@ -54,6 +57,7 @@ if __name__ == "__main__":
         limit = int(sys.argv[3]) if len(sys.argv) > 3 else 10
     except ValueError:
         json.dump({"error": f"Invalid limit: {sys.argv[3]}"}, sys.stdout)
+        print()
         sys.exit(1)
 
     if sort not in SORTS:

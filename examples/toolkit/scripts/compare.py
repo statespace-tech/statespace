@@ -9,34 +9,24 @@ Usage: compare.py <subreddit1> <subreddit2> [sort] [limit]
 
 import json
 import sys
-import urllib.request
+
+import fetch as fetch_module
 
 SORTS = {"hot", "top", "new", "rising"}
-USER_AGENT = "statespace-demo/1.0"
 
 
 def fetch(subreddit, sort="hot", limit=10):
-    url = f"https://www.reddit.com/r/{subreddit}/{sort}.json?limit={limit}&t=week"
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read())
-
-    posts = []
-    for child in data["data"]["children"]:
-        p = child["data"]
-        posts.append({
-            "title": p["title"],
-            "score": p["score"],
-            "num_comments": p["num_comments"],
-            "author": p["author"],
-        })
-    return posts
+    result = fetch_module.fetch(subreddit, sort, limit)
+    return [
+        {"title": p["title"], "score": p["score"], "num_comments": p["num_comments"], "author": p["author"]}
+        for p in result["posts"]
+    ]
 
 
 def stats(posts):
     scores = [p["score"] for p in posts]
     comments = [p["num_comments"] for p in posts]
-    authors = set(p["author"] for p in posts)
+    authors = {p["author"] for p in posts}
     return {
         "posts": len(posts),
         "total_score": sum(scores),

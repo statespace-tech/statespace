@@ -30,7 +30,7 @@ Declare tools in YAML frontmatter. Each tool is an array of command parts:
 tools:
   - [grep]                                     # bare command, extra args allowed
   - [cat, { }]                                 # placeholder: agent must pass one arg
-  - [psql, -c, { regex: "^SELECT\\b.*" }]     # regex: restrict to SELECT queries
+  - [psql, -c, { regex: "^\\s*SELECT\\b[^;]*(;\\s*)?$" }]     # regex: restrict to SELECT queries
   - [curl, -X, GET, https://api.example.com, ;]  # semicolon: no extra args allowed
   - [psql, -U, $USER, -d, $DB, -c, { }]       # $ENV: expanded at runtime, hidden from agent
 ---
@@ -142,7 +142,7 @@ A text-to-SQL app with a SQLite database:
 ````yaml
 ---
 tools:
-  - [sqlite3, store.db, { regex: "^SELECT\\b.*" }]
+  - [sqlite3, store.db, { regex: "^\\s*SELECT\\b[^;]*(;\\s*)?$" }]
 ---
 
 # E-Commerce Store

@@ -4,13 +4,14 @@
 Usage: wordcloud.py <subreddit> [sort] [limit]
 
   subreddit  Subreddit name (without r/)
-  sort       hot, top, new, rising (default: hot)
-  limit      Number of top words to return (default: 20)
+  sort       hot, top, new, rising, controversial (default: hot)
+  limit      Number of top words to return (default: 10)
 """
 
 import json
 import re
 import sys
+import urllib.error
 import urllib.request
 from collections import Counter
 
@@ -69,9 +70,13 @@ if __name__ == "__main__":
     subreddit = sys.argv[1]
     sort = sys.argv[2] if len(sys.argv) > 2 else "hot"
     try:
-        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 20
+        limit = int(sys.argv[3]) if len(sys.argv) > 3 else 10
     except ValueError:
         json.dump({"error": f"Invalid limit: {sys.argv[3]}"}, sys.stdout)
+        sys.exit(1)
+
+    if limit <= 0:
+        json.dump({"error": f"Invalid limit: {sys.argv[3]} - must be a positive integer"}, sys.stdout)
         sys.exit(1)
 
     if sort not in SORTS:
@@ -92,6 +97,6 @@ if __name__ == "__main__":
 
         json.dump(result, sys.stdout, indent=2)
         print()
-    except Exception as e:
+    except (urllib.error.URLError, json.JSONDecodeError, ValueError, OSError) as e:
         json.dump({"error": str(e)}, sys.stdout)
         sys.exit(1)
