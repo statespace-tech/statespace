@@ -1,6 +1,6 @@
 //! Site initialization - writes template files if missing.
 
-use crate::templates::{AGENTS_MD, FAVICON_SVG};
+use crate::templates::{AGENTS_MD, FAVICON_SVG, OPENAPI_JSON};
 use std::io;
 use std::path::Path;
 use tokio::fs;
@@ -9,6 +9,7 @@ use tokio::fs;
 pub enum TemplateFile {
     AgentsMd,
     FaviconSvg,
+    OpenapiJson,
 }
 
 impl TemplateFile {
@@ -16,6 +17,7 @@ impl TemplateFile {
         match self {
             Self::AgentsMd => "AGENTS.md",
             Self::FaviconSvg => "favicon.svg",
+            Self::OpenapiJson => "openapi.json",
         }
     }
 }
@@ -32,7 +34,7 @@ pub enum InitResult {
 pub async fn initialize_templates(
     content_root: &Path,
 ) -> io::Result<Vec<(TemplateFile, InitResult)>> {
-    let mut results = Vec::with_capacity(2);
+    let mut results = Vec::with_capacity(3);
 
     results.push((
         TemplateFile::AgentsMd,
@@ -45,6 +47,16 @@ pub async fn initialize_templates(
             content_root,
             TemplateFile::FaviconSvg.filename(),
             FAVICON_SVG,
+        )
+        .await?,
+    ));
+
+    results.push((
+        TemplateFile::OpenapiJson,
+        write_if_missing(
+            content_root,
+            TemplateFile::OpenapiJson.filename(),
+            OPENAPI_JSON,
         )
         .await?,
     ));
@@ -80,10 +92,11 @@ mod tests {
 
         let results = initialize_templates(dir.path()).await.unwrap();
 
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
 
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(dir.path().join("favicon.svg").exists());
+        assert!(dir.path().join("openapi.json").exists());
         assert!(!dir.path().join("opengraph.png").exists());
     }
 
