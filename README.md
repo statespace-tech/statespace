@@ -44,16 +44,20 @@ Write a `README.md` with tools, components, and instructions:
 ````yaml
 ---
 tools:
-  - [sqlite3, store.db, { regex: "^SELECT\\b.*" }]
-  - [grep, -r, { }, logs/]
+  - [grep]
 ---
 
-# Support Dashboard
+```component
+echo "There are $(ls ./logs | wc -l | xargs) files under ./logs"
+```
 
-Query the database for customer and order data, or search the logs for errors.
+Use `grep` to search through them.
 
-**customers** — id, name, email, city, country, joined
-**orders** — id, customer_id, product_id, quantity, ordered_at
+## Questions you can ask
+
+- Were there any database connection failures?
+- Which services logged authentication errors?
+- What deployment happened most recently and did it succeed?
 ````
 
 ### 2. Add your data
@@ -61,9 +65,8 @@ Query the database for customer and order data, or search the logs for errors.
 Populate the directory with your app's files:
 
 ```text
-demo/
+rag/
 ├── README.md
-├── store.db
 └── logs/
     ├── api-gateway.log
     ├── auth-service.log
@@ -73,7 +76,7 @@ demo/
 ### 3. Serve it
 
 ```bash
-statespace serve demo/
+statespace serve rag/
 ```
 
 ### 4. Ask it
@@ -81,7 +84,7 @@ statespace serve demo/
 Pass the URL to your agents:
 
 ```bash
-claude "Find all database connection failures at http://127.0.0.1:8000"
+claude "What can I do with the API at http://127.0.0.1:8000?"
 ```
 
 ### 5. Deploy it
@@ -89,8 +92,8 @@ claude "Find all database connection failures at http://127.0.0.1:8000"
 Create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
 
 ```bash
-$ statespace deploy demo/
-Deployed to https://example.statespace.app
+$ statespace deploy rag/
+Deployed to https://rag.statespace.app
 ```
 
 ### More examples
@@ -100,7 +103,7 @@ See the [`examples/`](examples/) directory for ready-to-run apps:
 - **[rag](examples/rag)** — Search and analyze log files with `grep`
 - **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
 - **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
-- **[workflow](examples/workflow)** — Chain API calls to track the ISS
+- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
 - **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
 - **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
 
