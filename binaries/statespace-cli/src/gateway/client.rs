@@ -177,17 +177,6 @@ impl GatewayClient {
         check_api_response(resp).await
     }
 
-    pub(crate) async fn restart_application(&self, id_or_name: &str) -> Result<Application> {
-        let application = self.get_application(id_or_name).await?;
-        let url = format!(
-            "{}/api/v1/environments/{}/restart",
-            self.base_url, application.id
-        );
-        let resp = self.with_headers(self.http.post(&url)).send().await?;
-
-        parse_api_response(resp).await
-    }
-
     pub(crate) async fn list_secret_keys(&self, environment_id: &str) -> Result<Vec<String>> {
         let url = format!(
             "{}/api/v1/environments/{}/secrets",
