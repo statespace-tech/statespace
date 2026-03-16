@@ -1,4 +1,9 @@
-const ALLOWED_APP_HOST_SUFFIXES: &[&str] = &["app.statespace.com", "app.staging.statespace.com"];
+const ALLOWED_APP_HOST_SUFFIXES: &[&str] = &[
+    "staging.statespace.app",
+    "statespace.app",
+    "app.staging.statespace.com",
+    "app.statespace.com",
+];
 
 /// Normalize user input into a value the gateway can resolve.
 ///
@@ -11,7 +16,7 @@ pub(crate) fn normalize_application_reference(input: &str) -> Result<String, Str
             return Ok(name);
         }
         return Err(format!(
-            "Invalid application URL: {input}. Expected https://{{name}}.app.statespace.com"
+            "Invalid application URL: {input}. Expected https://{{name}}.<statespace app host>"
         ));
     }
 
@@ -31,7 +36,7 @@ fn parse_name_from_url(input: &str) -> Option<String> {
             return None;
         }
         if let Some(stripped) = host.strip_suffix(suffix) {
-            let name = stripped.strip_suffix('.').unwrap_or(stripped);
+            let name = stripped.strip_suffix('.')?;
             if !name.is_empty() {
                 return Some(name.to_string());
             }
@@ -48,6 +53,14 @@ mod tests {
     #[test]
     fn parse_name_from_url_accepts_app_domains() {
         assert_eq!(
+            parse_name_from_url("https://my-cool-project.statespace.app"),
+            Some("my-cool-project".to_string())
+        );
+        assert_eq!(
+            parse_name_from_url("https://my-cool-project.staging.statespace.app"),
+            Some("my-cool-project".to_string())
+        );
+        assert_eq!(
             parse_name_from_url("https://my-cool-project.app.statespace.com"),
             Some("my-cool-project".to_string())
         );
@@ -59,6 +72,9 @@ mod tests {
 
     #[test]
     fn parse_name_from_url_rejects_bare_domain() {
+        assert_eq!(parse_name_from_url("https://statespace.app"), None);
+        assert_eq!(parse_name_from_url("https://staging.statespace.app"), None);
+        assert_eq!(parse_name_from_url("https://evilstatespace.app"), None);
         assert_eq!(parse_name_from_url("https://app.statespace.com"), None);
         assert_eq!(
             parse_name_from_url("https://app.staging.statespace.com"),
@@ -82,6 +98,11 @@ mod tests {
 
     #[test]
     fn normalize_url_extracts_name() {
+        let result =
+            normalize_application_reference("https://my-cool-project.staging.statespace.app")
+                .expect("should extract name from url");
+        assert_eq!(result, "my-cool-project");
+
         let result = normalize_application_reference("https://my-cool-project.app.statespace.com")
             .expect("should extract name from url");
         assert_eq!(result, "my-cool-project");

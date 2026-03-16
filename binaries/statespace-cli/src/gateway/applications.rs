@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use crate::error::Result;
+use crate::gateway::client::{GatewayClient, parse_api_response};
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ApplicationFile {
     pub path: String,
@@ -63,4 +66,17 @@ pub(crate) struct Application {
     // deserialization compatibility.
     #[allow(dead_code)]
     pub auth_token: Option<String>,
+}
+
+impl GatewayClient {
+    pub(crate) async fn restart_application(&self, id_or_name: &str) -> Result<Application> {
+        let application = self.get_application(id_or_name).await?;
+        let url = format!(
+            "{}/api/v1/environments/{}/restart",
+            self.base_url, application.id
+        );
+        let resp = self.with_headers(self.http.post(&url)).send().await?;
+
+        parse_api_response(resp).await
+    }
 }

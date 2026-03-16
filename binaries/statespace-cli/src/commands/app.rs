@@ -1,4 +1,4 @@
-use crate::args::{AppDeleteArgs, AppGetArgs};
+use crate::args::{AppDeleteArgs, AppGetArgs, AppRestartArgs};
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
 use crate::gateway::applications::ApplicationStatus;
@@ -47,6 +47,19 @@ pub(crate) async fn run_get(args: AppGetArgs, gateway: GatewayClient) -> Result<
     println!("Created:    {}", app.created_at);
     if let Some(ref url) = app.url {
         println!("URL:        {url}");
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn run_restart(args: AppRestartArgs, gateway: GatewayClient) -> Result<()> {
+    let reference = normalize_application_reference(&args.id).map_err(Error::cli)?;
+
+    eprintln!("Restarting '{}'...", args.id);
+    let app = gateway.restart_application(&reference).await?;
+    eprintln!("Restarted '{}'.", app.name);
+    if let Some(ref url) = app.url {
+        eprintln!("  URL: {url}");
     }
 
     Ok(())
