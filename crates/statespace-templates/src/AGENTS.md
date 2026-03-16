@@ -10,7 +10,7 @@ This Statespace web application exposes content and tools over HTTP. Follow thes
 
 ## Tools
 
-Tools are declared in YAML frontmatter on Markdown pages:
+Tools are declared in YAML frontmatter of Markdown pages:
 
 ```markdown
 ---
@@ -24,7 +24,7 @@ tools:
 ...
 ```
 
-Execute declared tool on any Markdown page by POSTing `{"command": [...]}` to `/`. 
+Tools declared on any Markdown page can be executed by POSTing `{"command": [...]}` to `/`. 
 Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
 
 ### Rules
