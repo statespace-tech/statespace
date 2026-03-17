@@ -108,6 +108,9 @@ pub(crate) enum AppCommands {
     /// Delete an application
     Delete(AppDeleteArgs),
 
+    /// Restart an application (pulls latest runtime image)
+    Restart(AppRestartArgs),
+
     /// SSH into an application
     #[cfg(feature = "ssh")]
     Ssh(AppSshArgs),
@@ -176,6 +179,13 @@ pub(crate) struct ServeArgs {
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppGetArgs {
+    /// Application name, ID, or URL
+    #[arg(value_name = "APP")]
+    pub id: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct AppRestartArgs {
     /// Application name, ID, or URL
     #[arg(value_name = "APP")]
     pub id: String,

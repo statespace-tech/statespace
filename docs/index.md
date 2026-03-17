@@ -12,7 +12,11 @@ Build and share RAG pipelines, text-to-SQL interfaces, knowledge bases, chatbots
 
 ## Example
 
-The following app is running on [https://demo-api.statespace.app](https://demo-api.statespace.app):
+The following steps walk through how the live example at [https://rag.statespace.app](https://rag.statespace.app) was built.
+
+### 1. Create it
+
+Write a `README.md` with tools, components, and instructions:
 
 ````yaml title="README.md"
 ---
@@ -21,37 +25,67 @@ tools:
 ---
 
 ```component
-echo "There are $(ls ./logs/* | wc -l | xargs) files under ./logs"
+echo "There are $(ls ./logs | wc -l | xargs) files under ./logs"
 ```
 
-Use `grep` to search through them
+Use `grep` to search through them.
+
+## Questions you can ask
+
+- Were there any database connection failures?
+- Which services logged authentication errors?
+- What deployment happened most recently and did it succeed?
 ````
 
-Pass the app URL to any agent that can make HTTP requests:
+### 2. Add your data
+
+Populate the directory with your app's files:
+
+```text
+rag/
+├── README.md
+└── logs/
+    ├── api-gateway.log
+    ├── auth-service.log
+    └── database.log
+```
+
+### 3. Serve it
+
+```bash
+statespace serve rag/
+```
+
+### 4. Ask it
+
+Pass the URL to your agents:
 
 === ":simple-claude: &nbsp; Claude Code"
 
     ```bash
-    claude "Search the logs at https://demo-api.statespace.app for any errors"
+    claude "What can I do with the API at http://127.0.0.1:8000?"
     ```
 
 === ":simple-cursor: &nbsp; Cursor"
 
     ```bash
-    agent "Search the logs at https://demo-api.statespace.app for any errors"
+    agent "What can I do with the API at http://127.0.0.1:8000?"
     ```
 
 === ":simple-githubcopilot: &nbsp; GitHub Copilot"
 
     ```bash
-    copilot -p "Search the logs at https://demo-api.statespace.app for any errors"
+    copilot -p "What can I do with the API at http://127.0.0.1:8000?"
     ```
 
-Alternatively, run the app locally:
+### 5. Deploy it
 
-1. Save the example above as `myapp/README.md`
-2. Install Statespace, and run `statespace serve myapp/`
-3. Point your agent to [`http://127.0.0.1:8000`](http://127.0.0.1:8000)
+Create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
+
+```bash
+$ statespace deploy rag/
+Deployed to https://rag.statespace.app
+```
 
 ## Concepts
 
@@ -133,7 +167,7 @@ Alternatively, run the app locally:
 
 **Secure** - Restrict access to your private apps with [token-based authentication](pages/deploy/security.md).
 
-## Use cases
+## More Examples
 
 <div class="grid cards" markdown style="grid-template-columns: repeat(3, 1fr);">
 
@@ -141,36 +175,49 @@ Alternatively, run the app locally:
 
     ---
 
-    Search documents with `grep`, `cat`, or your APIs.
+    Search and analyze log files with `grep`.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/rag)
 
 -   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
 
     ---
 
-    Organize records for structured queries.
+    Navigate a multi-page documentation tree.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/knowledge_base)
 
 -   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
 
     ---
 
-    Package tools and context into reusable skills.
+    An agent skill for using the Statespace CLI.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/agent_skill)
 
 -   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
 
     ---
 
-    Query databases with read-only access.
+    Query a SQLite database with natural language.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/text_to_sql)
 
 -   :lucide-workflow:{ .md .middle .jade } &nbsp; **AI Workflows**
 
     ---
 
-    Chain actions into multi-step flows.
+    Chain API calls to track the ISS and its trajectory.
 
--   :lucide-bot-message-square:{ .md .middle .jade } &nbsp; **Chatbots**
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/workflow)
+
+-   :lucide-toolbox:{ .md .middle .jade } &nbsp; **Toolkit**
 
     ---
 
-    Build multi-turn conversational flows.
+    Python scripts for querying Reddit.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/toolkit)
 
 </div>
+

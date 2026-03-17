@@ -1,0 +1,5 @@
+2026-03-10T08:01:05Z INFO  type=email to=alice@example.com subject="Order Confirmation" status=sent
+2026-03-10T08:01:12Z INFO  type=email to=bob@example.com subject="Welcome" status=sent
+2026-03-10T08:01:17Z INFO  type=sms to=+1555012345 status=sent
+2026-03-10T08:01:22Z WARN  type=email to=charlie@example.com subject="Password Reset" status=deferred reason="rate limit reached"
+2026-03-10T08:01:28Z INFO  type=push device=ios_abc123 status=sent

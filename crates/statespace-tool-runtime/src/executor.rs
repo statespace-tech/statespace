@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{info, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
@@ -20,7 +20,7 @@ pub struct ExecutionLimits {
 impl Default for ExecutionLimits {
     fn default() -> Self {
         Self {
-            max_output_bytes: 1024 * 1024, // 1MB
+            max_output_bytes: 1024 * 1024,
             max_list_items: 1000,
             timeout: Duration::from_secs(30),
         }
@@ -97,7 +97,17 @@ impl ToolExecutor {
     }
 
     async fn execute_exec(&self, command: &str, args: &[String]) -> Result<ToolOutput, Error> {
-        info!("Executing: {} {:?}", command, args);
+        if command.contains('/')
+            || command.contains('\\')
+            || command.contains("..")
+            || (command.len() >= 2 && command.as_bytes()[1] == b':')
+        {
+            return Err(Error::Security(format!(
+                "Path separators not allowed in command name: {command}"
+            )));
+        }
+
+        debug!("Executing: {}", command);
 
         for arg in args {
             if arg.starts_with('/') {
@@ -161,7 +171,7 @@ impl ToolExecutor {
 
     fn execute_glob(&self, pattern: &str) -> Result<ToolOutput, Error> {
         let full_pattern = self.safe_join(pattern)?;
-        info!("Executing glob: {:?}", full_pattern);
+        debug!("Executing glob: {:?}", full_pattern);
 
         let pattern_str = full_pattern
             .to_str()

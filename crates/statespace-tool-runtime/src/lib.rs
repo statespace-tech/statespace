@@ -27,7 +27,7 @@ pub use env_validation::{EnvValidationError, validate_env_map};
 pub use error::{Error, Result};
 pub use executor::{ExecutionLimits, FileInfo, ToolExecutor, ToolOutput};
 pub use frontmatter::{Frontmatter, parse_frontmatter};
-pub use protocol::{ActionRequest, ActionResponse};
+pub use protocol::{ActionRequest, ActionResponse, ErrorResponse};
 pub use sandbox::SandboxEnv;
 pub use security::{is_private_or_restricted_ip, validate_url_initial};
 pub use spec::{

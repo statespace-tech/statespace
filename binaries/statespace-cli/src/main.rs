@@ -62,6 +62,7 @@ async fn run() -> Result<()> {
             AppCommands::List => commands::app::run_list(build_gateway()?).await,
             AppCommands::Get(args) => commands::app::run_get(args, build_gateway()?).await,
             AppCommands::Delete(args) => commands::app::run_delete(args, build_gateway()?).await,
+            AppCommands::Restart(args) => commands::app::run_restart(args, build_gateway()?).await,
             #[cfg(feature = "ssh")]
             AppCommands::Ssh(args) => commands::ssh::run_ssh(args, build_gateway()?).await,
         },

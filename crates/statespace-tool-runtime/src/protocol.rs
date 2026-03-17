@@ -53,6 +53,23 @@ impl ActionResponse {
     }
 }
 
+/// Standard JSON error response, similar to FastAPI's error model.
+#[derive(Debug, Serialize)]
+pub struct ErrorResponse {
+    pub error: String,
+    pub status: u16,
+}
+
+impl ErrorResponse {
+    #[must_use]
+    pub fn new(message: impl Into<String>, status: u16) -> Self {
+        Self {
+            error: format!("{}. See /AGENTS.md for API instructions.", message.into()),
+            status,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

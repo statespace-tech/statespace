@@ -43,12 +43,14 @@ fn wait_for_base_url(child: &mut Child) -> TestResult<String> {
         .ok_or_else(|| std::io::Error::other("failed to capture server stderr"))?;
     let (tx, rx) = mpsc::channel();
 
+    // This thread reads stderr for the lifetime of the server process.
+    // It keeps the pipe open so eprintln! in the server doesn't block.
     std::thread::spawn(move || {
         let reader = std::io::BufReader::new(stderr);
         for line in reader.lines() {
-            if tx.send(line).is_err() {
-                break;
-            }
+            // Ignore send errors — receiver may have been dropped after URL was found,
+            // but we must keep draining stderr so the server doesn't block on writes.
+            let _ = tx.send(line);
         }
     });
 
@@ -68,7 +70,9 @@ fn wait_for_base_url(child: &mut Child) -> TestResult<String> {
         let remaining = deadline.saturating_duration_since(now);
         match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
             Ok(Ok(line)) => {
-                if let Some(base_url) = line.trim().strip_prefix("Serving on ") {
+                if let Some(idx) = line.find("Serving on ") {
+                    let rest = &line[idx + "Serving on ".len()..];
+                    let base_url = rest.split_whitespace().next().unwrap_or(rest);
                     return Ok(base_url.to_string());
                 }
             }

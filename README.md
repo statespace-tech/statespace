@@ -37,50 +37,75 @@ curl -fsSL https://statespace.com/install.sh | bash
 
 ## Example
 
-### Create it
+### 1. Create it
 
-Start with one file: `README.md`
+Write a `README.md` with tools, components, and instructions:
 
 ````yaml
 ---
 tools:
-  - [expr]
+  - [grep]
 ---
 
 ```component
-echo "Random number: $RANDOM"
+echo "There are $(ls ./logs | wc -l | xargs) files under ./logs"
 ```
 
-# Instructions
-- The component loads a random number when the page loads
-- Use the `expr` tool to perform calculations with it
+Use `grep` to search through them.
+
+## Questions you can ask
+
+- Were there any database connection failures?
+- Which services logged authentication errors?
+- What deployment happened most recently and did it succeed?
 ````
 
-### Serve it
+### 2. Add your data
 
-Save the example above as `myapp/README.md` and run:
+Populate the directory with your app's files:
 
-```bash
-$ statespace serve myapp/
-Running on `http://127.0.0.1:8000`
+```text
+rag/
+├── README.md
+└── logs/
+    ├── api-gateway.log
+    ├── auth-service.log
+    └── database.log
 ```
 
-### Ask it
-
-Pass the URL to any agent that can make HTTP requests:
+### 3. Serve it
 
 ```bash
-claude "Multiply the random number in http://127.0.0.1:8000 by 256"
+statespace serve rag/
 ```
 
-### Deploy it
+### 4. Ask it
+
+Pass the URL to your agents:
+
+```bash
+claude "What can I do with the API at http://127.0.0.1:8000?"
+```
+
+### 5. Deploy it
 
 Create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
 
 ```bash
-$ statespace deploy myapp/
-Deployed to https://myapp.statespace.app
+$ statespace deploy rag/
+Deployed to https://rag.statespace.app
 ```
+
+### More examples
+
+See the [`examples/`](examples/) directory for ready-to-run apps:
+
+- **[rag](examples/rag)** — Search and analyze log files with `grep`
+- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
+- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
+- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
+- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
+- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
 
 ## Concepts
 

@@ -1,7 +1,9 @@
 //! Error types with HTTP status code mapping.
 
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use statespace_tool_runtime::ErrorResponse;
 
 pub use statespace_tool_runtime::Error;
 pub type Result<T> = std::result::Result<T, Error>;
@@ -28,7 +30,7 @@ impl From<Error> for ServerError {
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let status = self.0.status_code();
-        let body = self.0.user_message();
-        (status, body).into_response()
+        let response = ErrorResponse::new(self.0.user_message(), status.as_u16());
+        (status, Json(response)).into_response()
     }
 }

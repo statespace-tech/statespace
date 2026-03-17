@@ -50,7 +50,7 @@ impl Error {
         match self {
             Self::InvalidCommand(msg) => format!("Invalid command: {msg}"),
             Self::CommandNotFound { command } => {
-                format!("Command '{command}' not allowed by frontmatter")
+                format!("Command '{command}' not allowed by frontmatter of this page")
             }
             Self::NoFrontmatter => {
                 "No frontmatter found. Tools must be declared in YAML/TOML frontmatter.".to_string()

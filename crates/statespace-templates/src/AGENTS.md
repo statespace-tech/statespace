@@ -2,30 +2,31 @@
 
 This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
 
-## IMPORTANT
-
-USE `curl` OR EQUIVALENT RAW HTTP CLIENT FOR ALL REQUESTS. Do not use AI-mediated fetch tools — they summarize responses and will cause you to miss critical details like declared tool names.
-
 ## Quick start
 
 1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
 2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
-3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
+3. **Execute tools** — POST to the page where the tool is declared with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
 ## Tools
 
-Tools are declared in YAML frontmatter on Markdown files:
+Tools are declared in YAML frontmatter of Markdown pages:
 
-```yaml
+```markdown
 ---
 tools:
   - [ls]
   - [grep, -r, -i, { }, ../data/]
   - [cat, { regex: ".*\\.txt$" }]
 ---
+
+# My Markdown page
+...
 ```
 
-Execute any declared tool by POSTing `{"command": [...]}` to `/`. Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
+To execute a tool, POST `{"command": [...]}` to the path of the page that declares it.
+For example, if `/page.md` declares `[sqlite3, store.db, { }]`, POST to `/page.md`.
+Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
 
 ### Rules
 
