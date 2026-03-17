@@ -45,17 +45,22 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
         ));
     }
 
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .compact()
+        .try_init();
+
     let addr = config.socket_addr();
     let router =
         build_router(&config).map_err(|e| Error::cli(format!("Failed to build router: {e}")))?;
 
     let listener = TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
-    eprintln!(
-        "Serving on http://{}:{}",
-        local_addr.ip(),
-        local_addr.port()
-    );
+
+    let url = format!("http://{local_addr}");
+    // "Serving on" is parsed by integration tests — do not remove.
+    tracing::info!("Serving on {url} (Press CTRL+C to quit)");
 
     axum::serve(listener, router)
         .await
@@ -78,16 +83,14 @@ fn emit_missing_tool_warnings(content_root: &Path, sandbox_env: &SandboxEnv) {
         return;
     }
 
-    eprintln!(
-        "Warning: {} tool command(s) declared in markdown are not available in the serve runtime PATH.",
+    tracing::warn!(
+        "{} tool command(s) declared in markdown are not available in the serve runtime PATH. \
+         Requests using these commands will fail until the binaries are installed or PATH is updated.",
         missing.len()
-    );
-    eprintln!(
-        "         Requests using these commands will fail until the binaries are installed or PATH is updated."
     );
     for (command, files) in missing {
         let locations = files.iter().cloned().collect::<Vec<_>>().join(", ");
-        eprintln!("  - {command} (declared in: {locations})");
+        tracing::warn!("  - {command} (declared in: {locations})");
     }
 }
 

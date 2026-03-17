@@ -64,7 +64,7 @@ async fn write_if_missing(
     }
 
     fs::write(&path, content).await?;
-    eprintln!("Created {filename}");
+    tracing::info!("Created {filename}");
     Ok(InitResult::Created)
 }
 
@@ -84,7 +84,6 @@ mod tests {
 
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(dir.path().join("favicon.svg").exists());
-        assert!(!dir.path().join("opengraph.png").exists());
     }
 
     #[tokio::test]

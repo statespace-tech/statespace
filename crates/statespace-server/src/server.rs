@@ -11,17 +11,16 @@ use axum::{
     routing::get,
 };
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor, eval,
-    expand_command_for_execution, expand_placeholders, parse_frontmatter,
+    ActionRequest, ActionResponse, BuiltinTool, ErrorResponse, ExecutionLimits, SandboxEnv,
+    ToolExecutor, eval, expand_command_for_execution, expand_placeholders, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
+use tracing::Span;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -141,22 +140,38 @@ impl ServerState {
 pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
     let state = ServerState::from_config(config)?;
 
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::http::Request<_>| {
+            tracing::info_span!(
+                "",
+                method = %request.method(),
+                path = %request.uri().path(),
+            )
+        })
+        .on_response(
+            |response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
+                let status = response.status();
+                let code = status.as_u16();
+                let reason = status.canonical_reason().unwrap_or("");
+                let ms = latency.as_secs_f64() * 1000.0;
 
-    Ok(Router::new()
+                if code < 400 {
+                    tracing::info!("{code} {reason} {ms:.1}ms");
+                } else {
+                    tracing::error!("{code} {reason} {ms:.1}ms");
+                }
+            },
+        );
+
+    let router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
-        .route("/opengraph.png", get(opengraph_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state))
-}
+        .layer(trace_layer);
 
+    Ok(router.with_state(state))
+}
 async fn index_handler(
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
@@ -178,18 +193,6 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         .into_response()
 }
 
-async fn opengraph_handler(State(state): State<ServerState>) -> Response {
-    match fs::read(state.content_root.join("opengraph.png")).await {
-        Ok(custom) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/png")],
-            custom,
-        )
-            .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 async fn file_handler(
     Path(path): Path<String>,
     Query(query_env): Query<HashMap<String, String>>,
@@ -204,23 +207,16 @@ async fn serve_page(
     state: &ServerState,
 ) -> Response {
     if let Err(e) = validate_env_map(query_env) {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return json_error(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
-        Err(e) => {
-            warn!("File not found: {} ({})", path, e);
-            return (e.status_code(), e.user_message()).into_response();
-        }
+        Err(e) => return json_error(e.status_code(), &e.user_message()),
     };
 
-    let content = match fs::read_to_string(&file_path).await {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to read {}: {}", path, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
-        }
+    let Ok(content) = fs::read_to_string(&file_path).await else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
     };
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
@@ -271,30 +267,28 @@ async fn action_handler(
     execute_action(&path, &state, request).await
 }
 
-fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
-    let status = e.status_code();
-    let response = ActionResponse::error(e.user_message());
-    (status, Json(response)).into_response()
+fn runtime_error_response(e: &statespace_tool_runtime::Error) -> Response {
+    json_error(e.status_code(), &e.user_message())
 }
 
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {
     if let Err(msg) = request.validate() {
-        return error_response(StatusCode::BAD_REQUEST, &msg);
+        return json_error(StatusCode::BAD_REQUEST, &msg);
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let content = match state.content_resolver.resolve(path).await {
         Ok(c) => c,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let frontmatter = match parse_frontmatter(&content) {
         Ok(fm) => fm,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let command_with_placeholders = expand_placeholders(&request.command, &request.args);
@@ -307,42 +301,29 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
             .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
 
     if let Err(e) = validation_result {
-        warn!(
-            "Command not allowed by frontmatter: {:?} (expanded: {:?}, file: {})",
-            command_with_placeholders, expanded_command, path
-        );
-        return error_to_action_response(&e);
+        return runtime_error_response(&e);
     }
 
     let tool = match BuiltinTool::from_command(&expanded_command) {
         Ok(t) => t,
-        Err(e) => {
-            warn!("Unknown tool: {}", e);
-            return error_to_action_response(&e);
-        }
+        Err(e) => return runtime_error_response(&e),
     };
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
     let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
         .with_sandbox_env((*state.sandbox_env).clone());
 
-    info!("Executing tool: {:?}", tool);
-
     match executor.execute(&tool).await {
         Ok(output) => {
             let response = ActionResponse::success(output.to_text());
             (StatusCode::OK, Json(response)).into_response()
         }
-        Err(e) => {
-            let status = e.status_code();
-            let response = ActionResponse::error(e.user_message());
-            (status, Json(response)).into_response()
-        }
+        Err(e) => runtime_error_response(&e),
     }
 }
 
-fn error_response(status: StatusCode, message: &str) -> Response {
-    let response = ActionResponse::error(message.to_string());
+fn json_error(status: StatusCode, message: &str) -> Response {
+    let response = ErrorResponse::new(message, status.as_u16());
     (status, Json(response)).into_response()
 }
 

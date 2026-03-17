@@ -11,7 +11,7 @@ use tracing::warn;
 
 pub const EVAL_BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
 pub const EVAL_MAX_BLOCKS_PER_DOCUMENT: usize = 20;
-pub const EVAL_MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1MB
+pub const EVAL_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalBlock {
@@ -70,7 +70,7 @@ fn find_next_eval_block(content: &str, start: usize) -> Option<EvalBlock> {
         let code_region = &content[code_start..];
         let close_pos = find_closing_fence(code_region)?;
         let code = &content[code_start..code_start + close_pos];
-        let block_end = code_start + close_pos + 3; // skip closing ```
+        let block_end = code_start + close_pos + 3;
 
         return Some(EvalBlock {
             range: (abs_fence_start, block_end),
@@ -282,15 +282,15 @@ pub async fn process_eval_blocks_with_sandbox(
 
     let user_env = std::sync::Arc::new(user_env.clone());
     let sandbox_env = std::sync::Arc::new(sandbox_env.clone());
-    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
-    let mut set = tokio::task::JoinSet::new();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
+    let mut tasks = tokio::task::JoinSet::new();
 
     for (i, block) in blocks.into_iter().enumerate() {
-        let sem = sem.clone();
+        let sem = semaphore.clone();
         let wd = working_dir.to_path_buf();
         let env = user_env.clone();
         let sandbox_env = sandbox_env.clone();
-        set.spawn(async move {
+        tasks.spawn(async move {
             let Ok(_permit) = sem.acquire().await else {
                 return (
                     i,
@@ -309,7 +309,7 @@ pub async fn process_eval_blocks_with_sandbox(
 
     let mut outputs: Vec<(usize, (usize, usize), EvalResult)> =
         Vec::with_capacity(block_ranges.len());
-    while let Some(res) = set.join_next().await {
+    while let Some(res) = tasks.join_next().await {
         match res {
             Ok(item) => outputs.push(item),
             Err(e) => {
