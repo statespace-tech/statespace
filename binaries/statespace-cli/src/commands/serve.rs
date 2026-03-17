@@ -45,11 +45,11 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
         ));
     }
 
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_target(false)
         .with_writer(std::io::stderr)
         .compact()
-        .init();
+        .try_init();
 
     let addr = config.socket_addr();
     let router =
