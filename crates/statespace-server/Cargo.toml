@@ -23,7 +23,6 @@ statespace-templates.workspace = true
 # Web framework
 axum.workspace = true
 tokio.workspace = true
-tower.workspace = true
 tower-http.workspace = true
 
 # Serialization (for server-specific types)
@@ -51,4 +50,3 @@ workspace = true
 
 [features]
 default = []
-curl = []  # Enable HTTP client tool with SSRF protections

@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -31,7 +30,6 @@ pub struct ServerConfig {
     pub limits: ExecutionLimits,
     pub env: HashMap<String, String>,
     pub sandbox_env: SandboxEnv,
-    pub cors_origins: Vec<String>,
 }
 
 impl std::fmt::Debug for ServerConfig {
@@ -43,7 +41,6 @@ impl std::fmt::Debug for ServerConfig {
             .field("limits", &self.limits)
             .field("env_keys", &self.env.len())
             .field("sandbox_path", &self.sandbox_env.path())
-            .field("cors_origins", &self.cors_origins)
             .finish()
     }
 }
@@ -58,7 +55,6 @@ impl ServerConfig {
             limits: ExecutionLimits::default(),
             env: HashMap::new(),
             sandbox_env: SandboxEnv::default(),
-            cors_origins: Vec::new(),
         }
     }
 
@@ -83,12 +79,6 @@ impl ServerConfig {
     #[must_use]
     pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
         self.env = env;
-        self
-    }
-
-    #[must_use]
-    pub fn with_cors_origins(mut self, origins: Vec<String>) -> Self {
-        self.cors_origins = origins;
         self
     }
 
@@ -173,25 +163,12 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
             },
         );
 
-    let mut router = Router::new()
+    let router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
         .layer(trace_layer);
-
-    if !config.cors_origins.is_empty() {
-        let origins: Vec<_> = config
-            .cors_origins
-            .iter()
-            .filter_map(|o| o.parse().ok())
-            .collect();
-        let cors = CorsLayer::new()
-            .allow_origin(origins)
-            .allow_methods(Any)
-            .allow_headers(Any);
-        router = router.layer(cors);
-    }
 
     Ok(router.with_state(state))
 }
