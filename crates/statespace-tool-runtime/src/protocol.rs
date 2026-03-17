@@ -64,10 +64,7 @@ impl ErrorResponse {
     #[must_use]
     pub fn new(message: impl Into<String>, status: u16) -> Self {
         Self {
-            error: format!(
-                "{}. See /AGENTS.md for API instructions.",
-                message.into()
-            ),
+            error: format!("{}. See /AGENTS.md for API instructions.", message.into()),
             status,
         }
     }

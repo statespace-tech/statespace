@@ -11,13 +11,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use std::net::SocketAddr;
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ErrorResponse, ExecutionLimits, SandboxEnv,
     ToolExecutor, eval, expand_command_for_execution, expand_placeholders, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -161,17 +161,17 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 // Middleware: Uvicorn-style access log
 // ---------------------------------------------------------------------------
 
-async fn access_log(req: axum::extract::Request, next: middleware::Next) -> Response {
-    let method = req.method().clone();
-    let path = req.uri().path().to_string();
-    let version = req.version();
-    let addr = req
+async fn access_log(request: axum::extract::Request, next: middleware::Next) -> Response {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let version = request.version();
+    let addr = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0);
 
     let start = Instant::now();
-    let response = next.run(req).await;
+    let response = next.run(request).await;
     let status = response.status();
 
     let code = status.as_u16();
@@ -200,11 +200,13 @@ async fn access_log(req: axum::extract::Request, next: middleware::Next) -> Resp
     match addr {
         Some(a) => eprintln!(
             "{level_color}{level}{reset}:{:width$}{a} - \"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
-            "", width = 9 - level.len(),
+            "",
+            width = 9 - level.len(),
         ),
         None => eprintln!(
             "{level_color}{level}{reset}:{:width$}\"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
-            "", width = 9 - level.len(),
+            "",
+            width = 9 - level.len(),
         ),
     }
 
@@ -258,11 +260,8 @@ async fn serve_page(
         Err(e) => return json_error(e.status_code(), &e.user_message()),
     };
 
-    let content = match fs::read_to_string(&file_path).await {
-        Ok(c) => c,
-        Err(_) => {
-            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
-        }
+    let Ok(content) = fs::read_to_string(&file_path).await else {
+        return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
     };
 
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
