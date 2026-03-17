@@ -51,15 +51,19 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
 
     let listener = TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
-    eprintln!(
-        "Serving on http://{}:{}",
-        local_addr.ip(),
-        local_addr.port()
-    );
 
-    axum::serve(listener, router)
-        .await
-        .map_err(|e| Error::cli(format!("Server error: {e}")))?;
+    let url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
+    let green = "\x1b[32m";
+    let reset = "\x1b[0m";
+    // "Serving on" is parsed by integration tests — do not remove.
+    eprintln!("{green}INFO{reset}:     Serving on {url} (Press CTRL+C to quit)");
+
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| Error::cli(format!("Server error: {e}")))?;
     Ok(())
 }
 

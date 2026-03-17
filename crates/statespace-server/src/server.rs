@@ -5,23 +5,24 @@ use crate::error::ErrorExt;
 use crate::templates::FAVICON_SVG;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{StatusCode, header},
+    middleware,
     response::{IntoResponse, Response},
     routing::get,
 };
+use std::net::SocketAddr;
 use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, SandboxEnv, ToolExecutor, eval,
-    expand_command_for_execution, expand_placeholders, parse_frontmatter,
+    ActionRequest, ActionResponse, BuiltinTool, ErrorResponse, ExecutionLimits, SandboxEnv,
+    ToolExecutor, eval, expand_command_for_execution, expand_placeholders, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::fs;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
-use tracing::{info, warn};
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -150,12 +151,69 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .route("/", get(index_handler).post(action_handler_root))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
-        .route("/opengraph.png", get(opengraph_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
+        .layer(middleware::from_fn(access_log))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
         .with_state(state))
 }
+
+// ---------------------------------------------------------------------------
+// Middleware: Uvicorn-style access log
+// ---------------------------------------------------------------------------
+
+async fn access_log(req: axum::extract::Request, next: middleware::Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let version = req.version();
+    let addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0);
+
+    let start = Instant::now();
+    let response = next.run(req).await;
+    let status = response.status();
+
+    let code = status.as_u16();
+    let ms = start.elapsed().as_secs_f64() * 1000.0;
+    let reason = status.canonical_reason().unwrap_or("");
+
+    let green = "\x1b[32m";
+    let red = "\x1b[31m";
+    let reset = "\x1b[0m";
+
+    let (level_color, level) = match code {
+        200..=299 => (green, "INFO"),
+        _ => (red, "ERROR"),
+    };
+
+    let version_str = match version {
+        axum::http::Version::HTTP_09 => "HTTP/0.9",
+        axum::http::Version::HTTP_10 => "HTTP/1.0",
+        axum::http::Version::HTTP_11 => "HTTP/1.1",
+        axum::http::Version::HTTP_2 => "HTTP/2",
+        axum::http::Version::HTTP_3 => "HTTP/3",
+        _ => "HTTP/?",
+    };
+
+    // Pad so the colon aligns: "INFO:    " and "ERROR:   " both occupy 13 chars.
+    match addr {
+        Some(a) => eprintln!(
+            "{level_color}{level}{reset}:{:width$}{a} - \"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
+            "", width = 9 - level.len(),
+        ),
+        None => eprintln!(
+            "{level_color}{level}{reset}:{:width$}\"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
+            "", width = 9 - level.len(),
+        ),
+    }
+
+    response
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
 
 async fn index_handler(
     Query(query_env): Query<HashMap<String, String>>,
@@ -178,18 +236,6 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         .into_response()
 }
 
-async fn opengraph_handler(State(state): State<ServerState>) -> Response {
-    match fs::read(state.content_root.join("opengraph.png")).await {
-        Ok(custom) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "image/png")],
-            custom,
-        )
-            .into_response(),
-        Err(_) => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
 async fn file_handler(
     Path(path): Path<String>,
     Query(query_env): Query<HashMap<String, String>>,
@@ -204,22 +250,18 @@ async fn serve_page(
     state: &ServerState,
 ) -> Response {
     if let Err(e) = validate_env_map(query_env) {
-        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+        return json_error(StatusCode::BAD_REQUEST, &e.to_string());
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
-        Err(e) => {
-            warn!("File not found: {} ({})", path, e);
-            return (e.status_code(), e.user_message()).into_response();
-        }
+        Err(e) => return json_error(e.status_code(), &e.user_message()),
     };
 
     let content = match fs::read_to_string(&file_path).await {
         Ok(c) => c,
-        Err(e) => {
-            warn!("Failed to read {}: {}", path, e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+        Err(_) => {
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
         }
     };
 
@@ -271,30 +313,28 @@ async fn action_handler(
     execute_action(&path, &state, request).await
 }
 
-fn error_to_action_response(e: &statespace_tool_runtime::Error) -> Response {
-    let status = e.status_code();
-    let response = ActionResponse::error(e.user_message());
-    (status, Json(response)).into_response()
+fn runtime_error_response(e: &statespace_tool_runtime::Error) -> Response {
+    json_error(e.status_code(), &e.user_message())
 }
 
 async fn execute_action(path: &str, state: &ServerState, request: ActionRequest) -> Response {
     if let Err(msg) = request.validate() {
-        return error_response(StatusCode::BAD_REQUEST, &msg);
+        return json_error(StatusCode::BAD_REQUEST, &msg);
     }
 
     let file_path = match state.content_resolver.resolve_path(path).await {
         Ok(p) => p,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let content = match state.content_resolver.resolve(path).await {
         Ok(c) => c,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let frontmatter = match parse_frontmatter(&content) {
         Ok(fm) => fm,
-        Err(e) => return error_to_action_response(&e),
+        Err(e) => return runtime_error_response(&e),
     };
 
     let command_with_placeholders = expand_placeholders(&request.command, &request.args);
@@ -307,42 +347,29 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
             .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
 
     if let Err(e) = validation_result {
-        warn!(
-            "Command not allowed by frontmatter: {:?} (expanded: {:?}, file: {})",
-            command_with_placeholders, expanded_command, path
-        );
-        return error_to_action_response(&e);
+        return runtime_error_response(&e);
     }
 
     let tool = match BuiltinTool::from_command(&expanded_command) {
         Ok(t) => t,
-        Err(e) => {
-            warn!("Unknown tool: {}", e);
-            return error_to_action_response(&e);
-        }
+        Err(e) => return runtime_error_response(&e),
     };
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
     let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
         .with_sandbox_env((*state.sandbox_env).clone());
 
-    info!("Executing tool: {:?}", tool);
-
     match executor.execute(&tool).await {
         Ok(output) => {
             let response = ActionResponse::success(output.to_text());
             (StatusCode::OK, Json(response)).into_response()
         }
-        Err(e) => {
-            let status = e.status_code();
-            let response = ActionResponse::error(e.user_message());
-            (status, Json(response)).into_response()
-        }
+        Err(e) => runtime_error_response(&e),
     }
 }
 
-fn error_response(status: StatusCode, message: &str) -> Response {
-    let response = ActionResponse::error(message.to_string());
+fn json_error(status: StatusCode, message: &str) -> Response {
+    let response = ErrorResponse::new(message, status.as_u16());
     (status, Json(response)).into_response()
 }
 
