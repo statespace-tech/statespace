@@ -50,3 +50,4 @@ workspace = true
 
 [features]
 default = []
+curl = []  # Enable HTTP client tool with SSRF protections
