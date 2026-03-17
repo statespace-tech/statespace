@@ -5,9 +5,8 @@ use crate::error::ErrorExt;
 use crate::templates::FAVICON_SVG;
 use axum::{
     Json, Router,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{Path, Query, State},
     http::{StatusCode, header},
-    middleware,
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -17,12 +16,12 @@ use statespace_tool_runtime::{
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::fs;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
+use tracing::Span;
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -147,70 +146,29 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    let trace_layer = TraceLayer::new_for_http().on_response(
+        |response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
+            let status = response.status();
+            let code = status.as_u16();
+            let ms = latency.as_secs_f64() * 1000.0;
+            let reason = status.canonical_reason().unwrap_or("");
+
+            if code < 400 {
+                tracing::info!("{code} {reason} {ms:.0}ms");
+            } else {
+                tracing::error!("{code} {reason} {ms:.0}ms");
+            }
+        },
+    );
+
     Ok(Router::new()
         .route("/", get(index_handler).post(action_handler_root))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
-        .layer(middleware::from_fn(access_log))
+        .layer(trace_layer)
         .layer(cors)
         .with_state(state))
-}
-
-// ---------------------------------------------------------------------------
-// Middleware: Uvicorn-style access log
-// ---------------------------------------------------------------------------
-
-async fn access_log(request: axum::extract::Request, next: middleware::Next) -> Response {
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-    let version = request.version();
-    let addr = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|ci| ci.0);
-
-    let start = Instant::now();
-    let response = next.run(request).await;
-    let status = response.status();
-
-    let code = status.as_u16();
-    let ms = start.elapsed().as_secs_f64() * 1000.0;
-    let reason = status.canonical_reason().unwrap_or("");
-
-    let green = "\x1b[32m";
-    let red = "\x1b[31m";
-    let reset = "\x1b[0m";
-
-    let (level_color, level) = match code {
-        200..=299 => (green, "INFO"),
-        _ => (red, "ERROR"),
-    };
-
-    let version_str = match version {
-        axum::http::Version::HTTP_09 => "HTTP/0.9",
-        axum::http::Version::HTTP_10 => "HTTP/1.0",
-        axum::http::Version::HTTP_11 => "HTTP/1.1",
-        axum::http::Version::HTTP_2 => "HTTP/2",
-        axum::http::Version::HTTP_3 => "HTTP/3",
-        _ => "HTTP/?",
-    };
-
-    // Pad so the colon aligns: "INFO:    " and "ERROR:   " both occupy 13 chars.
-    match addr {
-        Some(a) => eprintln!(
-            "{level_color}{level}{reset}:{:width$}{a} - \"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
-            "",
-            width = 9 - level.len(),
-        ),
-        None => eprintln!(
-            "{level_color}{level}{reset}:{:width$}\"{method} {path} {version_str}\" {code} {reason} {ms:.0}ms",
-            "",
-            width = 9 - level.len(),
-        ),
-    }
-
-    response
 }
 
 // ---------------------------------------------------------------------------

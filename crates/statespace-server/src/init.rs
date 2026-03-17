@@ -64,7 +64,7 @@ async fn write_if_missing(
     }
 
     fs::write(&path, content).await?;
-    eprintln!("\x1b[32mINFO\x1b[0m:     Created {filename}");
+    tracing::info!("Created {filename}");
     Ok(InitResult::Created)
 }
 
