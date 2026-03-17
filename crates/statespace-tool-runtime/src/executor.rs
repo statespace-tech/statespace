@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
