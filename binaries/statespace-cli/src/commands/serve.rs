@@ -58,7 +58,7 @@ pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()>
     let listener = TcpListener::bind(&addr).await?;
     let local_addr = listener.local_addr()?;
 
-    let url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
+    let url = format!("http://{local_addr}");
     // "Serving on" is parsed by integration tests — do not remove.
     tracing::info!("Serving on {url} (Press CTRL+C to quit)");
 
