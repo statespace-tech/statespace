@@ -97,7 +97,13 @@ impl ToolExecutor {
     }
 
     async fn execute_exec(&self, command: &str, args: &[String]) -> Result<ToolOutput, Error> {
-        info!("Executing: {} {:?}", command, args);
+        if command.contains('/') || command.contains("..") {
+            return Err(Error::Security(format!(
+                "Path separators not allowed in command name: {command}"
+            )));
+        }
+
+        info!("Executing: {}", command);
 
         for arg in args {
             if arg.starts_with('/') {

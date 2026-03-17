@@ -8,24 +8,6 @@ use std::time::{Duration, Instant};
 
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip until 'm' (end of ANSI escape sequence)
-            for c2 in chars.by_ref() {
-                if c2 == 'm' {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 struct ChildGuard {
     child: Child,
 }
@@ -88,9 +70,8 @@ fn wait_for_base_url(child: &mut Child) -> TestResult<String> {
         let remaining = deadline.saturating_duration_since(now);
         match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
             Ok(Ok(line)) => {
-                let clean = strip_ansi(&line);
-                if let Some(idx) = clean.find("Serving on ") {
-                    let rest = &clean[idx + "Serving on ".len()..];
+                if let Some(idx) = line.find("Serving on ") {
+                    let rest = &line[idx + "Serving on ".len()..];
                     // Extract just the URL (stop at whitespace or parenthetical)
                     let base_url = rest.split_whitespace().next().unwrap_or(rest);
                     return Ok(base_url.to_string());
