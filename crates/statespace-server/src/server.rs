@@ -150,20 +150,28 @@ impl ServerState {
 pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
     let state = ServerState::from_config(config)?;
 
-    let trace_layer = TraceLayer::new_for_http().on_response(
-        |response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
-            let status = response.status();
-            let code = status.as_u16();
-            let ms = latency.as_secs_f64() * 1000.0;
-            let reason = status.canonical_reason().unwrap_or("");
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::http::Request<_>| {
+            tracing::info_span!(
+                "",
+                method = %request.method(),
+                path = %request.uri().path(),
+            )
+        })
+        .on_response(
+            |response: &axum::http::Response<_>, latency: std::time::Duration, _span: &Span| {
+                let status = response.status();
+                let code = status.as_u16();
+                let reason = status.canonical_reason().unwrap_or("");
+                let ms = latency.as_secs_f64() * 1000.0;
 
-            if code < 400 {
-                tracing::info!("{code} {reason} {ms:.0}ms");
-            } else {
-                tracing::error!("{code} {reason} {ms:.0}ms");
-            }
-        },
-    );
+                if code < 400 {
+                    tracing::info!("{code} {reason} {ms:.1}ms");
+                } else {
+                    tracing::error!("{code} {reason} {ms:.1}ms");
+                }
+            },
+        );
 
     let mut router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
