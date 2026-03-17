@@ -72,7 +72,6 @@ fn wait_for_base_url(child: &mut Child) -> TestResult<String> {
             Ok(Ok(line)) => {
                 if let Some(idx) = line.find("Serving on ") {
                     let rest = &line[idx + "Serving on ".len()..];
-                    // Extract just the URL (stop at whitespace or parenthetical)
                     let base_url = rest.split_whitespace().next().unwrap_or(rest);
                     return Ok(base_url.to_string());
                 }

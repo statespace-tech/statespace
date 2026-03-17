@@ -172,11 +172,6 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 
     Ok(router.with_state(state))
 }
-
-// ---------------------------------------------------------------------------
-// Handlers
-// ---------------------------------------------------------------------------
-
 async fn index_handler(
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,

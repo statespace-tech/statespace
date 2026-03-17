@@ -20,7 +20,7 @@ pub struct ExecutionLimits {
 impl Default for ExecutionLimits {
     fn default() -> Self {
         Self {
-            max_output_bytes: 1024 * 1024, // 1MB
+            max_output_bytes: 1024 * 1024,
             max_list_items: 1000,
             timeout: Duration::from_secs(30),
         }

@@ -11,7 +11,7 @@ use tracing::warn;
 
 pub const EVAL_BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
 pub const EVAL_MAX_BLOCKS_PER_DOCUMENT: usize = 20;
-pub const EVAL_MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1MB
+pub const EVAL_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalBlock {
@@ -70,7 +70,7 @@ fn find_next_eval_block(content: &str, start: usize) -> Option<EvalBlock> {
         let code_region = &content[code_start..];
         let close_pos = find_closing_fence(code_region)?;
         let code = &content[code_start..code_start + close_pos];
-        let block_end = code_start + close_pos + 3; // skip closing ```
+        let block_end = code_start + close_pos + 3;
 
         return Some(EvalBlock {
             range: (abs_fence_start, block_end),
