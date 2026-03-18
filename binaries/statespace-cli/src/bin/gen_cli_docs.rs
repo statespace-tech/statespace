@@ -6,17 +6,18 @@ use clap::{Arg, ArgAction, Command, CommandFactory};
 fn option_item(arg: &Arg) -> String {
     let mut parts = Vec::new();
     if let Some(l) = arg.get_long() {
-        parts.push(format!("--{l}"));
+        // Anchor + self-link for the long flag only
+        parts.push(format!("<a id=\"--{l}\"></a>[`--{l}`](#--{l})"));
     }
     if let Some(s) = arg.get_short() {
-        parts.push(format!("-{s}"));
+        parts.push(format!("`-{s}`"));
     }
     let flags = parts.join(", ");
     let desc = arg
         .get_help()
         .map(|h| format!("\n: {h}"))
         .unwrap_or_default();
-    format!("`{flags}`{desc}")
+    format!("{flags}{desc}")
 }
 
 fn positional_item(arg: &Arg) -> String {
@@ -28,7 +29,8 @@ fn positional_item(arg: &Arg) -> String {
         .get_help()
         .map(|h| format!("\n: {h}"))
         .unwrap_or_default();
-    format!("`{name}`{desc}")
+    let anchor = name.to_lowercase();
+    format!("<a id=\"{anchor}\"></a>[`{name}`](#{anchor}){desc}")
 }
 
 fn anchor(full_name: &str) -> String {

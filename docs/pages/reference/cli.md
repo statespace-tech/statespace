@@ -39,13 +39,13 @@ statespace [OPTIONS] <COMMAND>
 
 **Global options**
 
-`--api-key`
+<a id="--api-key"></a>[`--api-key`](#--api-key)
 : API key override
 
-`--org-id`
+<a id="--org-id"></a>[`--org-id`](#--org-id)
 : Organization ID override
 
-`--config`
+<a id="--config"></a>[`--config`](#--config)
 : Path to configuration
 
 ## `statespace serve`
@@ -60,21 +60,21 @@ statespace serve [OPTIONS] [PATH]
 
 **Arguments**
 
-`PATH`
+<a id="path"></a>[`PATH`](#path)
 : Directory to serve (default: current directory)
 
 **Options**
 
-`--host`
+<a id="--host"></a>[`--host`](#--host)
 : Host to bind the server to
 
-`--port`
+<a id="--port"></a>[`--port`](#--port)
 : Port to bind the server to
 
-`--env, -e`
+<a id="--env"></a>[`--env`](#--env), `-e`
 : Environment variables for component blocks (KEY=VALUE)
 
-`--env-file`
+<a id="--env-file"></a>[`--env-file`](#--env-file)
 : Load environment variables from a file
 
 ## `statespace deploy`
@@ -89,21 +89,21 @@ statespace deploy [OPTIONS] [PATH]
 
 **Arguments**
 
-`PATH`
+<a id="path"></a>[`PATH`](#path)
 : Directory to deploy. If omitted, creates an empty application
 
 **Options**
 
-`--visibility`
+<a id="--visibility"></a>[`--visibility`](#--visibility)
 : Application visibility (default: public on free-tier, otherwise private)
 
-`--name, -n`
+<a id="--name"></a>[`--name`](#--name), `-n`
 : Application name. Creates a new app with a random name if omitted
 
-`--env, -e`
+<a id="--env"></a>[`--env`](#--env), `-e`
 : Environment variables for deployed app secrets (KEY=VALUE)
 
-`--env-file`
+<a id="--env-file"></a>[`--env-file`](#--env-file)
 : Load deployed app secrets from a file
 
 ## `statespace app`
@@ -152,7 +152,7 @@ statespace app get <APP>
 
 **Arguments**
 
-`APP`
+<a id="app"></a>[`APP`](#app)
 : Application name, ID, or URL
 
 ### `statespace app delete`
@@ -167,12 +167,12 @@ statespace app delete [OPTIONS] <APP>
 
 **Arguments**
 
-`APP`
+<a id="app"></a>[`APP`](#app)
 : Application name, ID, or URL
 
 **Options**
 
-`--yes, -y`
+<a id="--yes"></a>[`--yes`](#--yes), `-y`
 : Skip confirmation prompt
 
 ### `statespace app restart`
@@ -187,7 +187,7 @@ statespace app restart <APP>
 
 **Arguments**
 
-`APP`
+<a id="app"></a>[`APP`](#app)
 : Application name, ID, or URL
 
 ## `statespace auth`
@@ -256,7 +256,7 @@ statespace auth token [OPTIONS]
 
 **Options**
 
-`--format, -f`
+<a id="--format"></a>[`--format`](#--format), `-f`
 : Output format
 
 ## `statespace tokens`
@@ -298,18 +298,18 @@ statespace tokens create [OPTIONS] <NAME>
 
 **Arguments**
 
-`NAME`
+<a id="name"></a>[`NAME`](#name)
 : Token name
 
 **Options**
 
-`--scope, -s`
+<a id="--scope"></a>[`--scope`](#--scope), `-s`
 : Token scope (read or admin)
 
-`--app-id`
+<a id="--app-id"></a>[`--app-id`](#--app-id)
 : Restrict token to specific application IDs
 
-`--expires`
+<a id="--expires"></a>[`--expires`](#--expires)
 : Expiration (ISO 8601 datetime, e.g. 2026-12-31T00:00:00Z)
 
 ### `statespace tokens list`
@@ -324,10 +324,10 @@ statespace tokens list [OPTIONS]
 
 **Options**
 
-`--all, -a`
+<a id="--all"></a>[`--all`](#--all), `-a`
 : Show all tokens including revoked
 
-`--limit, -l`
+<a id="--limit"></a>[`--limit`](#--limit), `-l`
 : Maximum number of tokens to return
 
 ### `statespace tokens get`
@@ -342,7 +342,7 @@ statespace tokens get <TOKEN_ID>
 
 **Arguments**
 
-`TOKEN_ID`
+<a id="token_id"></a>[`TOKEN_ID`](#token_id)
 : Token ID
 
 ### `statespace tokens rotate`
@@ -357,21 +357,21 @@ statespace tokens rotate [OPTIONS] <TOKEN_ID>
 
 **Arguments**
 
-`TOKEN_ID`
+<a id="token_id"></a>[`TOKEN_ID`](#token_id)
 : Token ID to rotate
 
 **Options**
 
-`--name`
+<a id="--name"></a>[`--name`](#--name)
 : New name
 
-`--scope`
+<a id="--scope"></a>[`--scope`](#--scope)
 : New scope (read or admin)
 
-`--app-id`
+<a id="--app-id"></a>[`--app-id`](#--app-id)
 : Restrict to specific application IDs
 
-`--expires`
+<a id="--expires"></a>[`--expires`](#--expires)
 : New expiration (ISO 8601 datetime)
 
 ### `statespace tokens revoke`
@@ -386,15 +386,15 @@ statespace tokens revoke [OPTIONS] <TOKEN_ID>
 
 **Arguments**
 
-`TOKEN_ID`
+<a id="token_id"></a>[`TOKEN_ID`](#token_id)
 : Token ID to revoke
 
 **Options**
 
-`--reason, -r`
+<a id="--reason"></a>[`--reason`](#--reason), `-r`
 : Revocation reason
 
-`--yes, -y`
+<a id="--yes"></a>[`--yes`](#--yes), `-y`
 : Skip confirmation prompt
 
 ## `statespace docs`
