@@ -1,5 +1,7 @@
 ---
 icon: lucide/globe
+hide:
+  - toc
 ---
 
 # REST API
@@ -8,7 +10,7 @@ REST API for interacting with Statespace application.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
-Read a file from the app's directory.
+Read a file from the app's directory. Requesting `/` returns `AGENTS.md`.
 
 <div class="grid" markdown>
 
@@ -32,15 +34,14 @@ Read a file from the app's directory.
 
   : Bearer token for authentication.
 
-**Response**
+**Responses**
 
-: File content (`text/markdown`).
-
-**Error response (JSON)**
-
-`error` (string)
-
-: Error message.
+| Status | Description |
+|--------|-------------|
+| `200` | File content (`text/markdown`). |
+| `400` | Invalid query parameters. |
+| `404` | File not found. |
+| `500` | Server error. |
 
 </div>
 
@@ -78,7 +79,7 @@ You are talking to: Alice
 
 ## <span class="http-method http-post">POST</span> `/{path}`
 
-Execute a tool.
+Execute a tool declared in the page's frontmatter. Requesting `/` executes tools declared in `README.md`.
 
 <div class="grid" markdown>
 
@@ -118,13 +119,17 @@ Execute a tool.
 
 `data.returncode` (integer)
 
-: Always `0` for successful responses. Tool failures are returned as an error response.
+: Exit code of the command (`0` for success, non-zero if the command exited with an error).
 
-**Error response (JSON)**
+**Responses**
 
-`error` (string)
-
-: Error message.
+| Status | Description |
+|--------|-------------|
+| `200` | Tool executed successfully. |
+| `400` | Command not allowed or validation error. |
+| `404` | Page not found. |
+| `422` | Malformed request body. |
+| `500` | Server error. |
 
 </div>
 

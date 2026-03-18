@@ -326,7 +326,11 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 
     match executor.execute(&tool).await {
         Ok(output) => {
-            let data = ActionResponse::success(output.to_text());
+            let data = ActionResponse {
+                stdout: output.stdout().to_string(),
+                stderr: output.stderr().to_string(),
+                returncode: output.exit_code(),
+            };
             let response = SuccessResponse::ok(data);
             (StatusCode::OK, Json(response)).into_response()
         }

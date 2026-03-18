@@ -32,6 +32,11 @@ impl Default for ExecutionLimits {
 pub enum ToolOutput {
     Text(String),
     FileList(Vec<FileInfo>),
+    Process {
+        stdout: String,
+        stderr: String,
+        exit_code: i32,
+    },
 }
 
 impl ToolOutput {
@@ -44,6 +49,40 @@ impl ToolOutput {
                 .map(|f| f.key.as_str())
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Self::Process { stdout, stderr, .. } => {
+                let mut out = stdout.clone();
+                if !stderr.is_empty() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(stderr);
+                }
+                out
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn stdout(&self) -> &str {
+        match self {
+            Self::Process { stdout, .. } => stdout,
+            _ => "",
+        }
+    }
+
+    #[must_use]
+    pub fn stderr(&self) -> &str {
+        match self {
+            Self::Process { stderr, .. } => stderr,
+            _ => "",
+        }
+    }
+
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Process { exit_code, .. } => *exit_code,
+            _ => 0,
         }
     }
 }
@@ -150,23 +189,22 @@ impl ToolExecutor {
                 Error::Internal(format!("Failed to execute {command}: {e}"))
             })?;
 
-        let mut result = String::from_utf8_lossy(&output.stdout).into_owned();
-        if !output.stderr.is_empty() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !result.is_empty() {
-                result.push('\n');
-            }
-            result.push_str(&stderr);
-        }
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        let exit_code = output.status.code().unwrap_or(1);
 
-        if result.len() > self.limits.max_output_bytes {
+        if stdout.len() + stderr.len() > self.limits.max_output_bytes {
             return Err(Error::OutputTooLarge {
-                size: result.len(),
+                size: stdout.len() + stderr.len(),
                 limit: self.limits.max_output_bytes,
             });
         }
 
-        Ok(ToolOutput::Text(result))
+        Ok(ToolOutput::Process {
+            stdout,
+            stderr,
+            exit_code,
+        })
     }
 
     fn execute_glob(&self, pattern: &str) -> Result<ToolOutput, Error> {

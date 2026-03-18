@@ -7,10 +7,54 @@
   },
   "paths": {
     "/": {
+      "get": {
+        "operationId": "readRoot",
+        "summary": "Read root page",
+        "description": "Returns `AGENTS.md` — the app's instructions and tool index.",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": false,
+            "description": "Environment variables injected into component blocks.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "description": "Bearer token for authentication.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content.",
+            "content": {
+              "text/markdown": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "operationId": "executeRootTool",
         "summary": "Execute a root tool",
-        "description": "Execute a tool declared in the frontmatter of `README.md` (the root tool registry).",
+        "description": "Execute a tool declared in the frontmatter of `README.md`.",
         "parameters": [
           {
             "name": "authorization",
@@ -103,7 +147,7 @@
       "post": {
         "operationId": "executeTool",
         "summary": "Execute a tool",
-        "description": "Execute a tool declared in the frontmatter of the page at `path`.",
+        "description": "Execute a tool declared in the frontmatter of the page at the given path.",
         "parameters": [
           {
             "name": "path",
@@ -183,8 +227,7 @@
           },
           "returncode": {
             "type": "integer",
-            "const": 0,
-            "description": "Always 0 for successful responses. Tool failures are returned as an error response."
+            "description": "Exit code of the command (0 for success, non-zero if the command exited with an error)."
           }
         }
       },
