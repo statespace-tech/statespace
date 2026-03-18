@@ -3,13 +3,12 @@ icon: lucide/home
 title: Get started
 ---
 
-<style>.md-content__inner > h1 { display: none; }</style>
-
+<!-- Keep the document H1 semantic and visible -->
 
 <div style="text-align: center; margin: 2rem 0 1.5rem;">
   <div style="display: flex; align-items: center; justify-content: center; gap: 0.75rem;">
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
-    <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
+    <h1 style="margin: 0; font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</h1>
   </div>
   <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Build APIs that agents can directly interact with.</p>
   <div style="margin-top: 1rem; display: flex; gap: 0.4rem; justify-content: center; flex-wrap: wrap;">
