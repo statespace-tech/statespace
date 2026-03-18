@@ -17,7 +17,7 @@ impl ActionRequest {
     /// Returns an error when the command is empty.
     pub fn validate(&self) -> Result<(), String> {
         if self.command.is_empty() {
-            return Err("command cannot be empty".to_string());
+            return Err("Command cannot be empty".to_string());
         }
         validate_env_map(&self.env).map_err(|e| e.to_string())?;
         Ok(())
