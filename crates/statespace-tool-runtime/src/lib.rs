@@ -35,6 +35,5 @@ pub use spec::{
 };
 pub use tools::{BuiltinTool, HttpMethod};
 pub use validation::{
-    expand_command_for_execution, expand_env_vars, validate_command,
-    validate_command_with_specs,
+    expand_command_for_execution, expand_env_vars, validate_command, validate_command_with_specs,
 };

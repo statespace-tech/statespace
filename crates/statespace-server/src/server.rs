@@ -295,9 +295,8 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
     let expanded_command =
         expand_command_for_execution(&request.command, &frontmatter.specs, &merged_env);
 
-    let validation_result =
-        validate_command_with_specs(&frontmatter.specs, &request.command)
-            .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
+    let validation_result = validate_command_with_specs(&frontmatter.specs, &request.command)
+        .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
 
     if let Err(e) = validation_result {
         return runtime_error_response(&e);
