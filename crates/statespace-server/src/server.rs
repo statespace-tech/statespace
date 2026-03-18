@@ -12,7 +12,7 @@ use axum::{
 };
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ErrorResponse, ExecutionLimits, SandboxEnv,
-    ToolExecutor, eval, expand_command_for_execution, expand_placeholders, parse_frontmatter,
+    SuccessResponse, ToolExecutor, eval, expand_command_for_execution, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
@@ -291,13 +291,12 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
         Err(e) => return runtime_error_response(&e),
     };
 
-    let command_with_placeholders = expand_placeholders(&request.command, &request.args);
     let merged_env = eval::merge_eval_env(state.env.as_ref(), &request.env);
     let expanded_command =
-        expand_command_for_execution(&command_with_placeholders, &frontmatter.specs, &merged_env);
+        expand_command_for_execution(&request.command, &frontmatter.specs, &merged_env);
 
     let validation_result =
-        validate_command_with_specs(&frontmatter.specs, &command_with_placeholders)
+        validate_command_with_specs(&frontmatter.specs, &request.command)
             .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
 
     if let Err(e) = validation_result {
@@ -315,7 +314,8 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 
     match executor.execute(&tool).await {
         Ok(output) => {
-            let response = ActionResponse::success(output.to_text());
+            let data = ActionResponse::success(output.to_text());
+            let response = SuccessResponse::ok(data);
             (StatusCode::OK, Json(response)).into_response()
         }
         Err(e) => runtime_error_response(&e),
@@ -323,7 +323,7 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 }
 
 fn json_error(status: StatusCode, message: &str) -> Response {
-    let response = ErrorResponse::new(message, status.as_u16());
+    let response = ErrorResponse::new(message);
     (status, Json(response)).into_response()
 }
 
@@ -454,7 +454,7 @@ mod tests {
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
 
@@ -484,7 +484,7 @@ mod tests {
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
 

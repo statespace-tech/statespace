@@ -102,15 +102,15 @@ Execute a tool.
 
 **Response (JSON)**
 
-`stdout` (string)
+`data.stdout` (string)
 
 : Standard output from the command.
 
-`stderr` (string)
+`data.stderr` (string)
 
 : Standard error from the command.
 
-`returncode` (integer)
+`data.returncode` (integer)
 
 : Exit code (0 for success, non-zero for errors).
 
@@ -134,9 +134,11 @@ curl -X POST \
 
 ```json
 {
-  "stdout": "logs/app.log:Connection error\n",
-  "stderr": "",
-  "returncode": 0
+  "data": {
+    "stdout": "logs/app.log:Connection error\n",
+    "stderr": "",
+    "returncode": 0
+  }
 }
 ```
 
