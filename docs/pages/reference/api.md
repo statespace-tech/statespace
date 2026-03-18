@@ -34,7 +34,13 @@ Read a file from the app's directory.
 
 **Response**
 
-: File content.
+: File content (`text/markdown`).
+
+**Error response (JSON)**
+
+`error` (string)
+
+: Error message. HTTP status reflects the error type (`404` for not found, `500` for server error).
 
 </div>
 
@@ -114,6 +120,12 @@ Execute a tool.
 
 : Exit code (0 for success, non-zero for errors).
 
+**Error response (JSON)**
+
+`error` (string)
+
+: Error message. HTTP status reflects the error type (`400` for bad request, `404` for not found, `422` for unprocessable entity, `500` for server error).
+
 </div>
 
 <div markdown>
@@ -139,6 +151,14 @@ curl -X POST \
     "stderr": "",
     "returncode": 0
   }
+}
+```
+
+**Example Error Response**
+
+```json
+{
+  "error": "Command 'rm' not allowed by frontmatter of this page. See /AGENTS.md for API instructions."
 }
 ```
 
