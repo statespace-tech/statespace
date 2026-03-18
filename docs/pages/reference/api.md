@@ -118,7 +118,7 @@ Execute a tool.
 
 `data.returncode` (integer)
 
-: Exit code (0 for success, non-zero for errors).
+: Always `0` for successful responses. Tool failures are returned as an error response.
 
 **Error response (JSON)**
 

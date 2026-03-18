@@ -268,7 +268,7 @@ async fn action_handler_root(
 ) -> Response {
     match body {
         Ok(Json(request)) => execute_action("", &state, request).await,
-        Err(e) => json_error(StatusCode::UNPROCESSABLE_ENTITY, &e.body_text()),
+        Err(e) => json_error(e.status(), &e.body_text()),
     }
 }
 
@@ -279,7 +279,7 @@ async fn action_handler(
 ) -> Response {
     match body {
         Ok(Json(request)) => execute_action(&path, &state, request).await,
-        Err(e) => json_error(StatusCode::UNPROCESSABLE_ENTITY, &e.body_text()),
+        Err(e) => json_error(e.status(), &e.body_text()),
     }
 }
 

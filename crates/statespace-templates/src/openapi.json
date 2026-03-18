@@ -6,8 +6,51 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/": {
+      "post": {
+        "operationId": "executeRootTool",
+        "summary": "Execute a root tool",
+        "description": "Execute a tool declared in the frontmatter of `README.md` (the root tool registry).",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "description": "Bearer token for authentication.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool executed successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SuccessResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/{path}": {
       "get": {
+        "operationId": "readFile",
         "summary": "Read a file",
         "description": "Read a file from the app's directory. Component blocks are evaluated before returning.",
         "parameters": [
@@ -19,11 +62,16 @@
             "schema": { "type": "string" }
           },
           {
-            "name": "{key}",
+            "name": "env",
             "in": "query",
             "required": false,
             "description": "Environment variables injected into component blocks.",
-            "schema": { "type": "string" }
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            }
           },
           {
             "name": "authorization",
@@ -53,6 +101,7 @@
         }
       },
       "post": {
+        "operationId": "executeTool",
         "summary": "Execute a tool",
         "description": "Execute a tool declared in the frontmatter of the page at `path`.",
         "parameters": [
@@ -110,6 +159,7 @@
           "command": {
             "type": "array",
             "items": { "type": "string" },
+            "minItems": 1,
             "description": "Command to execute as an array of strings (e.g. `[\"grep\", \"error\"]`)."
           },
           "env": {
@@ -133,7 +183,8 @@
           },
           "returncode": {
             "type": "integer",
-            "description": "Exit code (0 for success, non-zero for errors)."
+            "const": 0,
+            "description": "Always 0 for successful responses. Tool failures are returned as an error response."
           }
         }
       },
