@@ -43,7 +43,7 @@ Create a file `README.md` with:
 ````yaml title="README.md"
 ---
 tools:
-  - [date]
+    - [date]
 ---
 
 ```component
@@ -98,23 +98,23 @@ app/
 
 Then update `README.md` with tools and instructions for using them:
 
-````yaml title="README.md" hl_lines="4-5 14-16"
+````yaml title="README.md"
 ---
 tools:
-  - [date]
-  - [grep, -r, -i, { }, ./data/]
-  - [python3, script.py]
+    - [date]
+    - [python3, script.py]
+    - [grep, -r, -i, { }, ./data/]  
 ---
 
 ```component
 echo "Hello, world!"
 ```
 
-This is an example API.
+This is an example app.
 
 ## Instructions
-- Use grep to search through files in ./data/
-- Run python3 script.py
+- Run the python script
+- Use grep to search through files
 ````
 
 ### 5. Deploy it
@@ -131,66 +131,69 @@ statespace deploy . --public
     
     Give agents controlled access to CLI commands over HTTP. [Learn more](pages/develop/tools.md)
 
-    ````yaml title="example.md" hl_lines="1-6"
+    ````yaml title="README.md" hl_lines="1-6"
     ---
     tools:
-      - [grep]
-      - [curl, -X, GET, { }]
-      - [psql, -c, { regex: "^SELECT\\b.*" }]
+        - [date]
+        - [python3, script.py]
+        - [grep, -r, -i, { }, ./data/]
     ---
 
     ```component
-    echo "Server time: $(date)"
+    echo "Hello, world!"
     ```
 
-    # Instructions
-    - Use grep to search for logs in ./data
-    - Query the database for recent users
-    - See [analyze](src/analyze.md) for more workflows
+    This is an example app.
+
+    ## Instructions
+    - Run the python script
+    - Use grep to search through files
     ````
 
 === ":lucide-sparkles: &nbsp; Components"
 
     Render live data inside pages with `component` code blocks. [Learn more](pages/develop/components.md)
 
-    ````yaml title="example.md" hl_lines="8-10"
+    ````yaml title="README.md" hl_lines="8-10"
     ---
     tools:
-      - [grep]
-      - [curl, -X, GET, { }]
-      - [psql, -c, { regex: "^SELECT\\b.*" }]
+        - [date]
+        - [python3, script.py]
+        - [grep, -r, -i, { }, ./data/]
     ---
 
     ```component
-    echo "Server time: $(date)"
+    echo "Hello, world!"
     ```
 
-    # Instructions
-    - Use grep to search for logs in ./data
-    - Query the database for recent users
-    - See [analyze](src/analyze.md) for more workflows
+    This is an example app.
+
+    ## Instructions
+    - Run the python script
+    - Use grep to search through files
     ````
 
 === ":lucide-file-text: &nbsp; Instructions"
 
     Guide agents through your data, workflows, and pages. [Learn more](pages/develop/instructions.md)
 
-    ````yaml title="example.md" hl_lines="12-15"
+    ````yaml title="README.md" hl_lines="12-16"
     ---
     tools:
-      - [grep]
-      - [curl, -X, GET, { }]
-      - [psql, -c, { regex: "^SELECT\\b.*" }]
+        - [date]
+        - [python3, script.py]
+        - [grep, -r, -i, { }, ./data/]
     ---
 
     ```component
-    echo "Server time: $(date)"
+    echo "Hello, world!"
     ```
 
-    # Instructions
-    - Use grep to search for logs in ./data
-    - Query the database for recent users
-    - See [analyze](src/analyze.md) for more workflows
+    This is an example app.
+
+    ## Instructions
+    - Run the python script
+    - Use grep to search through files
     ````
 
 ## Features

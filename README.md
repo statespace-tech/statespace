@@ -25,9 +25,7 @@
 
 ---
 
-_Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with._
-
-_Build apps for RAG, knowledge bases, text-to-SQL, and more._
+_Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with. Build apps for RAG, knowledge bases, text-to-SQL, and more._
 
 ## Installation
 
@@ -46,7 +44,7 @@ Create a file `README.md` with:
 ````yaml
 ---
 tools:
-  - [date]
+    - [date]
 ---
 
 ```component
@@ -88,16 +86,20 @@ Then update `README.md` to add tools and instructions:
 ````yaml
 ---
 tools:
-  - [date]
-  - [grep, -r, -i, { }, ./data/]
-  - [python3, script.py]
+    - [date]
+    - [python3, script.py]
+    - [grep, -r, -i, { }, ./data/]
 ---
 
-This is an example API.
+```component
+echo "Hello, world!"
+```
+
+This is an example app.
 
 ## Instructions
-- Use grep to search through files in ./data/
-- Run python3 script.py
+- Run the python script
+- Use grep to search through files
 ````
 
 ### 5. Deploy it
