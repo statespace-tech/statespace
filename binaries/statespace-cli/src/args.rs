@@ -7,6 +7,7 @@ use crate::gateway::applications::Visibility;
 #[command(name = "statespace")]
 #[command(about = "Run, deploy, and manage Statespace apps.")]
 #[command(version)]
+#[allow(unreachable_pub)]
 pub struct Cli {
     /// API key override
     #[arg(long, global = true)]
@@ -29,7 +30,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
-    /// Serve a local app (no account required)
+    /// Run an app locally (no account required)
     Serve(ServeArgs),
 
     /// Deploy an app (create or update)
@@ -63,7 +64,7 @@ pub(crate) enum Commands {
     /// Open the Statespace documentation in your browser
     Docs,
 
-    /// Update to the latest version
+    /// Update this CLI to the latest version
     Update,
 }
 

@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 description = "Statespace command-line interface"
 
+default-run = "statespace"
+
 [lib]
 name = "statespace"
 path = "src/lib.rs"
@@ -15,6 +17,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "statespace"
 path = "src/main.rs"
+
+[[bin]]
+name = "gen-cli-docs"
+path = "src/bin/gen_cli_docs.rs"
 
 [features]
 default = []

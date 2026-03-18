@@ -17,7 +17,7 @@ statespace [OPTIONS] <COMMAND>
 **Commands**
 
 [`statespace serve`](#statespace-serve)
-: Serve a local app (no account required)
+: Run an app locally (no account required)
 
 [`statespace deploy`](#statespace-deploy)
 : Deploy an app (create or update)
@@ -35,7 +35,7 @@ statespace [OPTIONS] <COMMAND>
 : Open the Statespace documentation in your browser
 
 [`statespace update`](#statespace-update)
-: Update to the latest version
+: Update this CLI to the latest version
 
 **Global options**
 
@@ -50,7 +50,7 @@ statespace [OPTIONS] <COMMAND>
 
 ## `statespace serve`
 
-Serve a local app (no account required)
+Run an app locally (no account required)
 
 **Usage**
 
@@ -409,7 +409,7 @@ statespace docs
 
 ## `statespace update`
 
-Update to the latest version
+Update this CLI to the latest version
 
 **Usage**
 

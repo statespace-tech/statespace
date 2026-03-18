@@ -5,7 +5,6 @@ members = [
     "crates/statespace-server",
     "crates/statespace-tool-runtime",
     "crates/statespace-templates",
-    "tools/gen-cli-docs",
 ]
 
 [workspace.package]
