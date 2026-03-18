@@ -1,6 +1,6 @@
 [project]
-site_name = "STATESPACE"
-site_description = "Interactive web applications for AI agents"
+site_name = "Statespace"
+site_description = "Build APIs that agents can directly interact with."
 site_url = "https://docs.statespace.com"
 repo_url = "https://github.com/statespace-tech/statespace"
 repo_name = "statespace-tech/statespace"

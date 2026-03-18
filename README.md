@@ -8,7 +8,7 @@
 
 # Statespace
 
-**Build interactive web apps for AI agents in Markdown.**
+**Build APIs that AI agents can directly interact with.**
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -25,7 +25,9 @@
 
 ---
 
-_A declarative framework for building AI-friendly web applications that agents can navigate and interact with._
+_Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with._
+
+_Build apps for RAG, knowledge bases, text-to-SQL, and more._
 
 ## Installation
 
@@ -39,47 +41,28 @@ curl -fsSL https://statespace.com/install.sh | bash
 
 ### 1. Create it
 
-Write a `README.md` with tools, components, and instructions:
+Create a file `README.md` with:
 
 ````yaml
 ---
 tools:
-  - [grep]
+  - [date]
 ---
 
 ```component
-echo "There are $(ls ./logs | wc -l | xargs) files under ./logs"
+echo "Hello, world!"
 ```
 
-Use `grep` to search through them.
-
-## Questions you can ask
-
-- Were there any database connection failures?
-- Which services logged authentication errors?
-- What deployment happened most recently and did it succeed?
+This is an example application.
 ````
 
-### 2. Add your data
-
-Populate the directory with your app's files:
-
-```text
-rag/
-├── README.md
-└── logs/
-    ├── api-gateway.log
-    ├── auth-service.log
-    └── database.log
-```
-
-### 3. Serve it
+### 2. Run it
 
 ```bash
-statespace serve rag/
+statespace serve .
 ```
 
-### 4. Ask it
+### 3. Ask it
 
 Pass the URL to your agents:
 
@@ -87,13 +70,42 @@ Pass the URL to your agents:
 claude "What can I do with the API at http://127.0.0.1:8000?"
 ```
 
+### 4. Update it
+
+Add files to your app directory:
+
+```text
+app/
+├── README.md
+├── script.py
+└── data/
+    ├── notes.txt
+    └── logs.txt
+```
+
+Then update `README.md` to add tools and instructions:
+
+````yaml
+---
+tools:
+  - [date]
+  - [grep, -r, -i, { }, ./data/]
+  - [python3, script.py]
+---
+
+This is an example API.
+
+## Instructions
+- Use grep to search through files in ./data/
+- Run python3 script.py
+````
+
 ### 5. Deploy it
 
-Create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
+Optionally, create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
 
 ```bash
-$ statespace deploy rag/
-Deployed to https://rag.statespace.app
+statespace deploy . --public
 ```
 
 ### More examples
@@ -124,7 +136,7 @@ tools:
 </details>
 
 <details>
-<summary><b>Components</b> — Render live data inside <code>component</code> code blocks.</summary>
+<summary><b>Components</b> — Render live data inside pages with <code>component</code> code blocks.</summary>
 
 ````yaml
 ```component
@@ -138,7 +150,7 @@ echo "Server time: $(date)"
 <summary><b>Instructions</b> — Guide agents through your data, workflows, and pages.</summary>
 
 ```markdown
-# Instructions
+## Instructions
 - Use grep to search for logs in ./data
 - Query the database for recent users
 - See [analyze](src/analyze.md) for more workflows
@@ -150,11 +162,11 @@ echo "Server time: $(date)"
 
 ✅ **Simple** — It's just Markdown. Easy to learn, easy to use, easy to maintain.
 
-⚡ **Lightweight** — Install a single Rust binary. No dependencies.
+⚡ **Lightweight** — Install a single, lightning-fast Rust binary. No dependencies.
 
-🌐 **Universal** — Works immediately with any agent that can make HTTP requests.
+🌐 **Universal** — Works directly with any agent that can make HTTP requests.
 
-📦 **Portable** — Deploy apps to the cloud for a public URL, or run them locally.
+📦 **Portable** — Run or deploy your apps with a single CLI command.
 
 🔒 **Secure** — Restrict access to your private apps with token-based authentication.
 

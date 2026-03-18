@@ -65,14 +65,6 @@
   color: var(--md-code-fg-color) !important;
 }
 
-/* STATESPACE header topic styling */
-.md-header__title .md-header__topic:first-child .md-ellipsis {
-    font-family: Montserrat, sans-serif;
-    font-weight: 600;
-    letter-spacing: 0.25em;
-}
-
-
 /* Jade green icon color */
 .jade {
     color: #00bb77;

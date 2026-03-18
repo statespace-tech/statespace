@@ -48,16 +48,17 @@ tools:
 - Do not make assumptions
 ```
 
-`AGENTS.md` teaches agents how to interact with your app through the [REST API](../reference/api.md):
+`AGENTS.md` teaches agents how to interact with your app through its [REST API](../reference/api.md):
 
 ```markdown title="AGENTS.md"
-# App instructions
+# Statespace Application Instructions
 
-This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
+This web application exposes content and tools over HTTP. 
+Follow these instructions exactly.
 
-## Quick start
+## Quick Start
 
-1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
+1. **GET `/README.md`** — discover what this application does and where to navigate.
 2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
 3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
@@ -66,9 +67,9 @@ This Statespace web application exposes content and tools over HTTP. Follow thes
 
 While `AGENTS.md` is served at the root URL for onboarding, `README.md` is served normally:
 
-```bash
-curl https://example.statespace.app/            # returns AGENTS.md
-curl https://example.statespace.app/README.md   # returns README.md
+```console
+$ curl https://demo.statespace.app/            # returns AGENTS.md
+$ curl https://demo.statespace.app/README.md   # returns README.md
 ```
 
 ## Links

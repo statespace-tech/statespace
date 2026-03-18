@@ -76,5 +76,5 @@ statespace {serve,deploy} --env-file .env
 Alternatively, pass them as query parameters when [fetching pages](../reference/api.md#get):
 
 ```bash
-curl "https://example.statespace.app/page.md?USER=admin"
+curl "https://demo.statespace.app/page.md?USER=admin"
 ```

@@ -4,6 +4,8 @@ icon: lucide/download
 
 # Install
 
+Install the Statespace CLI to run, manage, and deploy apps.
+
 ## Quick install
 
 Use the install script or install via Cargo:

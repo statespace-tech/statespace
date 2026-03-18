@@ -83,7 +83,7 @@ For [tool calls](../reference/api.md#post), you can pass them in the request bod
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  "https://example.statespace.app/page.md" \
+  "https://demo.statespace.app/page.md" \
   -d '{
     "command": ["psql", "-U", "$DB_USER", "-d", "$DB_NAME", "-c", "SELECT 1"],
     "env": {"DB_USER": "admin", "DB_NAME": "mydb"}
@@ -93,7 +93,7 @@ curl -X POST \
 For [page fetches](../reference/api.md#get), you can also pass them as query parameters:
 
 ```bash
-curl "https://example.statespace.app/page.md?DB_USER=admin"
+curl "https://demo.statespace.app/page.md?DB_USER=admin"
 ```
 
 !!! warning
