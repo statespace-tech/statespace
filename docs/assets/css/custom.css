@@ -70,8 +70,8 @@
     color: #00bb77;
 }
 
-/* Hide the auto-generated page title h1 on the home page */
-.md-content__inner > h1 {
+/* Hide the auto-generated page title h1 on the home page only */
+body.homepage .md-content__inner > h1 {
     display: none;
 }
 
