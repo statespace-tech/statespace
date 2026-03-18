@@ -20,10 +20,10 @@ fn option_item(arg: &Arg) -> String {
 }
 
 fn positional_item(arg: &Arg) -> String {
-    let name = arg
-        .get_value_names()
-        .and_then(|n| n.first())
-        .map_or_else(|| arg.get_id().to_string().to_uppercase(), ToString::to_string);
+    let name = arg.get_value_names().and_then(|n| n.first()).map_or_else(
+        || arg.get_id().to_string().to_uppercase(),
+        ToString::to_string,
+    );
     let desc = arg
         .get_help()
         .map(|h| format!("\n: {h}"))
@@ -52,10 +52,10 @@ fn usage_line(cmd: &Command, full_name: &str) -> String {
         parts.push("<COMMAND>".to_string());
     }
     for arg in &positionals {
-        let name = arg
-            .get_value_names()
-            .and_then(|n| n.first())
-            .map_or_else(|| arg.get_id().to_string().to_uppercase(), ToString::to_string);
+        let name = arg.get_value_names().and_then(|n| n.first()).map_or_else(
+            || arg.get_id().to_string().to_uppercase(),
+            ToString::to_string,
+        );
         if arg.is_required_set() {
             parts.push(format!("<{name}>"));
         } else {
