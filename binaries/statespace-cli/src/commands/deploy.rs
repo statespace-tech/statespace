@@ -29,19 +29,19 @@ pub(crate) trait DeployGateway {
 
     fn list_secret_keys(
         &self,
-        environment_id: &str,
+        application_id: &str,
     ) -> impl std::future::Future<Output = Result<Vec<String>>> + Send;
 
     fn set_secret(
         &self,
-        environment_id: &str,
+        application_id: &str,
         key: &str,
         value: &str,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn delete_secret(
         &self,
-        environment_id: &str,
+        application_id: &str,
         key: &str,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
@@ -64,16 +64,16 @@ impl DeployGateway for GatewayClient {
         self.upsert_application(name, files).await
     }
 
-    async fn list_secret_keys(&self, environment_id: &str) -> Result<Vec<String>> {
-        self.list_secret_keys(environment_id).await
+    async fn list_secret_keys(&self, application_id: &str) -> Result<Vec<String>> {
+        self.list_secret_keys(application_id).await
     }
 
-    async fn set_secret(&self, environment_id: &str, key: &str, value: &str) -> Result<()> {
-        self.set_secret(environment_id, key, value).await
+    async fn set_secret(&self, application_id: &str, key: &str, value: &str) -> Result<()> {
+        self.set_secret(application_id, key, value).await
     }
 
-    async fn delete_secret(&self, environment_id: &str, key: &str) -> Result<()> {
-        self.delete_secret(environment_id, key).await
+    async fn delete_secret(&self, application_id: &str, key: &str) -> Result<()> {
+        self.delete_secret(application_id, key).await
     }
 }
 
@@ -140,7 +140,7 @@ pub(crate) async fn run_deploy(
                 .await
                 .map_err(|e| map_create_error(e, &name))?;
 
-            let sync = sync_environment_secrets(&gateway, &result.id, &deploy_env).await?;
+            let sync = sync_application_secrets(&gateway, &result.id, &deploy_env).await?;
 
             eprintln!();
             eprintln!("Created '{name}'");
@@ -242,7 +242,7 @@ pub(crate) async fn run_deploy(
             let upsert_result = gateway.upsert_application(&target.name, files).await?;
             let result = DeployOutcome::from_upsert(upsert_result);
 
-            let sync = sync_environment_secrets(&gateway, &result.id, &deploy_env).await?;
+            let sync = sync_application_secrets(&gateway, &result.id, &deploy_env).await?;
 
             let action = if result.created { "Created" } else { "Updated" };
             eprintln!("{action} application '{}'", result.name);
@@ -265,12 +265,12 @@ pub(crate) async fn run_deploy(
     }
 }
 
-async fn sync_environment_secrets(
+async fn sync_application_secrets(
     gateway: &impl DeployGateway,
-    environment_id: &str,
+    application_id: &str,
     desired: &HashMap<String, String>,
 ) -> Result<SecretSyncSummary> {
-    let existing_keys = gateway.list_secret_keys(environment_id).await?;
+    let existing_keys = gateway.list_secret_keys(application_id).await?;
 
     let desired_sorted: BTreeMap<&str, &str> = desired
         .iter()
@@ -278,14 +278,14 @@ async fn sync_environment_secrets(
         .collect();
 
     for (key, value) in &desired_sorted {
-        gateway.set_secret(environment_id, key, value).await?;
+        gateway.set_secret(application_id, key, value).await?;
     }
 
     let desired_keys: BTreeSet<&str> = desired_sorted.keys().copied().collect();
     let mut deleted = 0;
     for key in existing_keys {
         if !desired_keys.contains(key.as_str()) {
-            gateway.delete_secret(environment_id, &key).await?;
+            gateway.delete_secret(application_id, &key).await?;
             deleted += 1;
         }
     }
@@ -423,7 +423,7 @@ mod tests {
                 return Err(Error::Gateway(GatewayError::Api {
                     status: 409,
                     code: ApiErrorCode::NameTaken,
-                    message: format!("Environment name '{name}' is already taken"),
+                    message: format!("Application name '{name}' is already taken"),
                 }));
             }
 
@@ -442,24 +442,24 @@ mod tests {
             Ok(self.upsert_result.clone())
         }
 
-        async fn list_secret_keys(&self, _environment_id: &str) -> Result<Vec<String>> {
+        async fn list_secret_keys(&self, _application_id: &str) -> Result<Vec<String>> {
             Ok(self.existing_secret_keys.clone())
         }
 
-        async fn set_secret(&self, environment_id: &str, key: &str, value: &str) -> Result<()> {
+        async fn set_secret(&self, application_id: &str, key: &str, value: &str) -> Result<()> {
             self.set_secret_calls.lock().expect("lock poisoned").push((
-                environment_id.to_string(),
+                application_id.to_string(),
                 key.to_string(),
                 value.to_string(),
             ));
             Ok(())
         }
 
-        async fn delete_secret(&self, environment_id: &str, key: &str) -> Result<()> {
+        async fn delete_secret(&self, application_id: &str, key: &str) -> Result<()> {
             self.delete_secret_calls
                 .lock()
                 .expect("lock poisoned")
-                .push((environment_id.to_string(), key.to_string()));
+                .push((application_id.to_string(), key.to_string()));
             Ok(())
         }
     }

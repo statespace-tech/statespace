@@ -4,7 +4,7 @@ icon: lucide/terminal
 
 # CLI reference
 
-The Statespace CLI (`statespace`) lets you deploy, manage, and connect to environments.
+The Statespace CLI (`statespace`) lets you deploy, manage, and connect to applications.
 
 ## Global options
 
@@ -20,7 +20,7 @@ These options apply to all commands:
 
 ### `statespace deploy`
 
-Deploy an app. Creates a new environment if one doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
+Deploy an app. Creates a new application if one doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
 
 ```bash
 statespace deploy [OPTIONS] [PATH]
@@ -29,7 +29,7 @@ statespace deploy [OPTIONS] [PATH]
 **Arguments:**
 
 `PATH`
-: Directory containing markdown files (optional, omit to create an empty environment)
+: Directory containing markdown files (optional, omit to create an empty application)
 
 **Options:**
 
@@ -51,10 +51,10 @@ statespace deploy [OPTIONS] [PATH]
 # Deploy from a directory
 statespace deploy ./my-docs --name production
 
-# Deploy empty environment
+# Deploy empty application
 statespace deploy --name scratch-env
 
-# Deploy private environment
+# Deploy private application
 statespace deploy ./project --name my-project --visibility private
 
 # Deploy with environment variables
