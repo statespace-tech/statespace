@@ -113,11 +113,11 @@ statespace deploy . --public
 See the [`examples/`](examples/) directory for ready-to-run apps:
 
 - **[rag](examples/rag)** — Search and analyze log files with `grep`
-- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
 - **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
+- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
 - **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
-- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
 - **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
+- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
 
 ## Concepts
 

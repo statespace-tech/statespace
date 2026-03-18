@@ -225,14 +225,6 @@ statespace deploy . --public
 
     [See example](https://github.com/statespace-tech/statespace/tree/main/examples/knowledge_base)
 
--   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
-
-    ---
-
-    An agent skill for using the Statespace CLI.
-
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/agent_skill)
-
 -   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
 
     ---
@@ -249,7 +241,15 @@ statespace deploy . --public
 
     [See example](https://github.com/statespace-tech/statespace/tree/main/examples/workflow)
 
--   :lucide-toolbox:{ .md .middle .jade } &nbsp; **Toolkit**
+-   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
+
+    ---
+
+    An agent skill for using the Statespace CLI.
+
+    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/agent_skill)
+
+-   :lucide-toolbox:{ .md .middle .jade } &nbsp; **Toolkits**
 
     ---
 
