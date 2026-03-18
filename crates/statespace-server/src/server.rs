@@ -301,10 +301,7 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
     let expanded_command =
         expand_command_for_execution(&request.command, &frontmatter.specs, &merged_env);
 
-    let validation_result = validate_command_with_specs(&frontmatter.specs, &request.command)
-        .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
-
-    if let Err(e) = validation_result {
+    if let Err(e) = validate_command_with_specs(&frontmatter.specs, &request.command) {
         return runtime_error_response(&e);
     }
 
@@ -467,7 +464,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let data = json.get("data").expect("response must have 'data' key");
+        let stdout = data
+            .get("stdout")
+            .expect("data must have 'stdout'")
+            .as_str()
+            .unwrap();
+        let stderr = data
+            .get("stderr")
+            .expect("data must have 'stderr'")
+            .as_str()
+            .unwrap();
+        let returncode = data
+            .get("returncode")
+            .expect("data must have 'returncode'")
+            .as_i64()
+            .unwrap();
+        assert!(stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        assert_eq!(stderr, "");
+        assert_eq!(returncode, 0);
     }
 
     #[tokio::test]
@@ -497,7 +513,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        assert!(body.contains("$DATABASE_URL"));
-        assert!(!body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let data = json.get("data").expect("response must have 'data' key");
+        let stdout = data
+            .get("stdout")
+            .expect("data must have 'stdout'")
+            .as_str()
+            .unwrap();
+        let stderr = data
+            .get("stderr")
+            .expect("data must have 'stderr'")
+            .as_str()
+            .unwrap();
+        let returncode = data
+            .get("returncode")
+            .expect("data must have 'returncode'")
+            .as_i64()
+            .unwrap();
+        assert!(stdout.contains("$DATABASE_URL"));
+        assert!(!stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        assert_eq!(stderr, "");
+        assert_eq!(returncode, 0);
     }
 }
