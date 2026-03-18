@@ -4,7 +4,7 @@ icon: lucide/settings
 
 # Configuration
 
-Running `statespace auth login` creates a config file. 
+Running `statespace auth login` creates a config file.
 
 ```toml title="~/.config/statespace/config.toml"
 [auth]

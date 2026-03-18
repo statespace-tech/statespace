@@ -28,7 +28,7 @@ title: Get started
 
 ---
 
-Statespace is declarative, Markdown-based web framework for building APIs that AI agents can directly interact with.
+Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with.
 Build apps for RAG, knowledge bases, text-to-SQL, and more.
 
 
@@ -48,7 +48,7 @@ tools:
 ---
 
 ```component
-echo "echo "Hello, world!"
+echo "Hello, world!"
 ```
 
 This is an example application.

@@ -67,9 +67,9 @@ Follow these instructions exactly.
 
 While `AGENTS.md` is served at the root URL for onboarding, `README.md` is served normally:
 
-```console
-$ curl https://demo.statespace.app/            # returns AGENTS.md
-$ curl https://demo.statespace.app/README.md   # returns README.md
+```bash
+curl https://demo.statespace.app/            # returns AGENTS.md
+curl https://demo.statespace.app/README.md   # returns README.md
 ```
 
 ## Links
