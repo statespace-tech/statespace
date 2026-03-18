@@ -604,6 +604,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gen-cli-docs"
+version = "0.1.7"
+dependencies = [
+ "clap",
+ "statespace",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

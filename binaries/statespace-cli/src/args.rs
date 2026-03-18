@@ -5,9 +5,9 @@ use crate::gateway::applications::Visibility;
 
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
-#[command(about = "Statespace CLI - deploy and manage applications")]
+#[command(about = "Run, deploy, and manage Statespace apps.")]
 #[command(version)]
-pub(crate) struct Cli {
+pub struct Cli {
     /// API key override
     #[arg(long, global = true)]
     pub api_key: Option<String>,
@@ -29,11 +29,11 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
-    /// Authentication commands
-    Auth {
-        #[command(subcommand)]
-        command: AuthCommands,
-    },
+    /// Serve a local app (no account required)
+    Serve(ServeArgs),
+
+    /// Deploy an app (create or update)
+    Deploy(AppDeployArgs),
 
     /// Application commands
     App {
@@ -41,23 +41,23 @@ pub(crate) enum Commands {
         command: AppCommands,
     },
 
-    /// Deploy an app (create or update)
-    Deploy(AppDeployArgs),
-
-    /// Serve a local app (no account required)
-    Serve(ServeArgs),
-
-    /// SSH configuration management
-    #[cfg(feature = "ssh")]
-    Ssh {
+    /// Authentication commands
+    Auth {
         #[command(subcommand)]
-        command: SshCommands,
+        command: AuthCommands,
     },
 
     /// Token management commands
     Tokens {
         #[command(subcommand)]
         command: TokensCommands,
+    },
+
+    /// SSH configuration management
+    #[cfg(feature = "ssh")]
+    Ssh {
+        #[command(subcommand)]
+        command: SshCommands,
     },
 
     /// Open the Statespace documentation in your browser

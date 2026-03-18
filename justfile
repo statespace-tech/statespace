@@ -1,5 +1,9 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
+# Regenerate docs/pages/reference/cli.md from the CLI's clap definitions
+gen-docs:
+    cargo run --package gen-cli-docs
+
 # Bump version, commit, tag, and push — then trigger the release workflow.
 # level: patch | minor | major
 # Example: just release patch

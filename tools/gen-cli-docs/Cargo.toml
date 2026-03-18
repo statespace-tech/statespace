@@ -1,0 +1,13 @@
+[package]
+name = "gen-cli-docs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+statespace = { path = "../../binaries/statespace-cli" }
+clap = { workspace = true }
+
+[lints]
+workspace = true

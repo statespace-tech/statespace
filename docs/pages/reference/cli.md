@@ -4,323 +4,369 @@ icon: lucide/terminal
 
 # CLI reference
 
-The Statespace CLI (`statespace`) lets you deploy, manage, and connect to applications.
+## `statespace`
 
-## Global options
+Run, deploy, and manage Statespace apps.
 
-These options apply to all commands:
+**Usage**
+
+```
+statespace [OPTIONS] <COMMAND>
+```
+
+**Commands**
+
+[`statespace serve`](#statespace-serve)
+: Serve a local app (no account required)
+
+[`statespace deploy`](#statespace-deploy)
+: Deploy an app (create or update)
+
+[`statespace app`](#statespace-app)
+: Application commands
+
+[`statespace auth`](#statespace-auth)
+: Authentication commands
+
+[`statespace tokens`](#statespace-tokens)
+: Token management commands
+
+[`statespace docs`](#statespace-docs)
+: Open the Statespace documentation in your browser
+
+[`statespace update`](#statespace-update)
+: Update to the latest version
+
+**Global options**
 
 `--api-key`
-: API key override (uses stored credentials by default)
+: API key override
 
 `--org-id`
 : Organization ID override
 
-## Cloud deployment
+`--config`
+: Path to configuration
 
-### `statespace deploy`
+## `statespace serve`
 
-Deploy an app. Creates a new application if one doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
+Serve a local app (no account required)
 
-```bash
-statespace deploy [OPTIONS] [PATH]
+**Usage**
+
 ```
-
-**Arguments:**
-
-`PATH`
-: Directory containing markdown files (optional, omit to create an empty application)
-
-**Options:**
-
-`--name, -n`
-: Application name. Required when deploying from a directory path.
-
-`--visibility`
-: Application visibility: `public` or `private` (default: public on free-tier, otherwise private)
-
-`--env, -e`
-: Environment variables for component blocks (`KEY=VALUE`, can be specified multiple times)
-
-`--env-file`
-: Load environment variables from a file
-
-**Examples:**
-
-```bash
-# Deploy from a directory
-statespace deploy ./my-docs --name production
-
-# Deploy empty application
-statespace deploy --name scratch-env
-
-# Deploy private application
-statespace deploy ./project --name my-project --visibility private
-
-# Deploy with environment variables
-statespace deploy ./my-app --env API_KEY=abc123 --env-file .env
-```
-
-## Local development
-
-### `statespace serve`
-
-Serve a local app for development. No account required.
-
-```bash
 statespace serve [OPTIONS] [PATH]
 ```
 
-**Arguments:**
+**Arguments**
 
 `PATH`
 : Directory to serve (default: current directory)
 
-**Options:**
+**Options**
 
 `--host`
-: Host to bind to (default: `127.0.0.1`)
+: Host to bind the server to
 
 `--port`
-: Port to bind to (default: `8000`)
+: Port to bind the server to
 
 `--env, -e`
-: Environment variables for component blocks (`KEY=VALUE`, can be specified multiple times)
+: Environment variables for component blocks (KEY=VALUE)
 
 `--env-file`
 : Load environment variables from a file
 
-**Example:**
+## `statespace deploy`
 
-```bash
-statespace serve ./my-app --port 3000
+Deploy an app (create or update)
 
-# Pass environment variables
-statespace serve ./my-app --env API_KEY=abc123 --env DEBUG=true
+**Usage**
 
-# Load environment variables from a file
-statespace serve ./my-app --env-file .env
+```
+statespace deploy [OPTIONS] [PATH]
 ```
 
-## Authentication
+**Arguments**
 
-### `statespace auth login`
+`PATH`
+: Directory to deploy. If omitted, creates an empty application
 
-Log in via browser using device authorization flow. Opens a browser, waits for authorization, and saves credentials locally.
+**Options**
 
-```bash
-statespace auth login
+`--visibility`
+: Application visibility (default: public on free-tier, otherwise private)
+
+`--name, -n`
+: Application name. Creates a new app with a random name if omitted
+
+`--env, -e`
+: Environment variables for deployed app secrets (KEY=VALUE)
+
+`--env-file`
+: Load deployed app secrets from a file
+
+## `statespace app`
+
+Application commands
+
+**Usage**
+
+```
+statespace app <COMMAND>
 ```
 
-### `statespace auth logout`
+**Commands**
 
-Log out and clear stored credentials.
+[`statespace app list`](#statespace-app-list)
+: List all applications
 
-```bash
-statespace auth logout
-```
+[`statespace app get`](#statespace-app-get)
+: Show details for an application
 
-### `statespace auth status`
+[`statespace app delete`](#statespace-app-delete)
+: Delete an application
 
-Show current authentication status.
-
-```bash
-statespace auth status
-```
-
-Displays:
-
-- Email and name
-- User ID
-- API URL
-- Token expiration
-- Credentials file location
-
-### `statespace auth token`
-
-Print the current API token for use in scripts or CI/CD.
-
-```bash
-statespace auth token [OPTIONS]
-```
-
-**Options:**
-
-`--format, -f`
-: Output format: `plain` (default) or `json`
-
-**Examples:**
-
-```bash
-# Plain token output
-statespace auth token
-
-# JSON output with metadata
-statespace auth token --format json
-```
-
-## App management
+[`statespace app restart`](#statespace-app-restart)
+: Restart an application (pulls latest runtime image)
 
 ### `statespace app list`
 
-List all applications in the current organization.
+List all applications
 
-```bash
+**Usage**
+
+```
 statespace app list
 ```
 
 ### `statespace app get`
 
-Show details for an application.
+Show details for an application
 
-```bash
+**Usage**
+
+```
 statespace app get <APP>
 ```
 
-**Arguments:**
-
-`APP`
-: Application name, ID, or URL
-
-### `statespace app restart`
-
-Restart an application (pulls the latest runtime image).
-
-```bash
-statespace app restart <APP>
-```
-
-**Arguments:**
+**Arguments**
 
 `APP`
 : Application name, ID, or URL
 
 ### `statespace app delete`
 
-Delete an application.
+Delete an application
 
-```bash
+**Usage**
+
+```
 statespace app delete [OPTIONS] <APP>
 ```
 
-**Arguments:**
+**Arguments**
 
 `APP`
 : Application name, ID, or URL
 
-**Options:**
+**Options**
 
 `--yes, -y`
 : Skip confirmation prompt
 
-## Other
+### `statespace app restart`
 
-### `statespace docs`
+Restart an application (pulls latest runtime image)
 
-Open the Statespace documentation in your browser.
+**Usage**
 
-```bash
-statespace docs
+```
+statespace app restart <APP>
 ```
 
-### `statespace update`
+**Arguments**
 
-Update the CLI to the latest version. Downloads the latest release from GitHub, verifies its checksum, and replaces the current binary in place. Also creates an `ssp` symlink on Unix systems.
+`APP`
+: Application name, ID, or URL
 
-```bash
-statespace update
+## `statespace auth`
+
+Authentication commands
+
+**Usage**
+
+```
+statespace auth <COMMAND>
 ```
 
-## Token management
+**Commands**
 
-Personal access tokens for API authentication and CI/CD integrations.
+[`statespace auth login`](#statespace-auth-login)
+: Log in via browser (device auth flow)
+
+[`statespace auth logout`](#statespace-auth-logout)
+: Log out and clear stored credentials
+
+[`statespace auth status`](#statespace-auth-status)
+: Show current authentication status
+
+[`statespace auth token`](#statespace-auth-token)
+: Print the current API token
+
+### `statespace auth login`
+
+Log in via browser (device auth flow)
+
+**Usage**
+
+```
+statespace auth login
+```
+
+### `statespace auth logout`
+
+Log out and clear stored credentials
+
+**Usage**
+
+```
+statespace auth logout
+```
+
+### `statespace auth status`
+
+Show current authentication status
+
+**Usage**
+
+```
+statespace auth status
+```
+
+### `statespace auth token`
+
+Print the current API token
+
+**Usage**
+
+```
+statespace auth token [OPTIONS]
+```
+
+**Options**
+
+`--format, -f`
+: Output format
+
+## `statespace tokens`
+
+Token management commands
+
+**Usage**
+
+```
+statespace tokens <COMMAND>
+```
+
+**Commands**
+
+[`statespace tokens create`](#statespace-tokens-create)
+: Create a new personal access token
+
+[`statespace tokens list`](#statespace-tokens-list)
+: List personal access tokens
+
+[`statespace tokens get`](#statespace-tokens-get)
+: Show details for a token
+
+[`statespace tokens rotate`](#statespace-tokens-rotate)
+: Rotate a token (revoke old, issue new)
+
+[`statespace tokens revoke`](#statespace-tokens-revoke)
+: Revoke a token
 
 ### `statespace tokens create`
 
-Create a new personal access token.
+Create a new personal access token
 
-```bash
+**Usage**
+
+```
 statespace tokens create [OPTIONS] <NAME>
 ```
 
-**Arguments:**
+**Arguments**
 
 `NAME`
 : Token name
 
-**Options:**
+**Options**
 
 `--scope, -s`
-: Token scope: `read` (default) or `admin`
+: Token scope (read or admin)
 
 `--app-id`
-: Restrict token to specific application IDs (can be specified multiple times)
+: Restrict token to specific application IDs
 
 `--expires`
-: Expiration datetime (ISO 8601 format, e.g., `2026-12-31T00:00:00Z`)
-
-**Examples:**
-
-```bash
-# Create a read-only token
-statespace tokens create ci-readonly
-
-# Create an admin token for specific apps
-statespace tokens create deploy-token --scope admin --app-id abc123 --app-id def456
-
-# Create a token with expiration
-statespace tokens create temp-access --expires 2026-06-01T00:00:00Z
-```
+: Expiration (ISO 8601 datetime, e.g. 2026-12-31T00:00:00Z)
 
 ### `statespace tokens list`
 
-List personal access tokens.
+List personal access tokens
 
-```bash
+**Usage**
+
+```
 statespace tokens list [OPTIONS]
 ```
 
-**Options:**
+**Options**
 
 `--all, -a`
 : Show all tokens including revoked
 
 `--limit, -l`
-: Maximum number of tokens to return (default: 100)
+: Maximum number of tokens to return
 
 ### `statespace tokens get`
 
-Show details for a token.
+Show details for a token
 
-```bash
+**Usage**
+
+```
 statespace tokens get <TOKEN_ID>
 ```
 
-**Arguments:**
+**Arguments**
 
 `TOKEN_ID`
 : Token ID
 
 ### `statespace tokens rotate`
 
-Rotate a token (revoke old, issue new). The new token inherits properties from the old one unless overridden.
+Rotate a token (revoke old, issue new)
 
-```bash
+**Usage**
+
+```
 statespace tokens rotate [OPTIONS] <TOKEN_ID>
 ```
 
-**Arguments:**
+**Arguments**
 
 `TOKEN_ID`
 : Token ID to rotate
 
-**Options:**
+**Options**
 
 `--name`
 : New name
 
 `--scope`
-: New scope (`read` or `admin`)
+: New scope (read or admin)
 
 `--app-id`
 : Restrict to specific application IDs
@@ -330,21 +376,44 @@ statespace tokens rotate [OPTIONS] <TOKEN_ID>
 
 ### `statespace tokens revoke`
 
-Revoke a token.
+Revoke a token
 
-```bash
+**Usage**
+
+```
 statespace tokens revoke [OPTIONS] <TOKEN_ID>
 ```
 
-**Arguments:**
+**Arguments**
 
 `TOKEN_ID`
 : Token ID to revoke
 
-**Options:**
+**Options**
 
 `--reason, -r`
 : Revocation reason
 
 `--yes, -y`
 : Skip confirmation prompt
+
+## `statespace docs`
+
+Open the Statespace documentation in your browser
+
+**Usage**
+
+```
+statespace docs
+```
+
+## `statespace update`
+
+Update to the latest version
+
+**Usage**
+
+```
+statespace update
+```
+

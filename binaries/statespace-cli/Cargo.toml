@@ -8,6 +8,10 @@ license.workspace = true
 repository.workspace = true
 description = "Statespace command-line interface"
 
+[lib]
+name = "statespace"
+path = "src/lib.rs"
+
 [[bin]]
 name = "statespace"
 path = "src/main.rs"
