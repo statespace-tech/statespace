@@ -4,7 +4,7 @@ This Statespace web application exposes content and tools over HTTP. Follow thes
 
 ## Quick start
 
-1. **GET `/README.md`** — discover what this application does, its tools, and where to navigate.
+1. **GET `/README.md`** — discover what this application does, root-level tools, and where to navigate.
 2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
 3. **Execute tools** — POST to the page where the tool is declared with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
@@ -25,7 +25,7 @@ tools:
 ```
 
 To execute a tool, POST `{"command": [...]}` to the path of the page that declares it.
-For example, if `/page.md` declares `[sqlite3, store.db, { }]`, POST to `/page.md`.
+For example, if `/page.md` declares `[grep]`, POST to `/page.md`.
 Commands run without a shell — each array element becomes a process argument directly (no expansion, pipes, or globbing).
 
 ### Rules

@@ -51,16 +51,15 @@ tools:
 `AGENTS.md` teaches agents how to interact with your app through its [REST API](../reference/api.md):
 
 ```markdown title="AGENTS.md"
-# Statespace Application Instructions
+# App instructions
 
-This web application exposes content and tools over HTTP. 
-Follow these instructions exactly.
+This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
 
-## Quick Start
+## Quick start
 
-1. **GET `/README.md`** — discover what this application does and where to navigate.
+1. **GET `/README.md`** — discover what this application does, root-level tools, and where to navigate.
 2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
-3. **Execute tools** — POST to `/` with `{"command": ["tool-name", "arg1", "arg2"]}`.
+3. **Execute tools** — POST to the page where the tool is declared with `{"command": ["tool-name", "arg1", "arg2"]}`.
 
 ...
 ```
