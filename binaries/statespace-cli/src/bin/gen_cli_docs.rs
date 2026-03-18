@@ -68,7 +68,7 @@ fn usage_line(cmd: &Command, full_name: &str) -> String {
 fn write_command_body(out: &mut String, cmd: &Command, full_name: &str, options_heading: &str) {
     let usage = usage_line(cmd, full_name);
     out.push_str("**Usage**\n\n");
-    let _ = write!(out, "```\n{usage}\n```\n\n");
+    let _ = write!(out, "```console\n{usage}\n```\n\n");
 
     let subcommands: Vec<_> = cmd.get_subcommands().filter(|s| !s.is_hide_set()).collect();
     if !subcommands.is_empty() {
@@ -109,11 +109,30 @@ fn write_command_body(out: &mut String, cmd: &Command, full_name: &str, options_
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
         .parent()
-        .ok_or("expected binaries/statespace-cli to have a parent")?
+        .ok_or_else(|| {
+            format!(
+                "expected binaries/statespace-cli to have a parent, got: {}",
+                manifest_dir.display()
+            )
+        })?
         .parent()
-        .ok_or("expected binaries to have a parent")?;
+        .ok_or_else(|| {
+            format!(
+                "expected binaries/ to have a parent, got: {}",
+                manifest_dir.display()
+            )
+        })?;
+
+    if !workspace_root.join("Cargo.toml").exists() {
+        return Err(format!(
+            "workspace root does not contain Cargo.toml: {}",
+            workspace_root.display()
+        )
+        .into());
+    }
 
     let output_path = workspace_root.join("docs/pages/reference/cli.md");
     let cmd = statespace::Cli::command();
