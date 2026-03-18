@@ -86,65 +86,11 @@ impl BuiltinTool {
                     pattern: command[1].clone(),
                 })
             }
-            "curl" => Self::parse_curl(&command[1..]),
             cmd => Ok(Self::Exec {
                 command: cmd.to_string(),
                 args: command[1..].to_vec(),
             }),
         }
-    }
-
-    fn parse_curl(args: &[String]) -> Result<Self, Error> {
-        #[derive(Debug)]
-        struct CurlArgs {
-            url: Option<String>,
-            method: Option<String>,
-        }
-
-        let parsed = args.iter().try_fold(
-            (
-                CurlArgs {
-                    url: None,
-                    method: None,
-                },
-                None::<&str>,
-            ),
-            |(mut acc, expecting_value), arg| match expecting_value {
-                Some("-X" | "--request") => {
-                    acc.method = Some(arg.clone());
-                    Ok((acc, None))
-                }
-                Some(flag) => Err(Error::InvalidCommand(format!("Unknown flag: {flag}"))),
-                None if arg == "-X" || arg == "--request" => Ok((acc, Some(arg.as_str()))),
-                None if !arg.starts_with('-') && acc.url.is_none() => {
-                    acc.url = Some(arg.clone());
-                    Ok((acc, None))
-                }
-                None if arg.starts_with('-') => {
-                    Err(Error::InvalidCommand(format!("Unknown flag: {arg}")))
-                }
-                None => Ok((acc, None)),
-            },
-        );
-
-        let (args, expecting) = parsed?;
-
-        if let Some(flag) = expecting {
-            return Err(Error::InvalidCommand(format!(
-                "{flag} requires a method argument"
-            )));
-        }
-
-        let url = args
-            .url
-            .ok_or_else(|| Error::InvalidCommand("curl requires a URL argument".to_string()))?;
-
-        let method = match args.method {
-            Some(m) => m.parse()?,
-            None => HttpMethod::default(),
-        };
-
-        Ok(Self::Curl { url, method })
     }
 
     #[must_use]
@@ -296,28 +242,23 @@ mod tests {
         let tool =
             BuiltinTool::from_command(&["curl".to_string(), "https://api.github.com".to_string()])
                 .unwrap();
-        assert_eq!(
+        assert!(matches!(
             tool,
-            BuiltinTool::Curl {
-                url: "https://api.github.com".to_string(),
-                method: HttpMethod::Get,
-            }
-        );
+            BuiltinTool::Exec { command, args } if command == "curl" && args == vec!["https://api.github.com"]
+        ));
 
         let tool = BuiltinTool::from_command(&[
             "curl".to_string(),
+            "-s".to_string(),
             "-X".to_string(),
             "POST".to_string(),
             "https://api.github.com".to_string(),
         ])
         .unwrap();
-        assert_eq!(
+        assert!(matches!(
             tool,
-            BuiltinTool::Curl {
-                url: "https://api.github.com".to_string(),
-                method: HttpMethod::Post,
-            }
-        );
+            BuiltinTool::Exec { command, args } if command == "curl" && args == vec!["-s", "-X", "POST", "https://api.github.com"]
+        ));
     }
 
     #[test]
