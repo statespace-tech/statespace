@@ -8,6 +8,7 @@ on:
     paths:
       - 'docs/**'
       - 'zensical.toml'
+      - 'binaries/statespace-cli/src/**'
 
 jobs:
   deploy:
@@ -19,6 +20,12 @@ jobs:
       
       - name: Setup Fly.io
         uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate CLI docs
+        run: cargo run --bin gen-cli-docs
 
       - name: Setup Python
         uses: actions/setup-python@v5
