@@ -10,7 +10,7 @@ Run, deploy, and manage Statespace apps.
 
 **Usage**
 
-```
+```console
 statespace [OPTIONS] <COMMAND>
 ```
 
@@ -54,7 +54,7 @@ Run an app locally (no account required)
 
 **Usage**
 
-```
+```console
 statespace serve [OPTIONS] [PATH]
 ```
 
@@ -83,7 +83,7 @@ Deploy an app (create or update)
 
 **Usage**
 
-```
+```console
 statespace deploy [OPTIONS] [PATH]
 ```
 
@@ -112,7 +112,7 @@ Application commands
 
 **Usage**
 
-```
+```console
 statespace app <COMMAND>
 ```
 
@@ -136,7 +136,7 @@ List all applications
 
 **Usage**
 
-```
+```console
 statespace app list
 ```
 
@@ -146,7 +146,7 @@ Show details for an application
 
 **Usage**
 
-```
+```console
 statespace app get <APP>
 ```
 
@@ -161,7 +161,7 @@ Delete an application
 
 **Usage**
 
-```
+```console
 statespace app delete [OPTIONS] <APP>
 ```
 
@@ -181,7 +181,7 @@ Restart an application (pulls latest runtime image)
 
 **Usage**
 
-```
+```console
 statespace app restart <APP>
 ```
 
@@ -196,7 +196,7 @@ Authentication commands
 
 **Usage**
 
-```
+```console
 statespace auth <COMMAND>
 ```
 
@@ -220,7 +220,7 @@ Log in via browser (device auth flow)
 
 **Usage**
 
-```
+```console
 statespace auth login
 ```
 
@@ -230,7 +230,7 @@ Log out and clear stored credentials
 
 **Usage**
 
-```
+```console
 statespace auth logout
 ```
 
@@ -240,7 +240,7 @@ Show current authentication status
 
 **Usage**
 
-```
+```console
 statespace auth status
 ```
 
@@ -250,7 +250,7 @@ Print the current API token
 
 **Usage**
 
-```
+```console
 statespace auth token [OPTIONS]
 ```
 
@@ -265,7 +265,7 @@ Token management commands
 
 **Usage**
 
-```
+```console
 statespace tokens <COMMAND>
 ```
 
@@ -292,7 +292,7 @@ Create a new personal access token
 
 **Usage**
 
-```
+```console
 statespace tokens create [OPTIONS] <NAME>
 ```
 
@@ -318,7 +318,7 @@ List personal access tokens
 
 **Usage**
 
-```
+```console
 statespace tokens list [OPTIONS]
 ```
 
@@ -336,7 +336,7 @@ Show details for a token
 
 **Usage**
 
-```
+```console
 statespace tokens get <TOKEN_ID>
 ```
 
@@ -351,7 +351,7 @@ Rotate a token (revoke old, issue new)
 
 **Usage**
 
-```
+```console
 statespace tokens rotate [OPTIONS] <TOKEN_ID>
 ```
 
@@ -380,7 +380,7 @@ Revoke a token
 
 **Usage**
 
-```
+```console
 statespace tokens revoke [OPTIONS] <TOKEN_ID>
 ```
 
@@ -403,7 +403,7 @@ Open the Statespace documentation in your browser
 
 **Usage**
 
-```
+```console
 statespace docs
 ```
 
@@ -413,7 +413,7 @@ Update this CLI to the latest version
 
 **Usage**
 
-```
+```console
 statespace update
 ```
 

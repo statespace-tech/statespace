@@ -108,6 +108,19 @@ fn write_command_body(out: &mut String, cmd: &Command, full_name: &str, options_
     }
 }
 
+fn render_subcommands(out: &mut String, cmd: &Command, full_name: &str, depth: usize) {
+    let heading = "#".repeat(depth);
+    for sub in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
+        let sub_name = format!("{full_name} {}", sub.get_name());
+        let _ = write!(out, "{heading} `{sub_name}`\n\n");
+        if let Some(about) = sub.get_about() {
+            let _ = write!(out, "{about}\n\n");
+        }
+        write_command_body(out, sub, &sub_name, "Options");
+        render_subcommands(out, sub, &sub_name, depth + 1);
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
@@ -148,25 +161,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     write_command_body(&mut out, &cmd, "statespace", "Global options");
 
-    for top in cmd.get_subcommands().filter(|s| !s.is_hide_set()) {
-        let top_name = format!("statespace {}", top.get_name());
-        let subcommands: Vec<_> = top.get_subcommands().filter(|s| !s.is_hide_set()).collect();
-
-        let _ = write!(out, "## `{top_name}`\n\n");
-        if let Some(about) = top.get_about() {
-            let _ = write!(out, "{about}\n\n");
-        }
-        write_command_body(&mut out, top, &top_name, "Options");
-
-        for sub in &subcommands {
-            let sub_name = format!("{top_name} {}", sub.get_name());
-            let _ = write!(out, "### `{sub_name}`\n\n");
-            if let Some(about) = sub.get_about() {
-                let _ = write!(out, "{about}\n\n");
-            }
-            write_command_body(&mut out, sub, &sub_name, "Options");
-        }
-    }
+    render_subcommands(&mut out, &cmd, "statespace", 2);
 
     std::fs::write(&output_path, &out)?;
     println!("Generated {}", output_path.display());
