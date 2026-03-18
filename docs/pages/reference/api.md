@@ -4,7 +4,7 @@ icon: lucide/globe
 
 # REST API
 
-REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://example.statespace.app` or `http://127.0.0.1:8000`).
+REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://demo.statespace.app` or `http://127.0.0.1:8000`).
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
@@ -45,7 +45,7 @@ Read a file from the app's directory.
 ```bash
 curl -X GET \
   -H "Authorization: Bearer <TOKEN>" \
-  "https://example.statespace.app/page.md?name=Alice"
+  "https://demo.statespace.app/page.md?name=Alice"
 ```
 
 **Page** (`page.md`)
@@ -70,13 +70,19 @@ You are talking to: Alice
 
 </div>
 
-## <span class="http-method http-post">POST</span> `/`
+## <span class="http-method http-post">POST</span> `/{path}`
 
 Execute a tool.
 
 <div class="grid" markdown>
 
 <div markdown>
+
+**Path parameters**
+
+`path` (string, required)
+
+: Path to the page declaring the tool (e.g., `README.md`, `pages/search.md`).
 
 **Request body (JSON)**
 
@@ -118,7 +124,7 @@ Execute a tool.
 curl -X POST \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <TOKEN>" \
-  "https://example.statespace.app" \
+  "https://demo.statespace.app/page.md" \
   -d '{
     "command": ["grep", "error"]
   }'

@@ -4,7 +4,7 @@ icon: lucide/terminal
 
 # CLI reference
 
-The Statespace CLI (`statespace`) lets you deploy, manage, and connect to environments.
+The Statespace CLI (`statespace`) lets you deploy, manage, and connect to applications.
 
 ## Global options
 
@@ -20,7 +20,7 @@ These options apply to all commands:
 
 ### `statespace deploy`
 
-Deploy an app. Creates a new environment if one doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
+Deploy an app. Creates a new application if one doesn't exist, or updates it if it does. Tracks file checksums to skip unchanged files.
 
 ```bash
 statespace deploy [OPTIONS] [PATH]
@@ -29,12 +29,12 @@ statespace deploy [OPTIONS] [PATH]
 **Arguments:**
 
 `PATH`
-: Directory containing markdown files (optional, omit to create an empty environment)
+: Directory containing markdown files (optional, omit to create an empty application)
 
 **Options:**
 
 `--name, -n`
-: Application name. Creates a new app with a random name if omitted; pass `--name` to update an existing app.
+: Application name. Required when deploying from a directory path.
 
 `--visibility`
 : Application visibility: `public` or `private` (default: public on free-tier, otherwise private)
@@ -51,11 +51,11 @@ statespace deploy [OPTIONS] [PATH]
 # Deploy from a directory
 statespace deploy ./my-docs --name production
 
-# Deploy empty environment
+# Deploy empty application
 statespace deploy --name scratch-env
 
-# Deploy private environment
-statespace deploy ./project --visibility private
+# Deploy private application
+statespace deploy ./project --name my-project --visibility private
 
 # Deploy with environment variables
 statespace deploy ./my-app --env API_KEY=abc123 --env-file .env
@@ -182,6 +182,19 @@ statespace app get <APP>
 `APP`
 : Application name, ID, or URL
 
+### `statespace app restart`
+
+Restart an application (pulls the latest runtime image).
+
+```bash
+statespace app restart <APP>
+```
+
+**Arguments:**
+
+`APP`
+: Application name, ID, or URL
+
 ### `statespace app delete`
 
 Delete an application.
@@ -199,6 +212,24 @@ statespace app delete [OPTIONS] <APP>
 
 `--yes, -y`
 : Skip confirmation prompt
+
+## Other
+
+### `statespace docs`
+
+Open the Statespace documentation in your browser.
+
+```bash
+statespace docs
+```
+
+### `statespace update`
+
+Update the CLI to the latest version. Downloads the latest release from GitHub, verifies its checksum, and replaces the current binary in place. Also creates an `ssp` symlink on Unix systems.
+
+```bash
+statespace update
+```
 
 ## Token management
 

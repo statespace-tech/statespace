@@ -177,11 +177,11 @@ impl GatewayClient {
         check_api_response(resp).await
     }
 
-    pub(crate) async fn list_secret_keys(&self, environment_id: &str) -> Result<Vec<String>> {
+    pub(crate) async fn list_secret_keys(&self, application_id: &str) -> Result<Vec<String>> {
         let url = format!(
             "{}/api/v1/environments/{}/secrets",
             self.base_url,
-            urlencoding::encode(environment_id)
+            urlencoding::encode(application_id)
         );
         let resp = self.with_headers(self.http.get(&url)).send().await?;
 
@@ -190,7 +190,7 @@ impl GatewayClient {
 
     pub(crate) async fn set_secret(
         &self,
-        environment_id: &str,
+        application_id: &str,
         key: &str,
         value: &str,
     ) -> Result<()> {
@@ -202,7 +202,7 @@ impl GatewayClient {
         let url = format!(
             "{}/api/v1/environments/{}/secrets/{}",
             self.base_url,
-            urlencoding::encode(environment_id),
+            urlencoding::encode(application_id),
             urlencoding::encode(key)
         );
         let resp = self
@@ -214,11 +214,11 @@ impl GatewayClient {
         check_api_response(resp).await
     }
 
-    pub(crate) async fn delete_secret(&self, environment_id: &str, key: &str) -> Result<()> {
+    pub(crate) async fn delete_secret(&self, application_id: &str, key: &str) -> Result<()> {
         let url = format!(
             "{}/api/v1/environments/{}/secrets/{}",
             self.base_url,
-            urlencoding::encode(environment_id),
+            urlencoding::encode(application_id),
             urlencoding::encode(key)
         );
         let resp = self.with_headers(self.http.delete(&url)).send().await?;

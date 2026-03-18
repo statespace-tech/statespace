@@ -4,7 +4,7 @@ icon: lucide/wrench
 
 # Tools
 
-Tools are CLI commands that agents can call with the [REST API](../reference/api.md#post-path).
+Tools are CLI commands that agents can call through the app's [REST API](../reference/api.md#post-path).
 
 ## Syntax
 
@@ -128,7 +128,7 @@ Alternatively, pass them in the request body of [tool calls](../reference/api.md
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  "https://example.statespace.app/page.md" \
+  "https://demo.statespace.app/page.md" \
   -d '{
     "command": ["psql", "-U", "$USER", "-d", "$DB", "-c", "SELECT * FROM users"],
     "env": {"USER": "admin", "DB": "mydb"}
