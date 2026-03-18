@@ -322,12 +322,13 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
     let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
-        .with_sandbox_env((*state.sandbox_env).clone());
+        .with_sandbox_env((*state.sandbox_env).clone())
+        .with_user_env(merged_env);
 
     match executor.execute(&tool).await {
         Ok(output) => {
             let data = ActionResponse {
-                stdout: output.stdout().to_string(),
+                stdout: output.stdout(),
                 stderr: output.stderr().to_string(),
                 returncode: output.exit_code(),
             };

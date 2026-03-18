@@ -4,6 +4,7 @@ use crate::error::Error;
 use crate::sandbox::SandboxEnv;
 use crate::security::{is_private_or_restricted_ip, validate_url_initial};
 use crate::tools::{BuiltinTool, HttpMethod};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
@@ -63,10 +64,15 @@ impl ToolOutput {
     }
 
     #[must_use]
-    pub fn stdout(&self) -> &str {
+    pub fn stdout(&self) -> String {
         match self {
-            Self::Process { stdout, .. } => stdout,
-            _ => "",
+            Self::Process { stdout, .. } => stdout.clone(),
+            Self::Text(s) => s.clone(),
+            Self::FileList(files) => files
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
         }
     }
 
@@ -99,6 +105,7 @@ pub struct ToolExecutor {
     root: PathBuf,
     limits: ExecutionLimits,
     sandbox_env: SandboxEnv,
+    user_env: HashMap<String, String>,
 }
 
 impl ToolExecutor {
@@ -108,12 +115,19 @@ impl ToolExecutor {
             root,
             limits,
             sandbox_env: SandboxEnv::default(),
+            user_env: HashMap::new(),
         }
     }
 
     #[must_use]
     pub fn with_sandbox_env(mut self, sandbox_env: SandboxEnv) -> Self {
         self.sandbox_env = sandbox_env;
+        self
+    }
+
+    #[must_use]
+    pub fn with_user_env(mut self, env: HashMap<String, String>) -> Self {
+        self.user_env = env;
         self
     }
 
@@ -165,6 +179,7 @@ impl ToolExecutor {
             .args(args)
             .current_dir(&self.root)
             .env_clear()
+            .envs(&self.user_env)
             .env("PATH", self.sandbox_env.path())
             .env("HOME", self.sandbox_env.home())
             .env("LANG", self.sandbox_env.lang())
@@ -191,6 +206,12 @@ impl ToolExecutor {
 
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        #[cfg(unix)]
+        let exit_code = output.status.code().unwrap_or_else(|| {
+            use std::os::unix::process::ExitStatusExt;
+            output.status.signal().map_or(1, |s| 128 + s)
+        });
+        #[cfg(not(unix))]
         let exit_code = output.status.code().unwrap_or(1);
 
         if stdout.len() + stderr.len() > self.limits.max_output_bytes {
