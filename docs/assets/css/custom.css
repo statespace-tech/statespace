@@ -53,11 +53,11 @@
 }
 
 .http-get {
-  background: #15794a;
+  background: #2e7d32;
 }
 
 .http-post {
-  background: #1d5dab;
+  background: #1565c0;
 }
 
 /* Fix frontmatter delimiter color in markdown code blocks */

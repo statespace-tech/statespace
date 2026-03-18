@@ -40,7 +40,7 @@ Read a file from the app's directory.
 
 `error` (string)
 
-: Error message. HTTP status reflects the error type (`400` for invalid query parameters, `404` for not found, `500` for server error).
+: Error message.
 
 </div>
 
@@ -124,7 +124,7 @@ Execute a tool.
 
 `error` (string)
 
-: Error message. HTTP status reflects the error type (`400` for bad request, `404` for not found, `422` for unprocessable entity, `500` for server error).
+: Error message.
 
 </div>
 
