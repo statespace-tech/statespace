@@ -4,7 +4,7 @@ icon: lucide/globe
 
 # REST API
 
-REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://demo.statespace.app` or `http://127.0.0.1:8000`).
+REST API for interacting with Statespace application.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 

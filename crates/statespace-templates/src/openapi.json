@@ -1,0 +1,159 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Statespace",
+    "description": "REST API for interacting with Statespace applications.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/{path}": {
+      "get": {
+        "summary": "Read a file",
+        "description": "Read a file from the app's directory. Component blocks are evaluated before returning.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "Path to the file (e.g. `README.md`, `data/logs.txt`).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "{key}",
+            "in": "query",
+            "required": false,
+            "description": "Environment variables injected into component blocks.",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "description": "Bearer token for authentication.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "File content.",
+            "content": {
+              "text/markdown": {
+                "schema": { "type": "string" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Execute a tool",
+        "description": "Execute a tool declared in the frontmatter of the page at `path`.",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "description": "Path to the page declaring the tool (e.g. `README.md`, `pages/search.md`).",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "description": "Bearer token for authentication.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ActionRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool executed successfully.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SuccessResponse" }
+              }
+            }
+          },
+          "default": {
+            "description": "Error.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionRequest": {
+        "type": "object",
+        "required": ["command"],
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Command to execute as an array of strings (e.g. `[\"grep\", \"error\"]`)."
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Environment variables to pass to the tool."
+          }
+        }
+      },
+      "ActionResponse": {
+        "type": "object",
+        "required": ["stdout", "stderr", "returncode"],
+        "properties": {
+          "stdout": {
+            "type": "string",
+            "description": "Standard output from the command."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Standard error from the command."
+          },
+          "returncode": {
+            "type": "integer",
+            "description": "Exit code (0 for success, non-zero for errors)."
+          }
+        }
+      },
+      "SuccessResponse": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": { "$ref": "#/components/schemas/ActionResponse" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Error message."
+          }
+        }
+      }
+    }
+  }
+}
