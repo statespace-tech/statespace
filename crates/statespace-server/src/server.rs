@@ -5,7 +5,7 @@ use crate::error::ErrorExt;
 use crate::templates::FAVICON_SVG;
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -254,17 +254,23 @@ async fn serve_page(
 
 async fn action_handler_root(
     State(state): State<ServerState>,
-    Json(request): Json<ActionRequest>,
+    body: Result<Json<ActionRequest>, JsonRejection>,
 ) -> Response {
-    execute_action("", &state, request).await
+    match body {
+        Ok(Json(request)) => execute_action("", &state, request).await,
+        Err(e) => json_error(StatusCode::UNPROCESSABLE_ENTITY, &e.body_text()),
+    }
 }
 
 async fn action_handler(
     Path(path): Path<String>,
     State(state): State<ServerState>,
-    Json(request): Json<ActionRequest>,
+    body: Result<Json<ActionRequest>, JsonRejection>,
 ) -> Response {
-    execute_action(&path, &state, request).await
+    match body {
+        Ok(Json(request)) => execute_action(&path, &state, request).await,
+        Err(e) => json_error(StatusCode::UNPROCESSABLE_ENTITY, &e.body_text()),
+    }
 }
 
 fn runtime_error_response(e: &statespace_tool_runtime::Error) -> Response {
