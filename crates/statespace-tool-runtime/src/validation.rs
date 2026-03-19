@@ -1,4 +1,4 @@
-//! Command validation and placeholder expansion.
+//! Command validation and env expansion.
 
 use crate::error::Error;
 use crate::frontmatter::Frontmatter;
@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// Returns an error when the command is empty or not present in frontmatter.
 pub fn validate_command(frontmatter: &Frontmatter, command: &[String]) -> Result<(), Error> {
     if command.is_empty() {
-        return Err(Error::InvalidCommand("command cannot be empty".to_string()));
+        return Err(Error::InvalidCommand("Command cannot be empty".to_string()));
     }
 
     if !frontmatter.has_tool(command) {
@@ -27,7 +27,7 @@ pub fn validate_command(frontmatter: &Frontmatter, command: &[String]) -> Result
 /// Returns an error when the command is empty or does not match any spec.
 pub fn validate_command_with_specs(specs: &[ToolSpec], command: &[String]) -> Result<(), Error> {
     if command.is_empty() {
-        return Err(Error::InvalidCommand("command cannot be empty".to_string()));
+        return Err(Error::InvalidCommand("Command cannot be empty".to_string()));
     }
 
     if !is_valid_tool_call(command, specs) {
@@ -37,26 +37,6 @@ pub fn validate_command_with_specs(specs: &[ToolSpec], command: &[String]) -> Re
     }
 
     Ok(())
-}
-
-#[must_use]
-pub fn expand_placeholders<S: std::hash::BuildHasher>(
-    command: &[String],
-    args: &HashMap<String, String, S>,
-) -> Vec<String> {
-    command
-        .iter()
-        .map(|part| {
-            let mut result = part.clone();
-
-            for (key, value) in args {
-                let placeholder = format!("{{{key}}}");
-                result = result.replace(&placeholder, value);
-            }
-
-            result
-        })
-        .collect()
 }
 
 #[must_use]
@@ -156,25 +136,6 @@ mod tests {
 
         let result = validate_command(&fm, &["cat".to_string(), "index.md".to_string()]);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_expand_placeholders() {
-        let command = vec![
-            "curl".to_string(),
-            "-X".to_string(),
-            "GET".to_string(),
-            "https://api.com/{endpoint}".to_string(),
-        ];
-
-        let mut args = HashMap::new();
-        args.insert("endpoint".to_string(), "orders".to_string());
-
-        let expanded = expand_placeholders(&command, &args);
-        assert_eq!(
-            expanded,
-            vec!["curl", "-X", "GET", "https://api.com/orders"]
-        );
     }
 
     #[test]

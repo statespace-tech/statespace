@@ -2,17 +2,17 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::FAVICON_SVG;
+use crate::templates::{FAVICON_SVG, OPENAPI_JSON};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::JsonRejection},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use statespace_tool_runtime::{
     ActionRequest, ActionResponse, BuiltinTool, ErrorResponse, ExecutionLimits, SandboxEnv,
-    ToolExecutor, eval, expand_command_for_execution, expand_placeholders, parse_frontmatter,
+    SuccessResponse, ToolExecutor, eval, expand_command_for_execution, parse_frontmatter,
     validate_command_with_specs, validate_env_map,
 };
 use std::collections::HashMap;
@@ -165,6 +165,7 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 
     let router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
+        .route("/openapi.json", get(openapi_handler))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
@@ -189,6 +190,15 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "image/svg+xml")],
         content,
+    )
+        .into_response()
+}
+
+async fn openapi_handler() -> Response {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        OPENAPI_JSON,
     )
         .into_response()
 }
@@ -254,17 +264,23 @@ async fn serve_page(
 
 async fn action_handler_root(
     State(state): State<ServerState>,
-    Json(request): Json<ActionRequest>,
+    body: Result<Json<ActionRequest>, JsonRejection>,
 ) -> Response {
-    execute_action("", &state, request).await
+    match body {
+        Ok(Json(request)) => execute_action("", &state, request).await,
+        Err(e) => json_error(e.status(), &e.body_text()),
+    }
 }
 
 async fn action_handler(
     Path(path): Path<String>,
     State(state): State<ServerState>,
-    Json(request): Json<ActionRequest>,
+    body: Result<Json<ActionRequest>, JsonRejection>,
 ) -> Response {
-    execute_action(&path, &state, request).await
+    match body {
+        Ok(Json(request)) => execute_action(&path, &state, request).await,
+        Err(e) => json_error(e.status(), &e.body_text()),
+    }
 }
 
 fn runtime_error_response(e: &statespace_tool_runtime::Error) -> Response {
@@ -291,16 +307,11 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
         Err(e) => return runtime_error_response(&e),
     };
 
-    let command_with_placeholders = expand_placeholders(&request.command, &request.args);
     let merged_env = eval::merge_eval_env(state.env.as_ref(), &request.env);
     let expanded_command =
-        expand_command_for_execution(&command_with_placeholders, &frontmatter.specs, &merged_env);
+        expand_command_for_execution(&request.command, &frontmatter.specs, &merged_env);
 
-    let validation_result =
-        validate_command_with_specs(&frontmatter.specs, &command_with_placeholders)
-            .or_else(|_error| validate_command_with_specs(&frontmatter.specs, &expanded_command));
-
-    if let Err(e) = validation_result {
+    if let Err(e) = validate_command_with_specs(&frontmatter.specs, &request.command) {
         return runtime_error_response(&e);
     }
 
@@ -311,11 +322,17 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 
     let working_dir = file_path.parent().unwrap_or(&file_path);
     let executor = ToolExecutor::new(working_dir.to_path_buf(), state.limits.clone())
-        .with_sandbox_env((*state.sandbox_env).clone());
+        .with_sandbox_env((*state.sandbox_env).clone())
+        .with_user_env(merged_env);
 
     match executor.execute(&tool).await {
         Ok(output) => {
-            let response = ActionResponse::success(output.to_text());
+            let data = ActionResponse {
+                stdout: output.stdout(),
+                stderr: output.stderr().to_string(),
+                returncode: output.exit_code(),
+            };
+            let response = SuccessResponse::ok(data);
             (StatusCode::OK, Json(response)).into_response()
         }
         Err(e) => runtime_error_response(&e),
@@ -323,7 +340,7 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
 }
 
 fn json_error(status: StatusCode, message: &str) -> Response {
-    let response = ErrorResponse::new(message, status.as_u16());
+    let response = ErrorResponse::new(message);
     (status, Json(response)).into_response()
 }
 
@@ -454,7 +471,7 @@ mod tests {
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
 
@@ -462,7 +479,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let data = json.get("data").expect("response must have 'data' key");
+        let stdout = data
+            .get("stdout")
+            .expect("data must have 'stdout'")
+            .as_str()
+            .unwrap();
+        let stderr = data
+            .get("stderr")
+            .expect("data must have 'stderr'")
+            .as_str()
+            .unwrap();
+        let returncode = data
+            .get("returncode")
+            .expect("data must have 'returncode'")
+            .as_i64()
+            .unwrap();
+        assert!(stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        assert_eq!(stderr, "");
+        assert_eq!(returncode, 0);
     }
 
     #[tokio::test]
@@ -484,7 +520,7 @@ mod tests {
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
 
@@ -492,7 +528,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        assert!(body.contains("$DATABASE_URL"));
-        assert!(!body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let data = json.get("data").expect("response must have 'data' key");
+        let stdout = data
+            .get("stdout")
+            .expect("data must have 'stdout'")
+            .as_str()
+            .unwrap();
+        let stderr = data
+            .get("stderr")
+            .expect("data must have 'stderr'")
+            .as_str()
+            .unwrap();
+        let returncode = data
+            .get("returncode")
+            .expect("data must have 'returncode'")
+            .as_i64()
+            .unwrap();
+        assert!(stdout.contains("$DATABASE_URL"));
+        assert!(!stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
+        assert_eq!(stderr, "");
+        assert_eq!(returncode, 0);
     }
 }

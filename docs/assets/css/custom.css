@@ -53,11 +53,11 @@
 }
 
 .http-get {
-  background: #15794a;
+  background: #2e7d32;
 }
 
 .http-post {
-  background: #1d5dab;
+  background: #1565c0;
 }
 
 /* Fix frontmatter delimiter color in markdown code blocks */
@@ -68,10 +68,5 @@
 /* Jade green icon color */
 .jade {
     color: #00bb77;
-}
-
-/* Hide the auto-generated page title h1 on the home page only */
-body.homepage .md-content__inner > h1 {
-    display: none;
 }
 

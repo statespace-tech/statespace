@@ -3,17 +3,20 @@ icon: lucide/home
 title: Get started
 ---
 
-<!-- Keep the document H1 semantic and visible -->
+<style>
+.md-content .md-typeset h1 { display: none; }
+</style>
 
 <div style="text-align: center; margin: 2rem 0 1.5rem;">
-  <div style="display: flex; align-items: center; justify-content: center; gap: 0.75rem;">
+  <div style="display: flex; align-items: center; justify-content: center; gap: 1rem;">
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
     <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
   </div>
-  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Build APIs that agents can directly interact with.</p>
-  <div style="margin-top: 1rem; display: flex; gap: 0.4rem; justify-content: center; flex-wrap: wrap;">
+  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Build web APIs that agents can directly interact with.</p>
+  <div style="margin-top: 1rem; display: flex; gap: 0.2rem; justify-content: center; flex-wrap: wrap;">
     <a href="https://github.com/statespace-tech/statespace/actions/workflows/test.yml"><img src="https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg" alt="Test Suite" /></a>
     <a href="https://github.com/statespace-tech/statespace/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-007ec6?style=flat-square" alt="License" /></a>
+    <a href="https://crates.io/crates/statespace"><img src="https://img.shields.io/crates/v/statespace?style=flat-square" alt="crates.io" /></a>
     <a href="https://discord.gg/rRyM7zkZTf"><img src="https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square" alt="Discord" /></a>
     <a href="https://x.com/statespace_tech"><img src="https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white" alt="X" /></a>
   </div>
@@ -27,10 +30,7 @@ title: Get started
 
 ---
 
-Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with.
-Build apps for RAG, knowledge bases, text-to-SQL, and more.
-
-
+Statespace is a Markdown framework for building web APIs that agents can directly interact with.
 
 ## Example
 

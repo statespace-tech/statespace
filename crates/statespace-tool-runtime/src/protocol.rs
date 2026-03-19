@@ -5,10 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ActionRequest {
     pub command: Vec<String>,
-    #[serde(default)]
-    pub args: HashMap<String, String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
 }
@@ -19,7 +18,7 @@ impl ActionRequest {
     /// Returns an error when the command is empty.
     pub fn validate(&self) -> Result<(), String> {
         if self.command.is_empty() {
-            return Err("command cannot be empty".to_string());
+            return Err("Command cannot be empty".to_string());
         }
         validate_env_map(&self.env).map_err(|e| e.to_string())?;
         Ok(())
@@ -53,19 +52,30 @@ impl ActionResponse {
     }
 }
 
-/// Standard JSON error response, similar to FastAPI's error model.
+/// Envelope for successful POST responses.
+#[derive(Debug, Serialize)]
+pub struct SuccessResponse {
+    pub data: ActionResponse,
+}
+
+impl SuccessResponse {
+    #[must_use]
+    pub const fn ok(data: ActionResponse) -> Self {
+        Self { data }
+    }
+}
+
+/// Standard JSON error response.
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub error: String,
-    pub status: u16,
 }
 
 impl ErrorResponse {
     #[must_use]
-    pub fn new(message: impl Into<String>, status: u16) -> Self {
+    pub fn new(message: impl Into<String>) -> Self {
         Self {
             error: format!("{}. See /AGENTS.md for API instructions.", message.into()),
-            status,
         }
     }
 }
@@ -78,21 +88,21 @@ mod tests {
     fn test_action_request_validation() {
         let valid = ActionRequest {
             command: vec!["ls".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
         assert!(valid.validate().is_ok());
 
         let invalid_command = ActionRequest {
             command: vec![],
-            args: HashMap::new(),
+
             env: HashMap::new(),
         };
         assert!(invalid_command.validate().is_err());
 
         let invalid_env = ActionRequest {
             command: vec!["ls".to_string()],
-            args: HashMap::new(),
+
             env: HashMap::from([("USER-ID".to_string(), "42".to_string())]),
         };
         assert!(invalid_env.validate().is_err());

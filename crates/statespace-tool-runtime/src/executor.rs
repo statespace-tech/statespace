@@ -4,6 +4,7 @@ use crate::error::Error;
 use crate::sandbox::SandboxEnv;
 use crate::security::{is_private_or_restricted_ip, validate_url_initial};
 use crate::tools::{BuiltinTool, HttpMethod};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
@@ -32,6 +33,11 @@ impl Default for ExecutionLimits {
 pub enum ToolOutput {
     Text(String),
     FileList(Vec<FileInfo>),
+    Process {
+        stdout: String,
+        stderr: String,
+        exit_code: i32,
+    },
 }
 
 impl ToolOutput {
@@ -44,6 +50,45 @@ impl ToolOutput {
                 .map(|f| f.key.as_str())
                 .collect::<Vec<_>>()
                 .join("\n"),
+            Self::Process { stdout, stderr, .. } => {
+                let mut out = stdout.clone();
+                if !stderr.is_empty() {
+                    if !out.is_empty() {
+                        out.push('\n');
+                    }
+                    out.push_str(stderr);
+                }
+                out
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn stdout(&self) -> String {
+        match self {
+            Self::Process { stdout, .. } => stdout.clone(),
+            Self::Text(s) => s.clone(),
+            Self::FileList(files) => files
+                .iter()
+                .map(|f| f.key.as_str())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    }
+
+    #[must_use]
+    pub fn stderr(&self) -> &str {
+        match self {
+            Self::Process { stderr, .. } => stderr,
+            _ => "",
+        }
+    }
+
+    #[must_use]
+    pub fn exit_code(&self) -> i32 {
+        match self {
+            Self::Process { exit_code, .. } => *exit_code,
+            _ => 0,
         }
     }
 }
@@ -60,6 +105,7 @@ pub struct ToolExecutor {
     root: PathBuf,
     limits: ExecutionLimits,
     sandbox_env: SandboxEnv,
+    user_env: HashMap<String, String>,
 }
 
 impl ToolExecutor {
@@ -69,12 +115,19 @@ impl ToolExecutor {
             root,
             limits,
             sandbox_env: SandboxEnv::default(),
+            user_env: HashMap::new(),
         }
     }
 
     #[must_use]
     pub fn with_sandbox_env(mut self, sandbox_env: SandboxEnv) -> Self {
         self.sandbox_env = sandbox_env;
+        self
+    }
+
+    #[must_use]
+    pub fn with_user_env(mut self, env: HashMap<String, String>) -> Self {
+        self.user_env = env;
         self
     }
 
@@ -126,6 +179,7 @@ impl ToolExecutor {
             .args(args)
             .current_dir(&self.root)
             .env_clear()
+            .envs(&self.user_env)
             .env("PATH", self.sandbox_env.path())
             .env("HOME", self.sandbox_env.home())
             .env("LANG", self.sandbox_env.lang())
@@ -150,23 +204,28 @@ impl ToolExecutor {
                 Error::Internal(format!("Failed to execute {command}: {e}"))
             })?;
 
-        let mut result = String::from_utf8_lossy(&output.stdout).into_owned();
-        if !output.stderr.is_empty() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if !result.is_empty() {
-                result.push('\n');
-            }
-            result.push_str(&stderr);
-        }
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        #[cfg(unix)]
+        let exit_code = output.status.code().unwrap_or_else(|| {
+            use std::os::unix::process::ExitStatusExt;
+            output.status.signal().map_or(1, |s| 128 + s)
+        });
+        #[cfg(not(unix))]
+        let exit_code = output.status.code().unwrap_or(1);
 
-        if result.len() > self.limits.max_output_bytes {
+        if stdout.len() + stderr.len() > self.limits.max_output_bytes {
             return Err(Error::OutputTooLarge {
-                size: result.len(),
+                size: stdout.len() + stderr.len(),
                 limit: self.limits.max_output_bytes,
             });
         }
 
-        Ok(ToolOutput::Text(result))
+        Ok(ToolOutput::Process {
+            stdout,
+            stderr,
+            exit_code,
+        })
     }
 
     fn execute_glob(&self, pattern: &str) -> Result<ToolOutput, Error> {

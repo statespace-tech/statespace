@@ -1,14 +1,16 @@
 ---
 icon: lucide/globe
+hide:
+  - toc
 ---
 
 # REST API
 
-REST API endpoints for interacting with running applications. All endpoints use your app's base URL (e.g., `https://demo.statespace.app` or `http://127.0.0.1:8000`).
+REST API for interacting with Statespace application.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
-Read a file from the app's directory.
+Read a file from the app's directory. Requesting `/` returns `AGENTS.md`.
 
 <div class="grid" markdown>
 
@@ -32,9 +34,14 @@ Read a file from the app's directory.
 
   : Bearer token for authentication.
 
-**Response**
+**Responses**
 
-: File content.
+| Status | Description |
+|--------|-------------|
+| `200` | File content (`text/markdown`). |
+| `400` | Invalid query parameters. |
+| `404` | File not found. |
+| `500` | Server error. |
 
 </div>
 
@@ -72,7 +79,7 @@ You are talking to: Alice
 
 ## <span class="http-method http-post">POST</span> `/{path}`
 
-Execute a tool.
+Execute a tool declared in the page's frontmatter. Requesting `/` executes tools declared in `README.md`.
 
 <div class="grid" markdown>
 
@@ -102,17 +109,27 @@ Execute a tool.
 
 **Response (JSON)**
 
-`stdout` (string)
+`data.stdout` (string)
 
 : Standard output from the command.
 
-`stderr` (string)
+`data.stderr` (string)
 
 : Standard error from the command.
 
-`returncode` (integer)
+`data.returncode` (integer)
 
-: Exit code (0 for success, non-zero for errors).
+: Exit code of the command (`0` for success, non-zero if the command exited with an error).
+
+**Responses**
+
+| Status | Description |
+|--------|-------------|
+| `200` | Tool executed successfully. |
+| `400` | Command not allowed or validation error. |
+| `404` | Page not found. |
+| `422` | Malformed request body. |
+| `500` | Server error. |
 
 </div>
 
@@ -134,9 +151,19 @@ curl -X POST \
 
 ```json
 {
-  "stdout": "logs/app.log:Connection error\n",
-  "stderr": "",
-  "returncode": 0
+  "data": {
+    "stdout": "logs/app.log:Connection error\n",
+    "stderr": "",
+    "returncode": 0
+  }
+}
+```
+
+**Example Error Response**
+
+```json
+{
+  "error": "Command 'rm' not allowed by frontmatter of this page. See /AGENTS.md for API instructions."
 }
 ```
 

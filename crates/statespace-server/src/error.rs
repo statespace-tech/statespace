@@ -30,7 +30,7 @@ impl From<Error> for ServerError {
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response {
         let status = self.0.status_code();
-        let response = ErrorResponse::new(self.0.user_message(), status.as_u16());
+        let response = ErrorResponse::new(self.0.user_message());
         (status, Json(response)).into_response()
     }
 }
