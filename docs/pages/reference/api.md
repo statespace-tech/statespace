@@ -6,7 +6,7 @@ hide:
 
 # REST API
 
-REST API for interacting with Statespace application.
+REST API for interacting with Statespace applications.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 

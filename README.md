@@ -8,10 +8,11 @@
 
 # Statespace
 
-**Build APIs that AI agents can directly interact with.**
+**Build web APIs that agents can directly interact with.**
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
+[![crates.io](https://img.shields.io/crates/v/statespace?style=flat-square)](https://crates.io/crates/statespace)
 [![Discord](https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/rRyM7zkZTf)
 [![X](https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white)](https://x.com/statespace_tech)
 
@@ -25,7 +26,7 @@
 
 ---
 
-_Statespace is a declarative, Markdown-based web framework for building APIs that AI agents can directly interact with. Build apps for RAG, knowledge bases, text-to-SQL, and more._
+Statespace is a Markdown framework for building web APIs that agents can directly interact with.
 
 ## Installation
 
