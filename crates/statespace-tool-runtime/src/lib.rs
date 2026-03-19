@@ -29,7 +29,7 @@ pub use executor::{ExecutionLimits, FileInfo, ToolExecutor, ToolOutput};
 pub use frontmatter::{Frontmatter, parse_frontmatter};
 pub use protocol::{ActionRequest, ActionResponse, ErrorResponse};
 pub use sandbox::SandboxEnv;
-pub use security::{is_private_or_restricted_ip, validate_url_initial};
+pub use security::{is_private_or_restricted_ip, validate_network_args, validate_url_initial};
 pub use spec::{
     CompiledRegex, SpecError, ToolPart, ToolSpec, find_matching_spec, is_valid_tool_call,
 };

@@ -2,7 +2,7 @@
 
 use crate::error::Error;
 use crate::sandbox::SandboxEnv;
-use crate::security::{is_private_or_restricted_ip, validate_url_initial};
+use crate::security::{is_private_or_restricted_ip, validate_network_args, validate_url_initial};
 use crate::tools::{BuiltinTool, HttpMethod};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -15,6 +15,7 @@ pub struct ExecutionLimits {
     pub max_output_bytes: usize,
     pub max_list_items: usize,
     pub timeout: Duration,
+    pub restrict_network_targets: bool,
 }
 
 impl Default for ExecutionLimits {
@@ -23,6 +24,7 @@ impl Default for ExecutionLimits {
             max_output_bytes: 1024 * 1024,
             max_list_items: 1000,
             timeout: Duration::from_secs(30),
+            restrict_network_targets: false,
         }
     }
 }
@@ -120,6 +122,10 @@ impl ToolExecutor {
                     "Path traversal not allowed in command arguments: {arg}"
                 )));
             }
+        }
+
+        if self.limits.restrict_network_targets {
+            validate_network_args(command, args)?;
         }
 
         let output = Command::new(command)

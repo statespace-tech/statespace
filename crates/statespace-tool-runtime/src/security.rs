@@ -5,6 +5,135 @@
 use crate::error::Error;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+const NETWORK_COMMANDS: &[&str] = &["curl", "wget"];
+
+/// Flags that can redirect curl/wget to arbitrary destinations regardless
+/// of the URL argument. Block these to prevent SSRF via flag injection.
+const DANGEROUS_FLAGS: &[&str] = &[
+    "--connect-to",
+    "--resolve",
+    "--unix-socket",
+    "--abstract-unix-socket",
+    "-K",
+    "--config",
+    "--proxy",
+    "-x",
+    "--socks4",
+    "--socks4a",
+    "--socks5",
+    "--socks5-hostname",
+    "--dns-servers",
+    "--doh-url",
+    "--interface",
+];
+
+/// Validate arguments for network-capable commands against SSRF rules.
+///
+/// Only checks `curl` and `wget`. Blocks dangerous flags that can redirect
+/// requests, and validates URL arguments against private/internal networks.
+/// Fails closed — rejects anything it cannot confidently determine is safe.
+/// Not exhaustive — defense in depth, not a complete sandbox.
+///
+/// # Errors
+///
+/// Returns `Error::Security` when an argument targets a restricted address
+/// or uses a dangerous flag.
+pub fn validate_network_args(command: &str, args: &[String]) -> Result<(), Error> {
+    if !NETWORK_COMMANDS.contains(&command) {
+        return Ok(());
+    }
+
+    for arg in args {
+        let lower = arg.to_lowercase();
+        if DANGEROUS_FLAGS.iter().any(|f| lower == *f || lower.starts_with(&format!("{f}="))) {
+            return Err(Error::Security(
+                "Restricted flag not allowed".to_string(),
+            ));
+        }
+    }
+
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+
+        if arg.starts_with('-') {
+            if matches!(
+                arg.as_str(),
+                "-H" | "--header"
+                    | "-A" | "--user-agent"
+                    | "-e" | "--referer"
+                    | "-d" | "--data" | "--data-raw" | "--data-binary" | "--data-urlencode"
+                    | "-u" | "--user"
+                    | "-b" | "--cookie"
+                    | "-c" | "--cookie-jar"
+                    | "-X" | "--request"
+                    | "-m" | "--max-time"
+                    | "--connect-timeout"
+                    | "-w" | "--write-out"
+                    | "-r" | "--range"
+                    | "--retry"
+                    | "--retry-delay"
+                    | "--retry-max-time"
+            ) && !arg.contains('=')
+            {
+                skip_next = true;
+            }
+            continue;
+        }
+
+        let candidate = if arg.contains("://") {
+            arg.clone()
+        } else {
+            format!("http://{arg}")
+        };
+
+        let Ok(url) = reqwest::Url::parse(&candidate) else {
+            return Err(Error::Security(
+                "Unrecognized URL argument rejected".to_string(),
+            ));
+        };
+
+        match url.scheme() {
+            "http" | "https" => {}
+            _ => {
+                return Err(Error::Security(
+                    "Only http/https schemes allowed".to_string(),
+                ));
+            }
+        }
+
+        let Some(host) = url.host_str() else {
+            return Err(Error::Security(
+                "URL must have a host".to_string(),
+            ));
+        };
+
+        if is_localhost_name(host) || is_metadata_service(host) {
+            return Err(Error::Security(
+                "Access to restricted network resource blocked".to_string(),
+            ));
+        }
+
+        // Strip brackets for IPv6 (host_str returns "[::1]" for IPv6)
+        let bare_host = host.strip_prefix('[')
+            .and_then(|h| h.strip_suffix(']'))
+            .unwrap_or(host);
+
+        if let Ok(ip) = bare_host.parse::<IpAddr>() {
+            if is_private_or_restricted_ip(&ip) {
+                return Err(Error::Security(
+                    "Access to restricted network resource blocked".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// # Errors
 ///
 /// Returns errors for invalid URLs or restricted destinations.
@@ -101,6 +230,113 @@ const fn is_ipv4_mapped_private(ip: &Ipv6Addr) -> bool {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // -- validate_network_args --
+
+    #[test]
+    fn test_network_args_ignores_non_network_commands() {
+        assert!(validate_network_args("ls", &["-la".into()]).is_ok());
+        assert!(validate_network_args("cat", &["http://169.254.169.254".into()]).is_ok());
+    }
+
+    #[test]
+    fn test_network_args_blocks_metadata_service() {
+        let result =
+            validate_network_args("curl", &["http://169.254.169.254/latest/meta-data".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result = validate_network_args("curl", &["169.254.169.254".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result =
+            validate_network_args("wget", &["http://169.254.169.254/latest/meta-data".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_localhost() {
+        let result = validate_network_args("curl", &["http://localhost:8080".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result = validate_network_args("curl", &["http://127.0.0.1".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_private_ips() {
+        let result = validate_network_args("curl", &["http://10.0.0.1/internal".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result = validate_network_args("curl", &["http://192.168.1.1".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_ipv6_loopback() {
+        let result = validate_network_args("curl", &["http://[::1]:8080".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_ipv4_mapped_ipv6() {
+        let result =
+            validate_network_args("curl", &["http://[::ffff:169.254.169.254]".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_file_scheme() {
+        let result = validate_network_args("curl", &["file:///etc/passwd".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_blocks_dangerous_flags() {
+        let result = validate_network_args(
+            "curl",
+            &["--unix-socket".into(), "/var/run/docker.sock".into(), "http://example.com".into()],
+        );
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result = validate_network_args(
+            "curl",
+            &["--resolve".into(), "example.com:80:127.0.0.1".into(), "http://example.com".into()],
+        );
+        assert!(matches!(result, Err(Error::Security(_))));
+
+        let result = validate_network_args(
+            "curl",
+            &["--connect-to=::localhost:".into(), "http://example.com".into()],
+        );
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_rejects_unparseable_urls() {
+        let result = validate_network_args("curl", &[":::not-a-url".into()]);
+        assert!(matches!(result, Err(Error::Security(_))));
+    }
+
+    #[test]
+    fn test_network_args_allows_public_urls() {
+        assert!(
+            validate_network_args("curl", &["https://api.github.com/repos".into()]).is_ok()
+        );
+        assert!(
+            validate_network_args("curl", &["-s".into(), "https://example.com".into()]).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_network_args_skips_safe_flags() {
+        assert!(validate_network_args(
+            "curl",
+            &["-s".into(), "-H".into(), "Authorization: Bearer tok".into(), "https://example.com".into()]
+        )
+        .is_ok());
+    }
+
+    // -- validate_url_initial --
 
     #[test]
     fn test_validate_url_allows_https() {
