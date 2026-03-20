@@ -1,0 +1,127 @@
+name: Publish Template Assets
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'examples/**'
+      - '.github/workflows/publish-template-assets.yml'
+  workflow_dispatch:
+    inputs:
+      statespace_sha:
+        description: Optional statespace commit SHA to publish under (defaults to current commit)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Package examples and publish to B2
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    outputs:
+      statespace_sha: ${{ steps.meta.outputs.statespace_sha }}
+      tarball_key: ${{ steps.meta.outputs.tarball_key }}
+      tarball_checksum: ${{ steps.checksum.outputs.sha256 }}
+      endpoint: ${{ steps.meta.outputs.endpoint }}
+      bucket: ${{ steps.meta.outputs.bucket }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve publish metadata
+        id: meta
+        run: |
+          set -euo pipefail
+
+          target_sha="${{ github.event.inputs.statespace_sha }}"
+          if [[ -z "${target_sha}" ]]; then
+            target_sha="${{ github.sha }}"
+          fi
+
+          if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::statespace_sha must be a full 40-character commit SHA"
+            exit 1
+          fi
+
+          echo "statespace_sha=$target_sha" >> "$GITHUB_OUTPUT"
+          echo "bucket=statespace-releases" >> "$GITHUB_OUTPUT"
+          echo "endpoint=https://s3.us-east-005.backblazeb2.com" >> "$GITHUB_OUTPUT"
+          echo "tarball_key=app-templates/${target_sha}/examples.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "latest_key=app-templates/latest/examples.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Create deterministic template tarball
+        run: |
+          set -euo pipefail
+          tar \
+            --sort=name \
+            --mtime='UTC 1970-01-01' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            -czf statespace-examples.tar.gz \
+            examples
+
+      - name: Compute SHA256
+        id: checksum
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum statespace-examples.tar.gz | awk '{print $1}')"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload tarball to B2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_RELEASES_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_RELEASES_KEY }}
+          B2_ENDPOINT: ${{ steps.meta.outputs.endpoint }}
+          VERSIONED_KEY: ${{ steps.meta.outputs.tarball_key }}
+          LATEST_KEY: ${{ steps.meta.outputs.latest_key }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          aws s3 cp statespace-examples.tar.gz \
+            "s3://statespace-releases/${VERSIONED_KEY}" \
+            --endpoint-url "$B2_ENDPOINT" \
+            --content-type application/gzip
+
+          aws s3 cp statespace-examples.tar.gz \
+            "s3://statespace-releases/${LATEST_KEY}" \
+            --endpoint-url "$B2_ENDPOINT" \
+            --content-type application/gzip
+
+          printf '%s  %s\n' "$SHA256" "examples.tar.gz" > examples.tar.gz.sha256
+
+          aws s3 cp examples.tar.gz.sha256 \
+            "s3://statespace-releases/${VERSIONED_KEY}.sha256" \
+            --endpoint-url "$B2_ENDPOINT" \
+            --content-type text/plain
+
+          aws s3 cp examples.tar.gz.sha256 \
+            "s3://statespace-releases/${LATEST_KEY}.sha256" \
+            --endpoint-url "$B2_ENDPOINT" \
+            --content-type text/plain
+
+      - name: Publish summary
+        run: |
+          echo "### Template Assets Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- statespace_sha: \`${{ steps.meta.outputs.statespace_sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- bucket: \`${{ steps.meta.outputs.bucket }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- key: \`${{ steps.meta.outputs.tarball_key }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sha256: \`${{ steps.checksum.outputs.sha256 }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  dispatch-gateway:
+    name: Dispatch template update to gateway
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    needs: publish
+    steps:
+      - name: Send repository_dispatch event to gateway
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0
+        with:
+          token: ${{ secrets.GATEWAY_REPO_DISPATCH_TOKEN }}
+          repository: statespace-tech/gateway
+          event-type: statespace-template-assets-updated
+          client-payload: >-
+            {"statespace_sha":"${{ needs.publish.outputs.statespace_sha }}","tarball_bucket":"${{ needs.publish.outputs.bucket }}","tarball_key":"${{ needs.publish.outputs.tarball_key }}","tarball_checksum":"${{ needs.publish.outputs.tarball_checksum }}","tarball_endpoint":"${{ needs.publish.outputs.endpoint }}","source_run_id":"${{ github.run_id }}"}
