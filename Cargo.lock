@@ -1965,6 +1965,7 @@ name = "statespace-server"
 version = "0.1.7"
 dependencies = [
  "ammonia",
+ "anyhow",
  "async-trait",
  "axum",
  "pulldown-cmark",

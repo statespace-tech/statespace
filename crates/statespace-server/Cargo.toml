@@ -43,6 +43,7 @@ pulldown-cmark.workspace = true
 ammonia.workspace = true
 
 [dev-dependencies]
+anyhow.workspace = true
 tempfile = "3"
 
 [lints]

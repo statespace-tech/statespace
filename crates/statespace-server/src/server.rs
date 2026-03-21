@@ -453,13 +453,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn action_expands_trusted_literal_env_segments() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn action_expands_trusted_literal_env_segments() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
         std::fs::write(
             dir.path().join("README.md"),
             "---\ntools:\n  - [echo, $DATABASE_URL]\n---\n",
-        )
-        .unwrap();
+        )?;
 
         let config = ServerConfig::new(dir.path().to_path_buf())
             .with_env(HashMap::from([(
@@ -467,7 +466,7 @@ mod tests {
                 "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
             )]))
             .with_sandbox_env(SandboxEnv::from_host_process());
-        let state = ServerState::from_config(&config).unwrap();
+        let state = ServerState::from_config(&config)?;
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
@@ -479,36 +478,35 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let data = json.get("data").expect("response must have 'data' key");
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        let data = json
+            .get("data")
+            .ok_or_else(|| anyhow::anyhow!("missing data"))?;
         let stdout = data
             .get("stdout")
-            .expect("data must have 'stdout'")
-            .as_str()
-            .unwrap();
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing stdout"))?;
         let stderr = data
             .get("stderr")
-            .expect("data must have 'stderr'")
-            .as_str()
-            .unwrap();
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing stderr"))?;
         let returncode = data
             .get("returncode")
-            .expect("data must have 'returncode'")
-            .as_i64()
-            .unwrap();
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("missing returncode"))?;
         assert!(stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
         assert_eq!(stderr, "");
         assert_eq!(returncode, 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn action_does_not_expand_placeholders_into_trusted_env() {
-        let dir = tempfile::tempdir().unwrap();
+    async fn action_does_not_expand_placeholders_into_trusted_env() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
         std::fs::write(
             dir.path().join("README.md"),
             "---\ntools:\n  - [echo, { }]\n---\n",
-        )
-        .unwrap();
+        )?;
 
         let config = ServerConfig::new(dir.path().to_path_buf())
             .with_env(HashMap::from([(
@@ -516,7 +514,7 @@ mod tests {
                 "postgresql://gateway:gateway@localhost:5432/gateway_dev".to_string(),
             )]))
             .with_sandbox_env(SandboxEnv::from_host_process());
-        let state = ServerState::from_config(&config).unwrap();
+        let state = ServerState::from_config(&config)?;
 
         let request = ActionRequest {
             command: vec!["echo".to_string(), "$DATABASE_URL".to_string()],
@@ -528,26 +526,26 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = response_text(response).await;
-        let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let data = json.get("data").expect("response must have 'data' key");
+        let json: serde_json::Value = serde_json::from_str(&body)?;
+        let data = json
+            .get("data")
+            .ok_or_else(|| anyhow::anyhow!("missing data"))?;
         let stdout = data
             .get("stdout")
-            .expect("data must have 'stdout'")
-            .as_str()
-            .unwrap();
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing stdout"))?;
         let stderr = data
             .get("stderr")
-            .expect("data must have 'stderr'")
-            .as_str()
-            .unwrap();
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing stderr"))?;
         let returncode = data
             .get("returncode")
-            .expect("data must have 'returncode'")
-            .as_i64()
-            .unwrap();
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| anyhow::anyhow!("missing returncode"))?;
         assert!(stdout.contains("$DATABASE_URL"));
         assert!(!stdout.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
         assert_eq!(stderr, "");
         assert_eq!(returncode, 0);
+        Ok(())
     }
 }
