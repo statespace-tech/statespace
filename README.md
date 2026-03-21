@@ -1,12 +1,13 @@
-<p align="center">
-  <a href="https://github.com/statespace-tech/statespace">
-    <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/favicon.svg" width="150" alt="Statespace">
-  </a>
-</p>
+<div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_light.png" />
+    <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_dark.png" alt="Statespace" width="350" />
+  </picture>
+</div>
 
 <div align="center">
 
-# Statespace
+<br>
 
 **Build web APIs that agents can directly interact with.**
 
@@ -26,7 +27,7 @@
 
 ---
 
-Statespace is a Markdown framework for building web APIs that agents can directly interact with.
+Statespace is a Markdown framework for building web APIs that agents can directly connect to and interact with.
 
 ## Installation
 
