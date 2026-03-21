@@ -11,7 +11,7 @@
 
 <br>
 
-**Build web APIs that agents can directly interact with.**
+*Build web APIs that agents can directly interact with.*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -114,17 +114,6 @@ Optionally, create a free [Statespace account](https://statespace.com/auth/login
 statespace deploy . --public
 ```
 
-### More examples
-
-See the [`examples/`](examples/) directory for ready-to-run apps:
-
-- **[rag](examples/rag)** — Search and analyze log files with `grep`
-- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
-- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
-- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
-- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
-- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
-
 ## Concepts
 
 <details open>
@@ -133,9 +122,9 @@ See the [`examples/`](examples/) directory for ready-to-run apps:
 ```yaml
 ---
 tools:
-  - [grep]
-  - [curl, -X, GET, { }]
-  - [psql, -c, { regex: "^SELECT\\b.*" }]
+    - [date]
+    - [python3, script.py]
+    - [grep, -r, -i, { }, ./data/]
 ---
 ```
 
@@ -146,7 +135,7 @@ tools:
 
 ````yaml
 ```component
-echo "Server time: $(date)"
+echo "Hello, world!"
 ```
 ````
 
@@ -157,12 +146,20 @@ echo "Server time: $(date)"
 
 ```markdown
 ## Instructions
-- Use grep to search for logs in ./data
-- Query the database for recent users
-- See [analyze](src/analyze.md) for more workflows
+- Run the python script
+- Use grep to search through files
 ```
 
 </details>
+
+## Use cases
+
+- **[rag](examples/rag)** — Search and analyze log files with `grep`
+- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
+- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
+- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
+- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
+- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
 
 ## Features
 
