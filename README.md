@@ -11,7 +11,7 @@
 
 <br>
 
-*Build web APIs that agents can directly interact with.*
+*A simpler way to build agent-native APIs.*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,7 +29,8 @@
 
 ---
 
-Statespace is a Markdown framework for building web APIs that agents can directly connect to and interact with.
+Statespace is a Markdown framework for building REST APIs that agents can directly interact with. Build RAG, text-to-SQL, knowledge bases, and more — in pure Markdown. Once you’ve created an app, deploy, manage, and share it from our [cloud platform](https://statespace.com/).
+
 
 ## Installation
 
@@ -56,6 +57,9 @@ echo "Hello, world!"
 ```
 
 This is an example application.
+
+# Instructions
+- Check the current timestamp with `date`
 ````
 
 ### 2. Run it
@@ -74,36 +78,43 @@ claude "What can I do with the API at http://127.0.0.1:8000?"
 
 ### 4. Update it
 
-Add files to your app directory:
+Add data files, scripts, and more Markdown pages to your app:
 
 ```text
-app/
-├── README.md
+demo/
+├── README.md           # from above
 ├── script.py
-└── data/
-    ├── notes.txt
-    └── logs.txt
+├── data.db
+├── data/
+│   ├── log1.txt
+│   ├── log2.txt
+│   └── ...
+└── knowledge/
+    ├── kubernetes.md   # declares K8s tools
+    └── networking.md   # declares networking tools
 ```
 
-Then update `README.md` to add tools and instructions:
+Then update `README.md` with more tools and instructions:
 
 ````yaml
 ---
 tools:
-    - [date]
-    - [python3, script.py]
-    - [grep, -r, -i, { }, ./data/]
+  - [date]
+  - [grep, -r]
+  - [python3, script.py, { }]
+  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
 ---
 
 ```component
 echo "Hello, world!"
 ```
 
-This is an example app.
-
-## Instructions
-- Run the python script
-- Use grep to search through files
+# Instructions
+- Check the current timestamp with `date`
+- Search through files with `grep`
+- Analyze and summarize logs with `script.py`
+- Run read-only queries against `data.db`
+- Browse `./knowledge` for infrastructure context
 ````
 
 ### 5. Deploy it
@@ -114,6 +125,17 @@ Optionally, create a free [Statespace account](https://statespace.com/auth/login
 statespace deploy . --public
 ```
 
+### More examples
+
+See the [`examples/`](examples/) directory for ready-to-run apps:
+
+- **[rag](examples/rag)** — Search and analyze log files with `grep`
+- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
+- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
+- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
+- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
+- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
+
 ## Concepts
 
 <details open>
@@ -122,9 +144,10 @@ statespace deploy . --public
 ```yaml
 ---
 tools:
-    - [date]
-    - [python3, script.py]
-    - [grep, -r, -i, { }, ./data/]
+  - [date]
+  - [grep, -r]
+  - [python3, script.py, { }]
+  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
 ---
 ```
 
@@ -133,7 +156,7 @@ tools:
 <details>
 <summary><b>Components</b> — Render live data inside pages with <code>component</code> code blocks.</summary>
 
-````yaml
+````markdown
 ```component
 echo "Hello, world!"
 ```
@@ -145,21 +168,15 @@ echo "Hello, world!"
 <summary><b>Instructions</b> — Guide agents through your data, workflows, and pages.</summary>
 
 ```markdown
-## Instructions
-- Run the python script
-- Use grep to search through files
+# Instructions
+- Check the current timestamp with `date`
+- Search through files with `grep`
+- Analyze and summarize logs with `script.py`
+- Run read-only queries against `data.db`
+- Browse `./knowledge` for infrastructure context
 ```
 
 </details>
-
-## Use cases
-
-- **[rag](examples/rag)** — Search and analyze log files with `grep`
-- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
-- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
-- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
-- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
-- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
 
 ## Features
 

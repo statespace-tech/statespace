@@ -10,9 +10,9 @@ title: Get started
 <div style="text-align: center; margin: 2rem 0 1.5rem;">
   <div style="display: flex; align-items: center; justify-content: center; gap: 1rem;">
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
-    <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 700; font-size: 2.2em;">STATESPACE</span>
+    <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
   </div>
-  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Build web APIs that agents can directly interact with.</p>
+  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">A simpler way to build agent-native APIs.</p>
   <div style="margin-top: 1rem; display: flex; gap: 0.2rem; justify-content: center; flex-wrap: wrap;">
     <a href="https://github.com/statespace-tech/statespace/actions/workflows/test.yml"><img src="https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg" alt="Test Suite" /></a>
     <a href="https://github.com/statespace-tech/statespace/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-007ec6?style=flat-square" alt="License" /></a>
@@ -30,11 +30,10 @@ title: Get started
 
 ---
 
-Statespace is a Markdown framework for building web APIs that agents can directly interact with.
+Statespace is a Markdown framework for building REST APIs that agents can directly interact with. Build RAG, text-to-SQL, and knowledge base APIs for your agents — in pure Markdown. Once you’ve created an app, you can use our [cloud platform](https://statespace.com/) to deploy, manage, and share it.
+
 
 ## Example
-
-The following example is live at [https://hello-world.statespace.app](https://hello-world.statespace.app).
 
 ### 1. Create it
 
@@ -50,7 +49,8 @@ tools:
 echo "Hello, world!"
 ```
 
-This is an example application.
+# Instructions
+- Use `date` to get the current timestamp
 ````
 
 ### 2. Run it
@@ -85,36 +85,43 @@ Pass the URL to your agents:
 
 ### 4. Update it
 
-Add files to your application:
+Add data, scripts, and pages to your application:
 
 ```text
-app/
-├── README.md
+demo/
+├── README.md           # from above
 ├── script.py
-└── data/
-    ├── notes.txt
-    └── logs.txt
+├── data.db
+├── data/
+│   ├── log1.txt
+│   ├── log2.txt
+│   └── ...
+└── knowledge/
+    ├── kubernetes.md   # declares K8s tools
+    └── networking.md   # declares networking tools
 ```
 
-Then update `README.md` with tools and instructions for using them:
+Then, update `README.md` with more tools and instructions:
 
-````yaml title="README.md"
+````yaml hl_lines="4-6 15-19"
 ---
 tools:
-    - [date]
-    - [python3, script.py]
-    - [grep, -r, -i, { }, ./data/]  
+  - [date]
+  - [grep, -r]
+  - [python3, script.py, { }]
+  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
 ---
 
 ```component
 echo "Hello, world!"
 ```
 
-This is an example app.
-
-## Instructions
-- Run the python script
-- Use grep to search through files
+# Instructions
+- Check the current timestamp with `date`
+- Search through files with `grep`
+- Analyze and summarize logs with `script.py`
+- Run read-only queries against `data.db`
+- Browse `./knowledge` for infrastructure context
 ````
 
 ### 5. Deploy it
@@ -128,72 +135,78 @@ statespace deploy . --public
 ## Concepts
 
 === ":lucide-wrench: &nbsp; Tools"
-    
+
     Give agents controlled access to CLI commands over HTTP. [Learn more](pages/develop/tools.md)
 
-    ````yaml title="README.md" hl_lines="1-6"
+    ````yaml title="README.md" hl_lines="1-7"
     ---
     tools:
-        - [date]
-        - [python3, script.py]
-        - [grep, -r, -i, { }, ./data/]
+      - [date]
+      - [grep, -r]
+      - [python3, script.py, { }]
+      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
     ---
 
     ```component
     echo "Hello, world!"
     ```
 
-    This is an example app.
-
-    ## Instructions
-    - Run the python script
-    - Use grep to search through files
+    # Instructions
+    - Check the current timestamp with `date`
+    - Search through files with `grep`
+    - Analyze and summarize logs with `script.py`
+    - Run read-only queries against `data.db`
+    - Browse `./knowledge` for infrastructure context
     ````
 
 === ":lucide-sparkles: &nbsp; Components"
 
     Render live data inside pages with `component` code blocks. [Learn more](pages/develop/components.md)
 
-    ````yaml title="README.md" hl_lines="8-10"
+    ````yaml title="README.md" hl_lines="9-11"
     ---
     tools:
-        - [date]
-        - [python3, script.py]
-        - [grep, -r, -i, { }, ./data/]
+      - [date]
+      - [grep, -r]
+      - [python3, script.py, { }]
+      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
     ---
 
     ```component
     echo "Hello, world!"
     ```
 
-    This is an example app.
-
-    ## Instructions
-    - Run the python script
-    - Use grep to search through files
+    # Instructions
+    - Check the current timestamp with `date`
+    - Search through files with `grep`
+    - Analyze and summarize logs with `script.py`
+    - Run read-only queries against `data.db`
+    - Browse `./knowledge` for infrastructure context
     ````
 
 === ":lucide-file-text: &nbsp; Instructions"
 
     Guide agents through your data, workflows, and pages. [Learn more](pages/develop/instructions.md)
 
-    ````yaml title="README.md" hl_lines="12-16"
+    ````yaml title="README.md" hl_lines="13-18"
     ---
     tools:
-        - [date]
-        - [python3, script.py]
-        - [grep, -r, -i, { }, ./data/]
+      - [date]
+      - [grep, -r]
+      - [python3, script.py, { }]
+      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
     ---
 
     ```component
     echo "Hello, world!"
     ```
 
-    This is an example app.
-
-    ## Instructions
-    - Run the python script
-    - Use grep to search through files
+    # Instructions
+    - Check the current timestamp with `date`
+    - Search through files with `grep`
+    - Analyze and summarize logs with `script.py`
+    - Run read-only queries against `data.db`
+    - Browse `./knowledge` for infrastructure context
     ````
 
 ## Features
