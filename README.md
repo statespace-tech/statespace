@@ -57,6 +57,7 @@ Configure the MCP server on your client:
   "command": "uvx",
       "args": [
           "statespace-mcp",
+          "path/to/README.md",
           {"$DB": "postgresql://user:pass@host:port/db"},
       ]
   }
@@ -103,7 +104,18 @@ tools:
 
 ### 5. Deploy it
 
-Optionally, create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud.
+Optionally, create a [Statespace account](https://statespace.com/auth/login) to deploy your app and access it anywhere:
+
+```json
+"statespace": {
+  "command": "uvx",
+      "args": [
+          "statespace-mcp",
+          "https://demo.statespace.app",
+          {"$DB": "postgresql://user:pass@host:port/db"},
+      ]
+  }
+```
 
 ### More examples
 
