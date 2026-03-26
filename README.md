@@ -11,7 +11,7 @@
 
 <br>
 
-*The only data API your agents need*
+*The AI framework for data.*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,7 +29,7 @@
 
 ---
 
-AI doesn't know your data. Statespace is a framework that helps you build the APIs your agents need to understand and work with it. Build RAG, text-to-SQL, knowledge bases, and more. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
+AI doesn't know your data. Statespace helps you quickly wire up the API and MCPs your agents need to understand and work with it. Build RAG, text-to-SQL, knowledge bases, and more, using nothing but CLIs and Markdown. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
 
 ## Example
 
@@ -44,7 +44,7 @@ tools:
 ---
 
 # Instructions
-- Understand the schema by exploring tables, columns, and relationships
+- Learn the schema by exploring tables, columns, and relationships
 - Translate the user's question into a query that answers it
 ```
 
@@ -55,12 +55,14 @@ Configure the MCP server on your client:
 ```json
 "statespace": {
   "command": "uvx",
-      "args": [
-          "statespace-mcp",
-          "path/to/README.md",
-          {"$DB": "postgresql://user:pass@host:port/db"},
-      ]
+  "args": [
+    "statespace-mcp",
+    "path/to/README.md"
+  ],
+  "env": {
+    "DB": "postgresql://user:pass@host:port/db"
   }
+}
 ```
 
 ### 3. Ask it
@@ -96,7 +98,7 @@ tools:
 
 
 # Instructions
-- Understand the schema by exploring tables, columns, and relationships
+- Learn the schema by exploring tables, columns, and relationships
 - Translate the user's question into a query that answers it
 - Search through the database's [[./schema]] files with `grep`
 - Run script.py to check the number of active connections
@@ -109,12 +111,17 @@ Optionally, create a [Statespace account](https://statespace.com/auth/login) to 
 ```json
 "statespace": {
   "command": "uvx",
-      "args": [
-          "statespace-mcp",
-          "https://demo.statespace.app",
-          {"$DB": "postgresql://user:pass@host:port/db"},
-      ]
-  }
+  "args": [
+    "statespace-mcp",
+    "https://demo.statespace.app"
+  ]
+}
+```
+
+You can also pass the URL directly to your agents:
+
+```bash
+$ claude "Use the database API at https://demo.statespace.app to check the number of users"
 ```
 
 ### More examples
