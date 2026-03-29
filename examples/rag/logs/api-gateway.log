@@ -1,5 +1,0 @@
-2026-03-10T08:01:12Z INFO  request_id=a1b2c3 method=GET path=/api/users status=200 latency=12ms
-2026-03-10T08:01:14Z INFO  request_id=d4e5f6 method=POST path=/api/orders status=201 latency=45ms
-2026-03-10T08:01:15Z INFO  request_id=g7h8i9 method=GET path=/api/products status=200 latency=8ms
-2026-03-10T08:01:18Z WARN  request_id=j0k1l2 method=GET path=/api/users/999 status=404 latency=3ms
-2026-03-10T08:01:22Z INFO  request_id=m3n4o5 method=PUT path=/api/orders/42 status=200 latency=31ms

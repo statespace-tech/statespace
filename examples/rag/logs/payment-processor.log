@@ -1,6 +1,0 @@
-2026-03-10T08:01:10Z INFO  order_id=1001 amount=49.99 currency=USD provider=stripe status=pending
-2026-03-10T08:01:12Z INFO  order_id=1001 amount=49.99 currency=USD provider=stripe status=completed txn=ch_3abc123
-2026-03-10T08:01:14Z INFO  order_id=1002 amount=129.00 currency=USD provider=stripe status=pending
-2026-03-10T08:01:16Z ERROR order_id=1002 amount=129.00 currency=USD provider=stripe status=failed reason="card declined: insufficient funds"
-2026-03-10T08:01:20Z INFO  order_id=1003 amount=24.50 currency=EUR provider=stripe status=pending
-2026-03-10T08:01:21Z INFO  order_id=1003 amount=24.50 currency=EUR provider=stripe status=completed txn=ch_3def456

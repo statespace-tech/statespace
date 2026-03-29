@@ -1,6 +1,0 @@
-2026-03-10T08:01:00Z INFO  connections=24 rooms=6 messages_per_sec=180
-2026-03-10T08:01:05Z INFO  client=ws_a1b2 action=connect room=general ip=192.168.1.42
-2026-03-10T08:01:08Z INFO  client=ws_c3d4 action=connect room=support ip=10.0.0.15
-2026-03-10T08:01:12Z INFO  client=ws_a1b2 action=message room=general size=128B
-2026-03-10T08:01:15Z WARN  client=ws_e5f6 action=disconnect reason="ping timeout after 30s"
-2026-03-10T08:01:20Z INFO  connections=25 rooms=6 messages_per_sec=195
