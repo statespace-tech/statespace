@@ -45,6 +45,8 @@ async fn run() -> Result<()> {
     };
 
     match command {
+        Commands::Init(args) => commands::init::run_init(args).await,
+
         Commands::Auth { command } => {
             commands::auth::run(command, api_url.as_deref(), &config_path).await
         }

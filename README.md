@@ -11,7 +11,7 @@
 
 <br>
 
-*A simpler way to build agent-native APIs.*
+*Self-documenting AI applications*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,166 +29,109 @@
 
 ---
 
-Statespace is a Markdown framework for building REST APIs that agents can directly interact with. Build RAG, text-to-SQL, knowledge bases, and more — in pure Markdown. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
+AI doesn't know your data. Statespace helps you build self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
 
+## Quickstart
 
-## Installation
-
-Install the CLI:
+If you're a human, point your agent to this repo:
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | bash
+claude "Help me create an app with Statespace: https://github.com/statespace-tech/statespace"
+```
+
+If you're an agent, check out this repo's `AGENTS.md`.
+
+
+## Install
+
+Install the Statespace CLI with:
+
+```
+curl -fsSL https://statespace.com/install.sh | sh
 ```
 
 ## Example
 
 ### 1. Create it
 
-Create a file `README.md` with:
+Create a new text-to-SQL project:
 
-````yaml
----
-tools:
-    - [date]
----
-
-```component
-echo "Hello, world!"
 ```
-
-This is an example application.
-
-# Instructions
-- Check the current timestamp with `date`
+statespace init --from postgresql
 ````
 
-### 2. Run it
-
-```bash
-statespace serve .
-```
-
-### 3. Ask it
-
-Pass the URL to your agents:
-
-```bash
-claude "What can I do with the API at http://127.0.0.1:8000?"
-```
-
-### 4. Update it
-
-Add data files, scripts, and more Markdown pages to your app:
-
-```text
-demo/
-├── README.md           # from above
-├── script.py
-├── data.db
-├── data/
-│   ├── log1.txt
-│   ├── log2.txt
-│   └── ...
-└── knowledge/
-    ├── kubernetes.md   # declares K8s tools
-    └── networking.md   # declares networking tools
-```
-
-Then update `README.md` with more tools and instructions:
-
-````yaml
----
-tools:
-  - [date]
-  - [grep, -r]
-  - [python3, script.py, { }]
-  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
----
-
-```component
-echo "Hello, world!"
-```
-
-# Instructions
-- Check the current timestamp with `date`
-- Search through files with `grep`
-- Analyze and summarize logs with `script.py`
-- Run read-only queries against `data.db`
-- Browse `./knowledge` for infrastructure context
-````
-
-### 5. Deploy it
-
-Optionally, create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
-
-```bash
-statespace deploy . --public
-```
-
-### More examples
-
-See the [`examples/`](examples/) directory for ready-to-run apps:
-
-- **[rag](examples/rag)** — Search and analyze log files with `grep`
-- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
-- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
-- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
-- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
-- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
-
-## Concepts
-
-<details open>
-<summary><b>Tools</b> — Give agents controlled access to CLI commands over HTTP.</summary>
+The skeleton defines just enough tools and instructions for your agent to start exploring your data:
 
 ```yaml
 ---
 tools:
-  - [date]
-  - [grep, -r]
-  - [python3, script.py, { }]
-  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
+  - [psql, -d, $DB, -c, { regex: "^SELECT\\b.*" }]
 ---
-```
 
-</details>
-
-<details>
-<summary><b>Components</b> — Render live data inside pages with <code>component</code> code blocks.</summary>
-
-````markdown
-```component
-echo "Hello, world!"
-```
-````
-
-</details>
-
-<details>
-<summary><b>Instructions</b> — Guide agents through your data, workflows, and pages.</summary>
-
-```markdown
 # Instructions
-- Check the current timestamp with `date`
-- Search through files with `grep`
-- Analyze and summarize logs with `script.py`
-- Run read-only queries against `data.db`
-- Browse `./knowledge` for infrastructure context
+- Learn the schema by exploring tables, columns, and relationships
+- Translate the user's question into a query that answers it
 ```
 
+### 2. Build it
+
+Iterate with your coding agent:
+
+```
+claude "Document my database's schema and add a script to summarize them"
+```
+
+Your agent will run the app locally and iterate on it until it looks something like this:
+
+```text
+.demo/
+├── README.md         # from above
+├── summarize.py
+└── schema/
+    ├── users.md
+    └── products.md
+```
+
+### 3. Ship it
+
+Optionally, deploy your app to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+
+```bash
+statespace deploy .demo/
+```
+
+Then give your agent the public API URL:
+
+```bash
+claude "Use the API at https://demo.statespace.app to find out the number of users"
+```
+
+Or wire it up as an MCP server:
+
+```json
+"statespace": {
+  "command": "uvx",
+  "args": ["statespace-mcp", "https://demo.statespace.app"]
+}
+```
 </details>
 
-## Features
+### Example skeletons
 
-✅ **Simple** — It's just Markdown. Easy to learn, easy to use, easy to maintain.
-
-⚡ **Lightweight** — Install a single, lightning-fast Rust binary. No dependencies.
-
-🌐 **Universal** — Works directly with any agent that can make HTTP requests.
-
-📦 **Portable** — Run or deploy your apps with a single CLI command.
-
-🔒 **Secure** — Restrict access to your private apps with token-based authentication.
+- **[vectorless rag](examples/vectorless_rag)**
+- **[postgresql](examples/postgresql)**
+- **[pgvector](examples/pgvector)**
+- **[mysql](examples/mysql)**
+- **[sqlite](examples/sqlite)**
+- **[duckdb](examples/duckdb)**
+- **[snowflake](examples/snowflake)**
+- **[mssql](examples/mssql)**
+- **[mongodb](examples/mongodb)**
+- **[clickhouse](examples/clickhouse)**
+- **[redis](examples/redis)**
+- **[elasticsearch](examples/elasticsearch)**
+- **[qdrant](examples/qdrant)**
+- **[weaviate](examples/weaviate)**
 
 ## Community & Contributing
 

@@ -1,236 +1,224 @@
-# AGENTS.md - Statespace
+# AGENTS.md — Statespace
 
-## Overview
+Statespace lets you build self-documenting data apps that describe themselves to agents over HTTP. Apps expose content and tools that any agent can discover and use without prior knowledge.
 
-Statespace is an open-source AI runtime/framework. This monorepo contains the Rust implementation.
+## Step 1: Install the CLI
 
-## Build/Test Commands
-
-- **Build**: `cargo build`
-- **Test**: `cargo test`
-- **Lint**: `cargo clippy --all-targets -- -D warnings`
-- **Format**: `cargo fmt --all`
-- **Check**: `cargo check`
-
-## Pre-commit Hooks
-
-Pre-commit hooks run `cargo fmt --check` and `cargo clippy`. To enable:
+Check if the CLI is already installed:
 
 ```bash
-git config core.hooksPath .githooks
+statespace --version
 ```
 
-**Note**: On macOS, the linker needs to find `libiconv` (pulled in by reqwest/rustls). The `.envrc` handles this automatically with `direnv`. Without direnv, set:
+If not, install it:
+
 ```bash
-export LIBRARY_PATH="$(xcrun --show-sdk-path)/usr/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+curl -fsSL https://statespace.com/install.sh | sh
 ```
 
-## Project Structure
+## Step 2: Set up the project
 
-```
-statespace/
-├── Cargo.toml                      # Workspace manifest
-├── shell.nix                       # Nix development environment
-├── binaries/
-│   └── statespace-cli/             # CLI binary
-│       └── src/
-│           ├── main.rs
-│           ├── args.rs
-│           ├── config.rs
-│           ├── error.rs
-│           ├── commands/
-│           └── gateway/
-├── crates/
-│   ├── statespace-tool-runtime/    # Core runtime library (no HTTP, no CLI)
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── error.rs
-│   │       ├── executor.rs
-│   │       ├── frontmatter.rs
-│   │       ├── protocol.rs
-│   │       ├── security.rs
-│   │       ├── spec.rs
-│   │       ├── tools.rs
-│   │       └── validation.rs
-│   └── statespace-server/          # HTTP server library
-│       └── src/
-│           ├── lib.rs
-│           ├── content.rs
-│           ├── error.rs
-│           ├── init.rs
-│           ├── server.rs
-│           └── templates.rs
-└── docs/
-    └── design/                     # RFDs
+If the current directory already contains an `AGENTS.md`, the project is initialized — skip to Step 3.
+
+Otherwise, initialize the app in the current directory:
+
+```bash
+statespace init --from <template>
 ```
 
-## Architecture
+`--from` pulls the `README.md` from a built-in template (e.g. `postgresql`, `vectorless-rag`). Built-in templates are available at [github.com/statespace-tech/statespace/examples](https://github.com/statespace-tech/statespace/tree/main/examples). If omitted, a blank `README.md` is created.
 
-This is a **stateless CLI** — the gateway's actor model, sagas, and stateful lifecycle management do **not** apply here. There are no long-lived processes, no message passing, no state machines.
+## Step 3: Spin up the server
 
-**What DOES apply from gateway philosophy:**
-- **Type-driven design** — validated enums, newtypes, sum types. Make invalid states unrepresentable.
-- **Effects at the edges** — the `gateway/` module inside `statespace-cli` is the effect boundary (HTTP calls to the Statespace API). Commands are orchestration. Pure logic (validation, slugify, config parsing) must have no I/O.
-- **Explicit dependencies** — pass config and clients explicitly; no globals, no `lazy_static!`, no hidden env var reads.
-- **One file per concept** — not `models.rs` dumping grounds.
-- **Immutable data with methods** — domain structs are values with pure business logic methods.
+Read the app's `README.md` to understand which environment variables it needs.
 
-**Module roles:**
-- **Pure modules** (no I/O): `frontmatter`, `spec`, `security`, `protocol`, `validation`, `templates`
-- **Effectful edge**: `executor`, `content`, `server`, `init`, `gateway/`
-- **Commands**: thin orchestration — parse args, call gateway, format output
+Check if a `.env` file already exists in the project directory. If it does, use it directly:
 
-### Code Organization
-
-- **One file per domain** in `gateway/`: `environments.rs`, `auth.rs`, `tokens.rs`, `organizations.rs`, `ssh.rs` — each file owns the types and API calls for that domain
-- **No `#![allow(dead_code)]` file-level suppression** — if code is dead, delete it. Mark individual items with `#[allow(dead_code)]` only with a comment explaining why.
-- **Pure functions in dedicated modules** — validation, parsing, slug generation go in their own modules, not inline in command handlers
-- **Types live with their domain** — an `Environment` struct belongs in `gateway/environments.rs`, not in a shared `types.rs`
-
-### Anti-Patterns
-
-- ❌ `types.rs` / `models.rs` dumping grounds — split types by domain, co-locate with their API calls
-- ❌ `status: String` when the server defines a proper enum — use typed enums (`EnvironmentState`, `Tier`, `Visibility`) client-side too
-- ❌ `#![allow(dead_code)]` to hide unused code — delete it, or annotate individual items with a justification
-- ❌ Inline validation/parsing in command handlers — extract to pure functions that can be unit tested
-- ❌ Hidden I/O in "pure" modules — if it touches the network or filesystem, it belongs at the edge
-- ❌ Edit Cargo.toml use `cargo add`
-- ❌ Skip `cargo fmt`
-- ❌ Merge without running clippy
-- ❌ Comment self-evident operations (`// Initialize`, `// Return result`), getters/setters, constructors, or standard Rust idioms
-- ❌ Add comments that restate what code does
-- ❌ Make things optional that don't need to be - the compiler will enforce
-- ❌ Add error context that doesn't add anything useful information (e.g., `.context("Failed to X")` when error already says it failed)
-
-### Dependency Graph
-
-```
-statespace-cli ──► statespace-server ──► statespace-tool-runtime
-       │                                          ▲
-       └──────────────────────────────────────────┘
+```bash
+statespace serve . --env-file .env
 ```
 
-## Rust Code Guidelines
+If not, identify the required variables from `README.md` and either write the `.env` file yourself or ask the user to provide the values. A `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is written, run:
 
-- Do NOT use `unwrap()` or `expect()` or anything that panics in library code - handle errors properly. In tests, `unwrap()` and `panic!()` are fine.
+```bash
+statespace serve . --env-file .env
+```
 
-- Prefer `crate::` over `super::` for imports. Clean it up if you see `super::`.
+The app runs at `http://localhost:8000`.
 
-- Avoid using `pub use` on imports unless you are re-exposing a dependency so downstream consumers do not have to depend on it directly.
+## Step 4: Iterate on the app
 
-- Skip global state via `lazy_static!`, `Once`, or similar; prefer passing explicit context structs for any shared state.
+Always use `curl` (or raw HTTP requests) to interact with Statespace apps. Web fetch tools that summarize pages will not work — you need unfiltered HTTP responses.
 
-- Write self-documenting code - prefer clear names over comments
+Start by reading `README.md` to discover what the app does, its tools, and where to navigate:
 
-- Only comment for complex algorithms, non-obvious business logic, or "why" not "what"
+```bash
+curl http://localhost:8000/README.md
+```
 
-- Booleans should default to false, not be optional
+Execute a tool declared on a page:
 
-- Clean up existing logs, don't add more unless for errors or security events
+```bash
+curl -X POST http://localhost:8000/README.md \
+  -H "Content-Type: application/json" \
+  -d '{"command": ["tool-name", "arg1", "arg2"]}'
+```
 
-- Avoid overly defensive code - trust Rust's type system
+Follow links to load additional pages only as needed. Edit app files, verify the result with `curl`, get feedback from the user, and repeat. Changes are picked up live — no restart needed.
 
-- Clean up existing logs, don't add more unless for errors or security events
+Always interact with the data source through the running app — never connect to it directly (e.g. do not run `psql` or `redis-cli` yourself). The whole point of the app is to define and test the tools the agent will use in production. Bypassing the app means you're not actually testing what will be deployed.
 
-## Entry Points
-- CLI: binaries/statespace-cli/src/main.rs
-- Server: crates/statespace-server/src/lib.rs
-- Tool Runtime: crates/statespace-tool-runtime/src/lib.rs
+## Step 5: Deploy the app
 
-## Design Documents
+Only suggest this step once you believe the user is satisfied with the app after iterating on it.
 
-See [docs/design/](docs/design/) for design documents following the Oxide RFD style.
+```bash
+statespace deploy . --name <name>
+```
 
+Requires a free [Statespace account](https://statespace.com). Returns a public URL and an access token. Pass the URL to other agents or wire it up as an MCP server.
+
+For private apps, agents must include the token in requests:
+
+```bash
+curl -H "Authorization: Bearer <TOKEN>" https://<name>.statespace.app/README.md
+```
+
+## App protocol
+
+A Statespace app is a directory of Markdown files served over HTTP. Each file is a page. Pages have two parts:
+
+- **Frontmatter:** declares tools agents can call via POST
+- **Body:** instructions and components agents read via GET
+
+### Tools
+
+Tools are CLI commands declared in the YAML frontmatter of a page:
+
+```markdown
+---
+tools:
+  - [ls]
+  - [grep, -r, -i, { }, ../data/]
+  - [cat, { regex: ".*\\.txt$" }]
 ---
 
-## Code Review Instructions
-
-### Review Philosophy
-- Only comment when you have HIGH CONFIDENCE (>80%) that an issue exists
-- Be concise: one sentence per comment when possible
-- Focus on actionable feedback, not observations
-- When reviewing text, only comment on clarity issues if the text is genuinely confusing or could lead to errors. "Could be clearer" is not the same as "is confusing" - stay silent unless HIGH confidence it will cause problems
-
-### Priority Areas (Review These)
-
-#### Security & Safety
-- Unsafe code blocks without justification
-- Command injection risks (shell commands, user input)
-- Path traversal vulnerabilities
-- Credential exposure or hardcoded secrets
-- Missing input validation on external data
-- Improper error handling that could leak sensitive info
-
-#### Correctness Issues
-- Logic errors that could cause panics or incorrect behavior
-- Race conditions in async code
-- Resource leaks (files, connections, memory)
-- Off-by-one errors or boundary conditions
-- Incorrect error propagation (using `unwrap()` inappropriately)
-- Optional types that don't need to be optional
-- Booleans that should default to false but are set as optional
-- Error context that doesn't add useful information (e.g., `.context("Failed to do X")` when error already says it failed)
-- Overly defensive code that adds unnecessary checks
-- Unnecessary comments that just restate what the code already shows (remove them)
-
-#### Architecture & Patterns
-- Code that violates existing patterns in the codebase
-- Missing error handling (should use `anyhow::Result`)
-- Async/await misuse or blocking operations in async contexts
-- Improper trait implementations
-
-#### No Prerelease Docs
-- If the PR contains both code changes to features/functionality AND updates in `/docs`: Documentation updates must be separated to keep public docs in sync with released versions. Either mark new topics with `unlisted: true` or remove/hide the documentation.
-
-### Project-Specific Context
-
-- This is a Rust project using cargo workspaces
-- Error handling: Use `anyhow::Result`, not `unwrap()` in production code
-- Async runtime: tokio
-- See HOWTOAI.md for AI-assisted code standards
-
-### CI Pipeline Context
-
-**Important**: You review PRs immediately, before CI completes. Do not flag issues that CI will catch.
-
-#### What Our CI Checks (`.github/workflows/ci.yml`)
-
-**Rust checks:**
-- `cargo check --workspace` - Code compiles against stable Rust toolchain
-- `cargo fmt --all -- --check` - Code formatting (rustfmt)
-- `cargo clippy --workspace -- -D warnings` - Linting (clippy)
-- `cargo test --workspace` - All tests
-
-**Setup steps CI performs:**
-- Checks out the code - actions/checkout@v4
-- Installs Rust toolchain - dtolnay/rust-toolchain@stable (or @1.85.0 for MSRV)
-
-## Skip These (Low Value)
-
-Do not comment on:
-- **Style/formatting** - CI handles this (rustfmt, prettier)
-- **Clippy warnings** - CI handles this (clippy)
-- **Test failures** - CI handles this (full test suite)
-- **Missing dependencies** - CI handles this (npm ci will fail)
-- **Minor naming suggestions** - unless truly confusing
-- **Suggestions to add comments** - for self-documenting code
-- **Refactoring suggestions** - unless there's a clear bug or maintainability issue
-- **Multiple issues in one comment** - choose the single most critical issue
-- **Logging suggestions** - unless for errors or security events (the codebase needs less logging, not more)
-- **Pedantic accuracy in text** - unless it would cause actual confusion or errors. No one likes a reply guy
-
-## Response Format
-
-When you identify an issue:
-1. **State the problem** (1 sentence)
-2. **Why it matters** (1 sentence, only if not obvious)
-3. **Suggested fix** (code snippet or specific action)
-
-Example:
-```
-This could panic if the vector is empty. Consider using `.get(0)` or add a length check.
+# My page
+...
 ```
 
-## When to Stay Silent
+To execute a tool, POST `{"command": [...]}` to the path of the page that declares it. Commands run without a shell — each array element is a direct process argument (no expansion, pipes, or globbing).
 
-If you're uncertain whether something is an issue, don't comment. False positives create noise and reduce trust in the review process.
+#### Tool rules
+
+**Extra arguments are allowed by default:**
+
+```text
+Tool:       [ls]
+CORRECT:    {"command": ["ls", "."]}
+CORRECT:    {"command": ["ls", "-la", "."]}
+```
+
+**`{ }` accepts exactly one argument:**
+
+```text
+Tool:       [ls, { }]
+CORRECT:    {"command": ["ls", "src"]}
+CORRECT:    {"command": ["ls", "src", "lib"]}  ← extra arguments are fine
+INCORRECT:  {"command": ["ls"]}                ← missing argument
+```
+
+**`{ regex: "pattern" }` accepts one argument matching the pattern:**
+
+```text
+Tool:       [cat, { regex: ".*\\.txt$" }]
+CORRECT:    {"command": ["cat", "notes.txt"]}
+CORRECT:    {"command": ["cat", "notes.txt", "logs.csv"]}     ← extra arguments are fine
+INCORRECT:  {"command": ["cat", "notes.py"]}                  ← doesn't match pattern
+```
+
+**Fixed elements are immutable.** Only replace placeholders — never modify, remove, or reorder fixed elements.
+
+```text
+Tool:       [grep, -r, -i, { }, ../data/]
+CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/"]}
+CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra arguments are fine
+INCORRECT:  {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
+INCORRECT:  {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
+```
+
+**Trailing `;` locks the argument list:**
+
+```text
+Tool:       [rm, { }, ;]
+CORRECT:    {"command": ["rm", "file.txt"]}
+INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
+```
+
+**Write environment variables literally** — the server expands them at execution time:
+
+```text
+Tool:       [psql, $DATABASE_URL, -c, { }]
+CORRECT:    {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
+INCORRECT:  {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
+```
+
+### Components
+
+Components are `component` code blocks in the page body that run when the page is fetched. Their output replaces the block in the response:
+
+````markdown
+```component
+echo "Server time: $(date)"
+```
+````
+
+Agents see the output, not the command. Use components for live data — current time, row counts, recent logs — that should be fresh every time the page loads.
+
+### Multi-page apps
+
+Large apps can be split across multiple pages. Link them from `README.md`:
+
+```markdown
+# My App
+
+- See [search](pages/search.md) for search capabilities
+- See [analytics](pages/analytics.md) for reporting
+```
+
+Load pages progressively — only fetch pages relevant to the current task.
+
+### Constraints
+
+- Only declared tools can be executed.
+- Commands run relative to the app's root directory.
+- All interaction is over HTTP.
+
+## Troubleshooting
+
+**When in doubt, use `--help`** — every CLI command and subcommand supports it:
+
+```bash
+statespace --help
+statespace serve --help
+statespace deploy --help
+statespace init --help
+```
+
+**`400 Bad Request` on a tool call** — the command isn't declared in that page's frontmatter, or the arguments don't satisfy the constraints (missing placeholder, regex mismatch, extra args blocked by `;`). Check the frontmatter of the page you're POSTing to.
+
+**`404 Not Found`** — the page path is wrong, or you're POSTing to a page that doesn't declare the tool you're trying to run. Tools must be called on the page that declares them.
+
+**Environment variable not expanding** — make sure the variable is present in `.env` and that you started the server with `--env-file .env`. Restart the server if you added variables after it started.
+
+**Server won't start (port in use)** — another process is on port 8000. Use `--port` to pick a different one:
+
+```bash
+statespace serve . --env-file .env --port 8080
+```
+
+**`Unknown template` error from `statespace init --from`** — the slug doesn't match any built-in template. Check available templates at [github.com/statespace-tech/statespace/examples](https://github.com/statespace-tech/statespace/tree/main/examples).
+
+**curl returns unexpected results / empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly; Statespace apps require unfiltered HTTP responses.
+
+**`statespace deploy` fails with auth error** — run `statespace auth login` first, then retry.

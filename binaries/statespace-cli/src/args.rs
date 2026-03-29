@@ -30,6 +30,9 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
+    /// Create a new app from a skeleton
+    Init(InitArgs),
+
     /// Run an app locally (no account required)
     Serve(ServeArgs),
 
@@ -131,6 +134,25 @@ pub(crate) struct AppSshArgs {
     /// SSH port (default: 22)
     #[arg(long, short, default_value = "22")]
     pub port: u16,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct InitArgs {
+    /// Directory to initialize (default: current directory)
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    pub path: PathBuf,
+
+    /// Start from an example template (e.g. postgresql, vectorless-rag)
+    #[arg(long = "from", value_name = "TEMPLATE")]
+    pub from: Option<String>,
+
+    /// Environment variables to save in config.toml (KEY=VALUE)
+    #[arg(long = "env", short = 'e', value_name = "KEY=VALUE")]
+    pub env_vars: Vec<String>,
+
+    /// Skip confirmation prompts and overwrite existing files
+    #[arg(long, short)]
+    pub yes: bool,
 }
 
 #[derive(Debug, Parser)]
