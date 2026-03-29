@@ -40,9 +40,9 @@ statespace run . --env-file .env
 
 If not, identify the required variables from `README.md` and ask the user how they'd like to proceed:
 
-**Option 1 — You provide the values now.** The agent asks for each secret and writes the `.env` file.
+**Option 1 — Ask the user for each value** and write the `.env` file yourself before continuing.
 
-**Option 2 — Fill them out yourself.** The agent creates a `.env` with the variable names and empty values, and waits for the user to fill them in before continuing:
+**Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing:
 
 ```
 DATABASE_URL=
@@ -61,6 +61,8 @@ statespace run . --env-file .env --port 8080 --host 0.0.0.0
 ```
 
 ## Step 4: Iterate on the app
+
+Always interact with the data source through the running app — never connect to it directly (e.g. do not run `psql` or `redis-cli` yourself). The whole point of the app is to define and test the tools that will be used in production. Bypassing the app means you're not testing what will be deployed.
 
 Always use `curl` (or raw HTTP requests) to interact with Statespace apps. Web fetch tools that summarize pages will not work — you need unfiltered HTTP responses.
 
@@ -85,8 +87,6 @@ The response includes stdout, stderr, and the exit code:
 ```
 
 Follow links to load additional pages only as needed. Edit app files, verify the result with `curl`, get feedback from the user, and repeat. Changes are picked up live — no restart needed.
-
-Always interact with the data source through the running app — never connect to it directly (e.g. do not run `psql` or `redis-cli` yourself). The whole point of the app is to define and test the tools the agent will use in production. Bypassing the app means you're not actually testing what will be deployed.
 
 ## Step 5: Deploy the app
 
@@ -250,8 +250,6 @@ statespace init --help
 ```bash
 statespace run . --env-file .env --port 8080
 ```
-
-**`Unknown template` error from `statespace init --template`** — the slug doesn't match any built-in template. Run `statespace init --help` to see available templates.
 
 **curl returns unexpected results / empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly; Statespace apps require unfiltered HTTP responses.
 
