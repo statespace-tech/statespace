@@ -2,7 +2,7 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::{FAVICON_SVG, OPENAPI_JSON};
+use crate::templates::FAVICON_SVG;
 use axum::{
     Json, Router,
     extract::{Path, Query, State, rejection::JsonRejection},
@@ -165,7 +165,6 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 
     let router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
-        .route("/openapi.json", get(openapi_handler))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
@@ -190,15 +189,6 @@ async fn favicon_handler(State(state): State<ServerState>) -> Response {
         StatusCode::OK,
         [(header::CONTENT_TYPE, "image/svg+xml")],
         content,
-    )
-        .into_response()
-}
-
-async fn openapi_handler() -> Response {
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        OPENAPI_JSON,
     )
         .into_response()
 }

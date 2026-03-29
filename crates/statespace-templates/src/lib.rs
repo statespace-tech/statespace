@@ -6,8 +6,6 @@ pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 
 pub const FAVICON_SVG: &str = include_str!("favicon.svg");
 
-pub const OPENAPI_JSON: &str = include_str!("openapi.json");
-
 #[cfg(test)]
 mod tests {
     use super::*;

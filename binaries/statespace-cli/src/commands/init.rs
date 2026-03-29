@@ -39,8 +39,8 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
 
     let (readme_content, dockerfile_content) = match args.template {
         Some(template) => {
-            let t = statespace_templates::templates::get(template.as_slug())
-                .expect("Template enum variant has no matching slug");
+            let t = statespace_templates::templates::get(&template)
+                .expect("clap validated the template name but it wasn't found");
             (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
         None => (DEFAULT_README.to_string(), None),
