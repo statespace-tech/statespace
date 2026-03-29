@@ -2,6 +2,8 @@
 
 Statespace lets you build self-documenting data apps that describe themselves to agents over HTTP. Apps expose content and tools that any agent can discover and use without prior knowledge.
 
+Before running any CLI command for the first time, run it with `--help` to see all available options and flags.
+
 ## Step 1: Install the CLI
 
 Check if the CLI is already installed:
@@ -20,13 +22,7 @@ curl -fsSL https://statespace.com/install.sh | sh
 
 If the current directory already contains an `AGENTS.md`, the project is initialized — skip to Step 3.
 
-Otherwise, initialize the app in the current directory:
-
-```bash
-statespace init --template <template>
-```
-
-`--template` initializes from a built-in template (e.g. `postgresql`, `vectorless-rag`). Available templates: `clickhouse`, `duckdb`, `elasticsearch`, `mongodb`, `mssql`, `mysql`, `pgvector`, `postgresql`, `qdrant`, `redis`, `snowflake`, `sqlite`, `vectorless-rag`, `weaviate`. If omitted, a blank `README.md` is created.
+Otherwise, run `statespace init --help` to see available templates and options, then initialize the project.
 
 ## Step 3: Spin up the server
 
@@ -38,17 +34,7 @@ If a `.env` file already exists in the project directory, use it. Otherwise, ide
 
 **Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing.
 
-A `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run:
-
-```bash
-statespace run . --env-file .env
-```
-
-The app runs at `http://localhost:8000` by default. If the port is already in use or you need to bind to a different interface, adjust as needed:
-
-```bash
-statespace run . --env-file .env --port 8080 --host 0.0.0.0
-```
+A `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run `statespace run --help` to see all options, then start the server. The app runs at `http://localhost:8000` by default.
 
 ## Step 4: Iterate on the app
 
@@ -80,13 +66,7 @@ Follow links to load additional pages only as needed. Edit app files, verify the
 
 ## Step 5: Deploy the app
 
-Only suggest this step once you believe the user is satisfied with the app after iterating on it.
-
-```bash
-statespace deploy . --name <name>
-```
-
-Requires a free [Statespace account](https://statespace.com). Returns a public URL and an access token. Pass the URL to other agents or wire it up as an MCP server.
+Only suggest this step once you believe the user is satisfied with the app after iterating on it. Run `statespace deploy --help` to see all options, then deploy. Requires a free [Statespace account](https://statespace.com). Returns a public URL and an access token. Pass the URL to other agents or wire it up as an MCP server.
 
 If the template includes a `Dockerfile`, it is used to build the runtime image for the deployed app. This is how templates that depend on external CLI tools (e.g. `psql`, `mongosh`) make those tools available in the cloud. Don't remove or modify the `Dockerfile` unless you know what you're doing.
 
@@ -220,26 +200,13 @@ Load pages progressively — only fetch pages relevant to the current task.
 
 ## Troubleshooting
 
-**When in doubt, use `--help`** — every CLI command and subcommand supports it:
-
-```bash
-statespace --help
-statespace run --help
-statespace deploy --help
-statespace init --help
-```
-
 **`400 Bad Request` on a tool call** — the command isn't declared in that page's frontmatter, or the arguments don't satisfy the constraints (missing placeholder, regex mismatch, extra args blocked by `;`). Check the frontmatter of the page you're POSTing to.
 
 **`404 Not Found`** — the page path is wrong, or you're POSTing to a page that doesn't declare the tool you're trying to run. Tools must be called on the page that declares them.
 
 **Environment variable not expanding** — make sure the variable is present in `.env` and that you started the server with `--env-file .env`. Restart the server if you added variables after it started.
 
-**Server won't start (port in use)** — another process is on port 8000. Use `--port` to pick a different one:
-
-```bash
-statespace run . --env-file .env --port 8080
-```
+**Server won't start (port in use)** — another process is on port 8000. Run `statespace run --help` and use `--port` to pick a different one.
 
 **curl returns unexpected results / empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly; Statespace apps require unfiltered HTTP responses.
 
