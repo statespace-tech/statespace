@@ -37,14 +37,10 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
 
     std::fs::create_dir_all(output)?;
 
-    let (readme_content, dockerfile_content) = match &args.template {
-        Some(name) => {
-            let t = statespace_templates::templates::get(name).ok_or_else(|| {
-                Error::cli(format!(
-                    "Unknown template '{name}'. Available: {}",
-                    statespace_templates::templates::NAMES.join(", ")
-                ))
-            })?;
+    let (readme_content, dockerfile_content) = match args.template {
+        Some(template) => {
+            let t = statespace_templates::templates::get(template.as_slug())
+                .expect("Template enum variant has no matching slug");
             (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
         None => (DEFAULT_README.to_string(), None),

@@ -150,15 +150,55 @@ pub(crate) struct AppSshArgs {
 }
 
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum Template {
+    Clickhouse,
+    Duckdb,
+    Elasticsearch,
+    Mongodb,
+    Mssql,
+    Mysql,
+    Pgvector,
+    Postgresql,
+    Qdrant,
+    Redis,
+    Snowflake,
+    Sqlite,
+    #[value(name = "vectorless-rag")]
+    VectorlessRag,
+    Weaviate,
+}
+
+impl Template {
+    pub(crate) fn as_slug(self) -> &'static str {
+        match self {
+            Self::Clickhouse => "clickhouse",
+            Self::Duckdb => "duckdb",
+            Self::Elasticsearch => "elasticsearch",
+            Self::Mongodb => "mongodb",
+            Self::Mssql => "mssql",
+            Self::Mysql => "mysql",
+            Self::Pgvector => "pgvector",
+            Self::Postgresql => "postgresql",
+            Self::Qdrant => "qdrant",
+            Self::Redis => "redis",
+            Self::Snowflake => "snowflake",
+            Self::Sqlite => "sqlite",
+            Self::VectorlessRag => "vectorless_rag",
+            Self::Weaviate => "weaviate",
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 pub(crate) struct InitArgs {
     /// Directory to initialize
     #[arg(long, value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
-    /// Start from a built-in template (e.g. postgresql, vectorless-rag)
-    #[arg(long, value_name = "TEMPLATE")]
-    pub template: Option<String>,
+    /// Start from a built-in template
+    #[arg(long, value_enum)]
+    pub template: Option<Template>,
 
     /// Skip confirmation prompts and overwrite existing files
     #[arg(long, short)]
