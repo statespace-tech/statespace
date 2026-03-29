@@ -1,3 +1,6 @@
+// Build scripts abort by panicking; unwrap/expect/panic are appropriate here.
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::Write as IoWrite;
@@ -29,21 +32,13 @@ fn main() {
 
     let mut entries: Vec<_> = fs::read_dir(&app_dir)
         .expect("crates/statespace-templates/src/init/ directory not found")
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .collect();
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
 
-    writeln!(
-        f,
-        "/// Returns the template for `name`, or `None` if unrecognized."
-    )
-    .unwrap();
-    writeln!(
-        f,
-        "/// Matching is case-insensitive; hyphens and underscores are equivalent."
-    )
-    .unwrap();
+    writeln!(f, "/// Returns the template for `name`, or `None` if unrecognized.").unwrap();
+    writeln!(f, "/// Matching is case-insensitive; hyphens and underscores are equivalent.").unwrap();
     writeln!(f, "pub fn get(name: &str) -> Option<Template> {{").unwrap();
     writeln!(f, "    let key = name.to_lowercase().replace('-', \"_\");").unwrap();
     writeln!(f, "    match key.as_str() {{").unwrap();
@@ -63,7 +58,7 @@ fn main() {
             None
         };
 
-        writeln!(f, "        {:?} => Some(Template {{", slug).unwrap();
+        writeln!(f, "        {slug:?} => Some(Template {{").unwrap();
         writeln!(f, "            readme: \"{}\",", escape_rust_str(&readme)).unwrap();
         match dockerfile {
             Some(df) => writeln!(
@@ -88,11 +83,11 @@ fn main() {
     writeln!(f, "pub const NAMES: &[&str] = &[").unwrap();
     for slug in &slugs {
         let display = slug.replace('_', "-");
-        writeln!(f, "    {:?},", display).unwrap();
+        writeln!(f, "    {display:?},").unwrap();
     }
     writeln!(f, "];").unwrap();
 
-    // Rerun if the directory listing or any template file changes
+    // Rerun if the directory listing or any template file changes.
     println!("cargo:rerun-if-changed={}", app_dir.display());
     for entry in &entries {
         println!(
