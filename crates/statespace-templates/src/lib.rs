@@ -1,5 +1,7 @@
 //! Shared embedded templates for Statespace servers.
 
+pub mod templates;
+
 pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 
 pub const FAVICON_SVG: &str = include_str!("favicon.svg");
