@@ -44,7 +44,11 @@ A `.env` file persists across sessions and server restarts — prefer it over `-
 statespace run . --env-file .env
 ```
 
-The app runs at `http://localhost:8000`. Use `--port` to change the port, `--host` to bind to a different interface.
+The app runs at `http://localhost:8000` by default. If the port is already in use or you need to bind to a different interface, adjust as needed:
+
+```bash
+statespace run . --env-file .env --port 8080 --host 0.0.0.0
+```
 
 ## Step 4: Iterate on the app
 
