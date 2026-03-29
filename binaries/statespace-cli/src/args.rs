@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::gateway::applications::Visibility;
@@ -7,30 +7,35 @@ use crate::gateway::applications::Visibility;
 #[command(name = "statespace")]
 #[command(about = "Run, deploy, and manage Statespace apps.")]
 #[command(version)]
+#[command(disable_help_subcommand = true)]
 #[allow(unreachable_pub)]
 pub struct Cli {
-    /// API key override
-    #[arg(long, global = true)]
-    pub api_key: Option<String>,
-
-    /// Organization ID override
-    #[arg(long, global = true)]
-    pub org_id: Option<String>,
-
-    #[arg(long, global = true, env = "STATESPACE_GATEWAY_URL", hide = true)]
-    pub api_url: Option<String>,
-
-    /// Path to configuration.
-    #[arg(long, global = true)]
-    pub config: Option<PathBuf>,
-
     #[command(subcommand)]
     pub command: Commands,
 }
 
+/// Options for commands that interact with the Statespace cloud API.
+#[derive(Debug, Args)]
+pub(crate) struct CloudArgs {
+    /// API key override
+    #[arg(long)]
+    pub api_key: Option<String>,
+
+    /// Organization ID override
+    #[arg(long)]
+    pub org_id: Option<String>,
+
+    #[arg(long, env = "STATESPACE_GATEWAY_URL", hide = true)]
+    pub api_url: Option<String>,
+
+    /// Path to configuration
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
-    /// Create a new app from a skeleton
+    /// Create a new app
     Init(InitArgs),
 
     /// Run an app locally (no account required)
@@ -41,18 +46,24 @@ pub(crate) enum Commands {
 
     /// Application commands
     App {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: AppCommands,
     },
 
     /// Authentication commands
     Auth {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: AuthCommands,
     },
 
     /// Token management commands
     Tokens {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: TokensCommands,
     },
@@ -60,12 +71,14 @@ pub(crate) enum Commands {
     /// SSH configuration management
     #[cfg(feature = "ssh")]
     Ssh {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: SshCommands,
     },
 
-    /// Open the Statespace documentation in your browser
-    Docs,
+    /// Print the agent-friendly guide (AGENTS.md)
+    Guide,
 
     /// Update this CLI to the latest version
     Update,
@@ -131,24 +144,21 @@ pub(crate) struct AppSshArgs {
     #[arg(long, short)]
     pub user: Option<String>,
 
-    /// SSH port (default: 22)
+    /// SSH port
     #[arg(long, short, default_value = "22")]
     pub port: u16,
 }
 
+
 #[derive(Debug, Parser)]
 pub(crate) struct InitArgs {
-    /// Directory to initialize (default: current directory)
+    /// Directory to initialize
     #[arg(long, value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
-    /// Start from an example template (e.g. postgresql, vectorless-rag)
-    #[arg(long = "from", value_name = "TEMPLATE")]
-    pub from: Option<String>,
-
-    /// Environment variables to save in config.toml (KEY=VALUE)
-    #[arg(long = "env", short = 'e', value_name = "KEY=VALUE")]
-    pub env_vars: Vec<String>,
+    /// Start from a built-in template (e.g. postgresql, vectorless-rag)
+    #[arg(long, value_name = "TEMPLATE")]
+    pub template: Option<String>,
 
     /// Skip confirmation prompts and overwrite existing files
     #[arg(long, short)]
@@ -175,11 +185,14 @@ pub(crate) struct AppDeployArgs {
     /// Load deployed app secrets from a file
     #[arg(long = "env-file", value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub cloud: CloudArgs,
 }
 
 #[derive(Debug, Parser)]
 pub(crate) struct ServeArgs {
-    /// Directory to serve (default: current directory)
+    /// Directory to serve
     #[arg(default_value = ".")]
     pub path: PathBuf,
 

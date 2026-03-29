@@ -7,7 +7,7 @@ mod identifiers;
 mod names;
 mod state;
 
-use args::{AppCommands, Cli, Commands};
+use args::{AppCommands, Cli, CloudArgs, Commands};
 use clap::Parser;
 use config::{CredentialOverrides, resolve_config_path, resolve_credentials};
 use error::Result;
@@ -21,68 +21,76 @@ async fn main() {
     }
 }
 
+fn build_gateway(cloud: &CloudArgs) -> Result<GatewayClient> {
+    let config_path = resolve_config_path(cloud.config.as_deref());
+    let creds = resolve_credentials(
+        CredentialOverrides {
+            api_url: cloud.api_url.as_deref(),
+            api_key: cloud.api_key.as_deref(),
+            org_id: cloud.org_id.as_deref(),
+        },
+        &config_path,
+    )?;
+    GatewayClient::new(creds)
+}
+
 async fn run() -> Result<()> {
-    let Cli {
-        api_key,
-        org_id,
-        api_url,
-        config,
-        command,
-    } = Cli::parse();
-
-    let config_path = resolve_config_path(config.as_deref());
-
-    let build_gateway = || -> Result<GatewayClient> {
-        let creds = resolve_credentials(
-            CredentialOverrides {
-                api_url: api_url.as_deref(),
-                api_key: api_key.as_deref(),
-                org_id: org_id.as_deref(),
-            },
-            &config_path,
-        )?;
-        GatewayClient::new(creds)
-    };
+    let Cli { command } = Cli::parse();
 
     match command {
         Commands::Init(args) => commands::init::run_init(args).await,
 
-        Commands::Auth { command } => {
-            commands::auth::run(command, api_url.as_deref(), &config_path).await
+        Commands::Serve(args) => {
+            let config_path = resolve_config_path(None);
+            commands::serve::run_serve(args, &config_path).await
         }
 
         Commands::Deploy(args) => {
-            commands::deploy::run_deploy(args, &config_path, build_gateway()?).await
+            let gateway = build_gateway(&args.cloud)?;
+            let config_path = resolve_config_path(args.cloud.config.as_deref());
+            commands::deploy::run_deploy(args, &config_path, gateway).await
         }
 
-        Commands::Serve(args) => commands::serve::run_serve(args, &config_path).await,
+        Commands::Auth { cloud, command } => {
+            let config_path = resolve_config_path(cloud.config.as_deref());
+            commands::auth::run(command, cloud.api_url.as_deref(), &config_path).await
+        }
 
-        Commands::App { command } => match command {
+        Commands::App { cloud, command } => match command {
             AppCommands::Deploy(args) => {
-                commands::deploy::run_deploy(args, &config_path, build_gateway()?).await
+                let gateway = build_gateway(&args.cloud)?;
+                let config_path = resolve_config_path(args.cloud.config.as_deref());
+                commands::deploy::run_deploy(args, &config_path, gateway).await
             }
-            AppCommands::List => commands::app::run_list(build_gateway()?).await,
-            AppCommands::Get(args) => commands::app::run_get(args, build_gateway()?).await,
-            AppCommands::Delete(args) => commands::app::run_delete(args, build_gateway()?).await,
-            AppCommands::Restart(args) => commands::app::run_restart(args, build_gateway()?).await,
+            AppCommands::List => commands::app::run_list(build_gateway(&cloud)?).await,
+            AppCommands::Get(args) => commands::app::run_get(args, build_gateway(&cloud)?).await,
+            AppCommands::Delete(args) => {
+                commands::app::run_delete(args, build_gateway(&cloud)?).await
+            }
+            AppCommands::Restart(args) => {
+                commands::app::run_restart(args, build_gateway(&cloud)?).await
+            }
             #[cfg(feature = "ssh")]
-            AppCommands::Ssh(args) => commands::ssh::run_ssh(args, build_gateway()?).await,
+            AppCommands::Ssh(args) => commands::ssh::run_ssh(args, build_gateway(&cloud)?).await,
         },
 
-        Commands::Tokens { command } => commands::tokens::run(command, build_gateway()?).await,
+        Commands::Tokens { cloud, command } => {
+            commands::tokens::run(command, build_gateway(&cloud)?).await
+        }
 
-        Commands::Docs => commands::docs::run_docs(),
+        Commands::Guide => commands::guide::run_guide(),
 
         Commands::Update => commands::update::run_update().await,
 
         #[cfg(feature = "ssh")]
-        Commands::Ssh { command } => match command {
+        Commands::Ssh { cloud, command } => match command {
             args::SshCommands::Setup { yes } => {
+                let config_path = resolve_config_path(cloud.config.as_deref());
                 commands::ssh_config::run_setup(yes, &config_path).await
             }
             args::SshCommands::Uninstall { yes } => commands::ssh_config::run_uninstall(yes),
             args::SshCommands::Keys { command } => {
-                commands::ssh_key::run(command, build_gateway()?).await
+                commands::ssh_key::run(command, build_gateway(&cloud)?).await
             }
         },
     }

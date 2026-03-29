@@ -121,6 +121,7 @@ pub(crate) async fn run_deploy(
         name,
         env_vars,
         env_file,
+        cloud: _,
     } = args;
 
     match path {
