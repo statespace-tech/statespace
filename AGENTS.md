@@ -23,10 +23,10 @@ If the current directory already contains an `AGENTS.md`, the project is initial
 Otherwise, initialize the app in the current directory:
 
 ```bash
-statespace init --from <template>
+statespace init --template <template>
 ```
 
-`--from` pulls the `README.md` from a built-in template (e.g. `postgresql`, `vectorless-rag`). Built-in templates are available at [github.com/statespace-tech/statespace/examples](https://github.com/statespace-tech/statespace/tree/main/examples). If omitted, a blank `README.md` is created.
+`--template` initializes from a built-in template (e.g. `postgresql`, `vectorless-rag`). Available templates: `clickhouse`, `duckdb`, `elasticsearch`, `mongodb`, `mssql`, `mysql`, `pgvector`, `postgresql`, `qdrant`, `redis`, `snowflake`, `sqlite`, `vectorless-rag`, `weaviate`. If omitted, a blank `README.md` is created.
 
 ## Step 3: Spin up the server
 
@@ -38,13 +38,27 @@ Check if a `.env` file already exists in the project directory. If it does, use 
 statespace serve . --env-file .env
 ```
 
-If not, identify the required variables from `README.md` and either write the `.env` file yourself or ask the user to provide the values. A `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is written, run:
+If not, identify the required variables from `README.md` and ask the user how they'd like to proceed:
+
+**Option 1 — You provide the values now.** The agent asks for each secret and writes the `.env` file.
+
+**Option 2 — Fill them out yourself.** The agent creates a `.env` with the variable names and empty values, and waits for the user to fill them in before continuing:
+
+```
+DATABASE_URL=
+```
+
+Either way, a `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run:
 
 ```bash
 statespace serve . --env-file .env
 ```
 
-The app runs at `http://localhost:8000`.
+The app runs at `http://localhost:8000`. Use `--port` to change the port, `--host` to bind to a different interface:
+
+```bash
+statespace serve . --env-file .env --port 8080 --host 0.0.0.0
+```
 
 ## Step 4: Iterate on the app
 
@@ -64,6 +78,12 @@ curl -X POST http://localhost:8000/README.md \
   -d '{"command": ["tool-name", "arg1", "arg2"]}'
 ```
 
+The response includes stdout, stderr, and the exit code:
+
+```json
+{"data": {"stdout": "...", "stderr": "...", "returncode": 0}}
+```
+
 Follow links to load additional pages only as needed. Edit app files, verify the result with `curl`, get feedback from the user, and repeat. Changes are picked up live — no restart needed.
 
 Always interact with the data source through the running app — never connect to it directly (e.g. do not run `psql` or `redis-cli` yourself). The whole point of the app is to define and test the tools the agent will use in production. Bypassing the app means you're not actually testing what will be deployed.
@@ -78,10 +98,24 @@ statespace deploy . --name <name>
 
 Requires a free [Statespace account](https://statespace.com). Returns a public URL and an access token. Pass the URL to other agents or wire it up as an MCP server.
 
+If the template includes a `Dockerfile`, it is used to build the runtime image for the deployed app. This is how templates that depend on external CLI tools (e.g. `psql`, `mongosh`) make those tools available in the cloud. Don't remove or modify the `Dockerfile` unless you know what you're doing.
+
 For private apps, agents must include the token in requests:
 
 ```bash
 curl -H "Authorization: Bearer <TOKEN>" https://<name>.statespace.app/README.md
+```
+
+Tokens have three scopes — choose the minimum needed:
+
+- `read` — fetch pages (GET only)
+- `execute` — fetch pages and call tools (GET + POST)
+- `admin` — full access including deployment
+
+Create a token with a specific scope:
+
+```bash
+statespace tokens create <name> --scope execute
 ```
 
 ## App protocol
@@ -217,7 +251,7 @@ statespace init --help
 statespace serve . --env-file .env --port 8080
 ```
 
-**`Unknown template` error from `statespace init --from`** — the slug doesn't match any built-in template. Check available templates at [github.com/statespace-tech/statespace/examples](https://github.com/statespace-tech/statespace/tree/main/examples).
+**`Unknown template` error from `statespace init --template`** — the slug doesn't match any built-in template. Run `statespace init --help` to see available templates.
 
 **curl returns unexpected results / empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly; Statespace apps require unfiltered HTTP responses.
 
