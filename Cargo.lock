@@ -1948,6 +1948,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "statespace-server",
+ "statespace-templates",
  "statespace-tool-runtime",
  "tar",
  "tempfile",

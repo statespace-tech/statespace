@@ -1,9 +1,6 @@
 use crate::args::InitArgs;
-use crate::commands::env::resolve_env_overrides;
-use crate::config::{Config, save_config};
 use crate::error::{Error, Result};
 use inquire::Confirm;
-use std::collections::HashMap;
 use std::path::Path;
 
 const DEFAULT_README: &str = "---
@@ -35,65 +32,48 @@ fn confirm_overwrite(path: &Path, yes: bool) -> Result<bool> {
         .map_err(|e| Error::cli(format!("Prompt failed: {e}")))
 }
 
-async fn fetch_template_file(template: &str, filename: &str) -> Result<Option<String>> {
-    let normalized = template.to_lowercase().replace('-', "_");
-    let url = format!(
-        "https://raw.githubusercontent.com/statespace-tech/statespace/main/examples/{normalized}/{filename}"
-    );
-    let response = reqwest::get(&url).await?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(None);
-    }
-    if !response.status().is_success() {
-        return Err(Error::cli(format!("HTTP {}: {}", response.status(), url)));
-    }
-    Ok(Some(response.text().await?))
-}
-
 pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
     let output = &args.path;
 
     std::fs::create_dir_all(output)?;
 
-    let (readme_content, dockerfile_content) = match &args.from {
-        Some(from) => {
-            let readme = fetch_template_file(from, "README.md")
-                .await?
-                .ok_or_else(|| Error::cli(format!("Unknown template '{from}'")))?;
-            let dockerfile = fetch_template_file(from, "Dockerfile").await?;
-            (readme, dockerfile)
+    let (readme_content, dockerfile_content) = match &args.template {
+        Some(name) => {
+            let t = statespace_templates::templates::get(name).ok_or_else(|| {
+                Error::cli(format!(
+                    "Unknown template '{name}'. Available: {}",
+                    statespace_templates::templates::NAMES.join(", ")
+                ))
+            })?;
+            (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
         None => (DEFAULT_README.to_string(), None),
     };
 
+    let mut created: Vec<&str> = Vec::new();
+
     let readme_path = output.join("README.md");
     if confirm_overwrite(&readme_path, args.yes)? {
         std::fs::write(&readme_path, &readme_content)?;
+        created.push("README.md");
     }
 
     if let Some(dockerfile) = dockerfile_content {
         let dockerfile_path = output.join("Dockerfile");
         if confirm_overwrite(&dockerfile_path, args.yes)? {
             std::fs::write(&dockerfile_path, &dockerfile)?;
+            created.push("Dockerfile");
         }
     }
 
     let agents_path = output.join("AGENTS.md");
     if confirm_overwrite(&agents_path, args.yes)? {
         std::fs::write(&agents_path, DEFAULT_AGENTS)?;
+        created.push("AGENTS.md");
     }
 
-    if !args.env_vars.is_empty() {
-        let env = resolve_env_overrides(HashMap::new(), &args.env_vars, None, "init")?;
-        let config = Config {
-            env,
-            ..Config::default()
-        };
-        save_config(&output.join("config.toml"), &config)?;
-    }
-
-    eprintln!("Initialized '{}'", output.display());
-    eprintln!("Run: statespace serve {}", output.display());
+    eprintln!("Created {} in {}", created.join(", "), output.display());
+    eprintln!("Read AGENTS.md, then run `statespace serve {}`", output.display());
 
     Ok(())
 }
