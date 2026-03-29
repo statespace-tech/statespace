@@ -32,33 +32,19 @@ statespace init --template <template>
 
 Read the app's `README.md` to understand which environment variables it needs.
 
-Check if a `.env` file already exists in the project directory. If it does, use it directly:
-
-```bash
-statespace run . --env-file .env
-```
-
-If not, identify the required variables from `README.md` and ask the user how they'd like to proceed:
+If a `.env` file already exists in the project directory, use it. Otherwise, identify the required variables from `README.md` and ask the user how they'd like to proceed:
 
 **Option 1 — Ask the user for each value** and write the `.env` file yourself before continuing.
 
-**Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing:
+**Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing.
 
-```
-DATABASE_URL=
-```
-
-Either way, a `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run:
+A `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run:
 
 ```bash
 statespace run . --env-file .env
 ```
 
-The app runs at `http://localhost:8000`. Use `--port` to change the port, `--host` to bind to a different interface:
-
-```bash
-statespace run . --env-file .env --port 8080 --host 0.0.0.0
-```
+The app runs at `http://localhost:8000`. Use `--port` to change the port, `--host` to bind to a different interface.
 
 ## Step 4: Iterate on the app
 
