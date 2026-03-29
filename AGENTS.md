@@ -35,7 +35,7 @@ Read the app's `README.md` to understand which environment variables it needs.
 Check if a `.env` file already exists in the project directory. If it does, use it directly:
 
 ```bash
-statespace serve . --env-file .env
+statespace run . --env-file .env
 ```
 
 If not, identify the required variables from `README.md` and ask the user how they'd like to proceed:
@@ -51,13 +51,13 @@ DATABASE_URL=
 Either way, a `.env` file persists across sessions and server restarts — prefer it over `--env KEY=VALUE`, which has to be re-passed every time. Once the file is ready, run:
 
 ```bash
-statespace serve . --env-file .env
+statespace run . --env-file .env
 ```
 
 The app runs at `http://localhost:8000`. Use `--port` to change the port, `--host` to bind to a different interface:
 
 ```bash
-statespace serve . --env-file .env --port 8080 --host 0.0.0.0
+statespace run . --env-file .env --port 8080 --host 0.0.0.0
 ```
 
 ## Step 4: Iterate on the app
@@ -234,7 +234,7 @@ Load pages progressively — only fetch pages relevant to the current task.
 
 ```bash
 statespace --help
-statespace serve --help
+statespace run --help
 statespace deploy --help
 statespace init --help
 ```
@@ -248,7 +248,7 @@ statespace init --help
 **Server won't start (port in use)** — another process is on port 8000. Use `--port` to pick a different one:
 
 ```bash
-statespace serve . --env-file .env --port 8080
+statespace run . --env-file .env --port 8080
 ```
 
 **`Unknown template` error from `statespace init --template`** — the slug doesn't match any built-in template. Run `statespace init --help` to see available templates.

@@ -31,6 +31,8 @@
 
 AI doesn't know your data. Statespace helps you build self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
 
+System that writes and maintains its own context.
+
 ## Install
 
 ```bash
@@ -39,13 +41,13 @@ curl -fsSL https://statespace.com/install.sh | sh
 
 ## Quickstart
 
-If you're a human, point your agent at this repo:
+**If you're a human**: point your agent at this repo:
 
 ```bash
 claude "Help me build a Statespace app: https://github.com/statespace-tech/statespace"
 ```
 
-If you're an agent, install the CLI and read the agent guide:
+**If you're an agent**: install the CLI and read the agent guide:
 
 ```bash
 curl -fsSL https://statespace.com/install.sh | sh && statespace guide

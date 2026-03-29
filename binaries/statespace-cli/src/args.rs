@@ -35,16 +35,16 @@ pub(crate) struct CloudArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
-    /// Create a new app
+    /// Create a new project.
     Init(InitArgs),
 
-    /// Run an app locally (no account required)
-    Serve(ServeArgs),
+    /// Run an app locally (no account required).
+    Run(RunArgs),
 
-    /// Deploy an app (create or update)
+    /// Deploy an app (create or update).
     Deploy(AppDeployArgs),
 
-    /// Application commands
+    /// Application commands.
     App {
         #[command(flatten)]
         cloud: CloudArgs,
@@ -52,7 +52,7 @@ pub(crate) enum Commands {
         command: AppCommands,
     },
 
-    /// Authentication commands
+    /// Authentication commands.
     Auth {
         #[command(flatten)]
         cloud: CloudArgs,
@@ -60,7 +60,7 @@ pub(crate) enum Commands {
         command: AuthCommands,
     },
 
-    /// Token management commands
+    /// Token management commands.
     Tokens {
         #[command(flatten)]
         cloud: CloudArgs,
@@ -68,7 +68,7 @@ pub(crate) enum Commands {
         command: TokensCommands,
     },
 
-    /// SSH configuration management
+    /// SSH configuration management.
     #[cfg(feature = "ssh")]
     Ssh {
         #[command(flatten)]
@@ -77,25 +77,25 @@ pub(crate) enum Commands {
         command: SshCommands,
     },
 
-    /// Print the agent-friendly guide (AGENTS.md)
+    /// Print the agent-friendly guide (AGENTS.md).
     Guide,
 
-    /// Update this CLI to the latest version
+    /// Update this CLI to the latest version.
     Update,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AuthCommands {
-    /// Log in via browser (device auth flow)
+    /// Log in via browser (device auth flow).
     Login,
 
-    /// Log out and clear stored credentials
+    /// Log out and clear stored credentials.
     Logout,
 
-    /// Show current authentication status
+    /// Show current authentication status.
     Status,
 
-    /// Print the current API token
+    /// Print the current API token.
     Token {
         /// Output format
         #[arg(long, short, default_value = "plain")]
@@ -116,19 +116,19 @@ pub(crate) enum AppCommands {
     #[command(hide = true)]
     Deploy(AppDeployArgs),
 
-    /// List all applications
+    /// List all applications.
     List,
 
-    /// Show details for an application
+    /// Show details for an application.
     Get(AppGetArgs),
 
-    /// Delete an application
+    /// Delete an application.
     Delete(AppDeleteArgs),
 
-    /// Restart an application (pulls latest runtime image)
+    /// Restart an application (pulls latest runtime image).
     Restart(AppRestartArgs),
 
-    /// SSH into an application
+    /// SSH into an application.
     #[cfg(feature = "ssh")]
     Ssh(AppSshArgs),
 }
@@ -191,7 +191,7 @@ pub(crate) struct AppDeployArgs {
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct ServeArgs {
+pub(crate) struct RunArgs {
     /// Directory to serve
     #[arg(default_value = ".")]
     pub path: PathBuf,

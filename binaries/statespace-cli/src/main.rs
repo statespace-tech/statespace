@@ -40,9 +40,9 @@ async fn run() -> Result<()> {
     match command {
         Commands::Init(args) => commands::init::run_init(args).await,
 
-        Commands::Serve(args) => {
+        Commands::Run(args) => {
             let config_path = resolve_config_path(None);
-            commands::serve::run_serve(args, &config_path).await
+            commands::run::run_server(args, &config_path).await
         }
 
         Commands::Deploy(args) => {

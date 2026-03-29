@@ -1,4 +1,4 @@
-use crate::args::ServeArgs;
+use crate::args::RunArgs;
 use crate::commands::env::resolve_env_overrides;
 use crate::config::load_merged_app_env;
 use crate::error::{Error, Result};
@@ -10,7 +10,7 @@ use std::path::Path;
 use tokio::net::TcpListener;
 use walkdir::WalkDir;
 
-pub(crate) async fn run_serve(args: ServeArgs, config_path: &Path) -> Result<()> {
+pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> {
     let dir = args
         .path
         .canonicalize()
