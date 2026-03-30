@@ -91,30 +91,7 @@ fn spawn_server(content_dir: &Path, extra_args: &[&str]) -> TestResult<(ChildGua
     let bin = statespace_bin_path()?;
 
     let mut cmd = Command::new(bin);
-    cmd.arg("serve")
-        .arg(content_dir)
-        .arg("--host")
-        .arg("127.0.0.1")
-        .arg("--port")
-        .arg("0")
-        .args(extra_args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd.spawn()?;
-    let base_url = wait_for_base_url(&mut child)?;
-    Ok((ChildGuard { child }, base_url))
-}
-
-fn spawn_server_owned(
-    content_dir: &Path,
-    extra_args: &[String],
-) -> TestResult<(ChildGuard, String)> {
-    let bin = statespace_bin_path()?;
-
-    let mut cmd = Command::new(bin);
-    cmd.arg("serve")
+    cmd.arg("run")
         .arg(content_dir)
         .arg("--host")
         .arg("127.0.0.1")
@@ -138,7 +115,7 @@ fn spawn_server_with_env(
     let bin = statespace_bin_path()?;
 
     let mut cmd = Command::new(bin);
-    cmd.arg("serve")
+    cmd.arg("run")
         .arg(content_dir)
         .arg("--host")
         .arg("127.0.0.1")
@@ -215,39 +192,6 @@ async fn statespace_serve_trusted_env_overrides_query_params() -> TestResult {
 }
 
 #[tokio::test]
-async fn statespace_serve_loads_config_env_and_preserves_precedence() -> TestResult {
-    let dir = tempfile::tempdir()?;
-    std::fs::write(
-        dir.path().join("README.md"),
-        "```component\nprintf '%s|%s' \"$USER_ID\" \"$FROM_CONFIG\"\n```\n",
-    )?;
-
-    let config_path = dir.path().join("config.toml");
-    std::fs::write(
-        &config_path,
-        "[env]\nUSER_ID = \"from_config\"\nFROM_CONFIG = \"yes\"\n",
-    )?;
-
-    let extra_args = vec![
-        "--config".to_string(),
-        config_path.to_string_lossy().to_string(),
-        "--env".to_string(),
-        "USER_ID=from_flag".to_string(),
-    ];
-
-    let (_server, base_url) = spawn_server_owned(dir.path(), &extra_args)?;
-    wait_until_ready(&base_url).await?;
-
-    let body = reqwest::get(format!("{base_url}/README.md?USER_ID=from_query"))
-        .await?
-        .text()
-        .await?;
-
-    assert_eq!(body.trim(), "from_flag|yes");
-    Ok(())
-}
-
-#[tokio::test]
 async fn statespace_serve_does_not_auto_load_dotenv() -> TestResult {
     let dir = tempfile::tempdir()?;
     std::fs::write(
@@ -265,41 +209,6 @@ async fn statespace_serve_does_not_auto_load_dotenv() -> TestResult {
         .await?;
 
     assert_eq!(body.trim(), "<>");
-    Ok(())
-}
-
-#[tokio::test]
-async fn statespace_serve_expands_tool_env_from_config() -> TestResult {
-    let dir = tempfile::tempdir()?;
-    std::fs::write(
-        dir.path().join("README.md"),
-        "---\ntools:\n  - [echo, $DATABASE_URL]\n---\n",
-    )?;
-
-    let config_path = dir.path().join("config.toml");
-    std::fs::write(
-        &config_path,
-        "[env]\nDATABASE_URL = \"postgresql://gateway:gateway@localhost:5432/gateway_dev\"\n",
-    )?;
-
-    let extra_args = vec![
-        "--config".to_string(),
-        config_path.to_string_lossy().to_string(),
-    ];
-
-    let (_server, base_url) = spawn_server_owned(dir.path(), &extra_args)?;
-    wait_until_ready(&base_url).await?;
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(format!("{base_url}/README.md"))
-        .json(&serde_json::json!({ "command": ["echo", "$DATABASE_URL"] }))
-        .send()
-        .await?;
-
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    let body = response.text().await?;
-    assert!(body.contains("postgresql://gateway:gateway@localhost:5432/gateway_dev"));
     Ok(())
 }
 
