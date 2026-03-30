@@ -139,7 +139,7 @@ INCORRECT:  {"command": ["cat", "notes.py"]}                  ← doesn't match 
 
 **Fixed elements are immutable**
 
-```text
+```
 Tool:       [grep, -r, -i, { }, ../data/]
 CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/"]}
 CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra arguments are fine
@@ -149,7 +149,7 @@ INCORRECT:  {"command": ["grep", "-r", "error", "../data/"]}                ← 
 
 **Trailing `;` locks the argument list**
 
-```text
+```
 Tool:       [rm, { }, ;]
 CORRECT:    {"command": ["rm", "file.txt"]}
 INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
@@ -157,7 +157,7 @@ INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowe
 
 **Write environment variables literally.** The server expands them at execution time.
 
-```text
+```
 Tool:       [psql, $DATABASE_URL, -c, { }]
 CORRECT:    {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
 INCORRECT:  {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
@@ -198,26 +198,14 @@ Load pages progressively — only fetch pages relevant to the current task.
 
 ## Troubleshooting
 
-### `400 Bad Request` on a tool call
+**`400 Bad Request` on a tool call** — the command isn't declared in that page's frontmatter, or the arguments don't satisfy the constraints (missing placeholder, regex mismatch, extra args blocked by `;`). Check the frontmatter of the page you're POSTing to.
 
-The command isn't declared in that page's frontmatter, or the arguments don't satisfy the constraints (missing placeholder, regex mismatch, extra args blocked by `;`). Check the frontmatter of the page you're POSTing to.
+**`404 Not Found`** — the page path is wrong, or you're POSTing to a page that doesn't declare the tool you're trying to run. Tools must be called on the page that declares them.
 
-### `404 Not Found`
+**Environment variable not expanding** — make sure the variable is present in `.env` and that you started the server with `--env-file .env`. Restart the server if you added variables after it started.
 
-The page path is wrong, or you're POSTing to a page that doesn't declare the tool you're trying to run. Tools must be called on the page that declares them.
+**Server won't start (port in use)** — another process is on port 8000. Run `statespace run --help` and use `--port` to pick a different one.
 
-### Environment variable not expanding
+**curl returns unexpected results or an empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly — Statespace apps require unfiltered HTTP responses.
 
-Make sure the variable is present in `.env` and that you started the server with `--env-file .env`. Restart the server if you added variables after it started.
-
-### Server won't start (port in use)
-
-Another process is on port 8000. Run `statespace run --help` and use `--port` to pick a different one.
-
-### curl returns unexpected results or an empty response
-
-You may be using a web fetch tool that summarizes responses. Use `curl` directly — Statespace apps require unfiltered HTTP responses.
-
-### `statespace deploy` fails with auth error
-
-Run `statespace auth login` first, then retry.
+**`statespace deploy` fails with auth error** — run `statespace auth login` first, then retry.
