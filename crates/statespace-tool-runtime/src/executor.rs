@@ -9,12 +9,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, info, instrument};
 
 #[derive(Debug, Clone)]
 pub struct ExecutionLimits {
     pub max_output_bytes: usize,
-    pub max_list_items: usize,
     pub timeout: Duration,
 }
 
@@ -22,7 +21,6 @@ impl Default for ExecutionLimits {
     fn default() -> Self {
         Self {
             max_output_bytes: 1024 * 1024,
-            max_list_items: 1000,
             timeout: Duration::from_secs(30),
         }
     }
@@ -32,7 +30,6 @@ impl Default for ExecutionLimits {
 #[non_exhaustive]
 pub enum ToolOutput {
     Text(String),
-    FileList(Vec<FileInfo>),
     Process {
         stdout: String,
         stderr: String,
@@ -45,11 +42,6 @@ impl ToolOutput {
     pub fn to_text(&self) -> String {
         match self {
             Self::Text(s) => s.clone(),
-            Self::FileList(files) => files
-                .iter()
-                .map(|f| f.key.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
             Self::Process { stdout, stderr, .. } => {
                 let mut out = stdout.clone();
                 if !stderr.is_empty() {
@@ -68,11 +60,6 @@ impl ToolOutput {
         match self {
             Self::Process { stdout, .. } => stdout.clone(),
             Self::Text(s) => s.clone(),
-            Self::FileList(files) => files
-                .iter()
-                .map(|f| f.key.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
         }
     }
 
@@ -91,13 +78,6 @@ impl ToolOutput {
             _ => 0,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct FileInfo {
-    pub key: String,
-    pub size: u64,
-    pub last_modified: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Debug)]
@@ -138,7 +118,6 @@ impl ToolExecutor {
     pub async fn execute(&self, tool: &BuiltinTool) -> Result<ToolOutput, Error> {
         let execution = async {
             match tool {
-                BuiltinTool::Glob { pattern } => self.execute_glob(pattern),
                 BuiltinTool::Curl { url, method } => self.execute_curl(url, *method).await,
                 BuiltinTool::Exec { command, args } => self.execute_exec(command, args).await,
             }
@@ -150,36 +129,16 @@ impl ToolExecutor {
     }
 
     async fn execute_exec(&self, command: &str, args: &[String]) -> Result<ToolOutput, Error> {
-        if command.contains('/')
-            || command.contains('\\')
-            || command.contains("..")
-            || (command.len() >= 2 && command.as_bytes()[1] == b':')
-        {
-            return Err(Error::Security(format!(
-                "Path separators not allowed in command name: {command}"
-            )));
-        }
-
         debug!("Executing: {}", command);
-
-        for arg in args {
-            if arg.starts_with('/') {
-                return Err(Error::Security(format!(
-                    "Absolute paths not allowed in command arguments: {arg}"
-                )));
-            }
-            if arg.contains("..") {
-                return Err(Error::Security(format!(
-                    "Path traversal not allowed in command arguments: {arg}"
-                )));
-            }
-        }
 
         let output = Command::new(command)
             .args(args)
             .current_dir(&self.root)
             .env_clear()
             .envs(&self.user_env)
+            // Restore the minimum env a CLI tool needs after env_clear():
+            // PATH so subprocesses can find binaries, HOME so tools can
+            // locate config files, LANG/LC_ALL for deterministic UTF-8 output.
             .env("PATH", self.sandbox_env.path())
             .env("HOME", self.sandbox_env.home())
             .env("LANG", self.sandbox_env.lang())
@@ -226,50 +185,6 @@ impl ToolExecutor {
             stderr,
             exit_code,
         })
-    }
-
-    fn execute_glob(&self, pattern: &str) -> Result<ToolOutput, Error> {
-        let full_pattern = self.safe_join(pattern)?;
-        debug!("Executing glob: {:?}", full_pattern);
-
-        let pattern_str = full_pattern
-            .to_str()
-            .ok_or_else(|| Error::Internal("Invalid UTF-8 path".to_string()))?;
-
-        let paths = glob::glob(pattern_str)
-            .map_err(|e| Error::InvalidCommand(format!("Invalid glob: {e}")))?;
-
-        let mut files = Vec::new();
-        for entry in paths {
-            match entry {
-                Ok(path) => {
-                    let relative = path
-                        .strip_prefix(&self.root)
-                        .unwrap_or(&path)
-                        .to_string_lossy()
-                        .into_owned();
-
-                    let metadata = std::fs::metadata(&path).ok();
-                    let size = metadata.as_ref().map_or(0, std::fs::Metadata::len);
-                    let last_modified = metadata
-                        .and_then(|m| m.modified().ok())
-                        .map_or_else(chrono::Utc::now, chrono::DateTime::<chrono::Utc>::from);
-
-                    files.push(FileInfo {
-                        key: relative,
-                        size,
-                        last_modified,
-                    });
-                }
-                Err(e) => warn!("Glob error: {}", e),
-            }
-        }
-
-        if files.len() > self.limits.max_list_items {
-            files.truncate(self.limits.max_list_items);
-        }
-
-        Ok(ToolOutput::FileList(files))
     }
 
     async fn execute_curl(&self, url: &str, method: HttpMethod) -> Result<ToolOutput, Error> {
@@ -328,17 +243,6 @@ impl ToolExecutor {
         Ok(ToolOutput::Text(text))
     }
 
-    fn safe_join(&self, path: &str) -> Result<PathBuf, Error> {
-        let path = path.trim_start_matches('/');
-        if path.contains("..") {
-            return Err(Error::PathTraversal {
-                attempted: path.to_string(),
-                boundary: self.root.to_string_lossy().to_string(),
-            });
-        }
-        Ok(self.root.join(path))
-    }
-
     #[must_use]
     pub const fn limits(&self) -> &ExecutionLimits {
         &self.limits
@@ -354,46 +258,6 @@ impl ToolExecutor {
 mod tests {
     use super::*;
     use crate::sandbox::SandboxEnv;
-
-    fn test_executor() -> ToolExecutor {
-        ToolExecutor::new(PathBuf::from("/tmp/test-mount"), ExecutionLimits::default())
-    }
-
-    #[tokio::test]
-    async fn exec_rejects_absolute_paths() {
-        let executor = test_executor();
-        let tool = BuiltinTool::Exec {
-            command: "grep".to_string(),
-            args: vec!["pattern".to_string(), "/etc/passwd".to_string()],
-        };
-
-        let result = executor.execute(&tool).await;
-        assert!(matches!(result, Err(Error::Security(_))));
-    }
-
-    #[tokio::test]
-    async fn exec_rejects_path_traversal() {
-        let executor = test_executor();
-        let tool = BuiltinTool::Exec {
-            command: "cat".to_string(),
-            args: vec!["../../../etc/passwd".to_string()],
-        };
-
-        let result = executor.execute(&tool).await;
-        assert!(matches!(result, Err(Error::Security(_))));
-    }
-
-    #[tokio::test]
-    async fn exec_allows_relative_paths() {
-        let executor = test_executor();
-        let tool = BuiltinTool::Exec {
-            command: "ls".to_string(),
-            args: vec!["-la".to_string(), "subdir/file.txt".to_string()],
-        };
-
-        let result = executor.execute(&tool).await;
-        assert!(!matches!(result, Err(Error::Security(_))));
-    }
 
     #[tokio::test]
     async fn missing_binary_returns_clear_invalid_command_error() {

@@ -19,7 +19,7 @@ pub mod server;
 pub mod templates;
 
 pub use statespace_tool_runtime::{
-    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, FileInfo, Frontmatter, HttpMethod,
+    ActionRequest, ActionResponse, BuiltinTool, ExecutionLimits, Frontmatter, HttpMethod,
     ToolExecutor, ToolOutput, ToolPart, ToolSpec, is_valid_tool_call, parse_frontmatter,
     validate_command_with_specs,
 };

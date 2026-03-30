@@ -3,7 +3,8 @@ use crate::commands::env::resolve_env_overrides;
 use crate::config::load_merged_app_env;
 use crate::error::{Error, Result};
 use statespace_server::{ServerConfig, build_router, initialize_templates};
-use statespace_tool_runtime::{SandboxEnv, parse_frontmatter};
+use statespace_tool_runtime::{ExecutionLimits, SandboxEnv, parse_frontmatter};
+use std::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::Path;
@@ -28,6 +29,10 @@ pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> 
         "serve",
     )?;
     let sandbox_env = SandboxEnv::from_host_process();
+    let limits = ExecutionLimits {
+        timeout: Duration::from_secs(args.timeout),
+        max_output_bytes: args.max_output * 1024 * 1024,
+    };
 
     emit_missing_tool_warnings(&dir, &sandbox_env);
 
@@ -35,7 +40,8 @@ pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> 
         .with_host(args.host)
         .with_port(args.port)
         .with_env(env)
-        .with_sandbox_env(sandbox_env);
+        .with_sandbox_env(sandbox_env)
+        .with_limits(limits);
 
     initialize_templates(&config.content_root).await?;
 
@@ -120,7 +126,7 @@ fn collect_declared_exec_tools(content_root: &Path) -> BTreeMap<String, BTreeSet
             .to_string();
 
         for tool_name in frontmatter.tool_names() {
-            if matches!(tool_name, "glob" | "curl") {
+            if matches!(tool_name, "curl") {
                 continue;
             }
             if tool_name.contains('/') {
@@ -217,7 +223,7 @@ mod tests {
 
         fs::write(
             dir.path().join("README.md"),
-            "---\ntools:\n  - [curl, https://example.com]\n  - [glob, '*.md']\n  - [psql, $DATABASE_URL, -c, SELECT 1]\n---\n",
+            "---\ntools:\n  - [curl, https://example.com]\n  - [psql, $DATABASE_URL, -c, SELECT 1]\n---\n",
         )
         .unwrap();
 
@@ -226,7 +232,6 @@ mod tests {
         assert_eq!(tools.len(), 1);
         assert!(tools.contains_key("psql"));
         assert!(!tools.contains_key("curl"));
-        assert!(!tools.contains_key("glob"));
     }
 
     #[test]

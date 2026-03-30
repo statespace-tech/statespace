@@ -214,6 +214,15 @@ pub(crate) struct RunArgs {
     /// Load environment variables from a file
     #[arg(long = "env-file", value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+
+    /// Tool execution timeout in seconds
+    #[arg(long, default_value = "30", value_name = "SECS")]
+    pub timeout: u64,
+
+    /// Maximum combined stdout+stderr size per tool call in megabytes
+    #[arg(long, default_value = "1", value_name = "MB")]
+    pub max_output: usize,
+
 }
 
 #[derive(Debug, Parser)]

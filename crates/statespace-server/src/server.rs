@@ -227,6 +227,7 @@ async fn serve_page(
         working_dir,
         &merged_env,
         &state.sandbox_env,
+        &state.limits,
     )
     .await;
 
