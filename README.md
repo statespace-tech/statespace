@@ -29,28 +29,14 @@
 
 ---
 
-AI doesn't know your data. Statespace helps you build self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
-
-System that writes and maintains its own context.
-
-## Install
-
-```bash
-curl -fsSL https://statespace.com/install.sh | sh
-```
+AI doesn't know your data. Statespace is a framework for building self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
 
 ## Quickstart
 
-**If you're a human**: point your agent at this repo:
+Install the CLI and pass the instructions to your coding agent:
 
 ```bash
-claude "Help me build a Statespace app: https://github.com/statespace-tech/statespace"
-```
-
-**If you're an agent**: install the CLI and read the agent guide:
-
-```bash
-curl -fsSL https://statespace.com/install.sh | sh && statespace guide
+curl -fsSL https://statespace.com/install.sh | sh && statespace guide | claude
 ```
 
 ## Example
@@ -63,7 +49,7 @@ Initialize a new project in the current directory:
 statespace init --template postgresql
 ```
 
-The template defines just enough tools and instructions for your agent to start exploring your data:
+Templates define just enough tools and instructions for your agent to start exploring your data:
 
 ```yaml
 ---
@@ -85,7 +71,7 @@ Iterate with your coding agent:
 claude "Document my database's schema and add summarize script"
 ```
 
-Your agent will run the app locally and iterate on it until it looks something like this:
+Your agent will run your app locally and iterate on it until it looks something like this:
 
 ```text
 my-app/
@@ -104,7 +90,7 @@ Optionally, deploy your app to the cloud with a free [Statespace account](https:
 statespace deploy my-app/
 ```
 
-Then give your agent the public API URL:
+Then give other agents the API URL:
 
 ```bash
 claude "Use the API at https://my-app.statespace.app to find out the number of users"
@@ -118,23 +104,6 @@ Or wire it up as an MCP server:
   "args": ["statespace-mcp", "https://my-app.statespace.app"]
 }
 ```
-
-### App templates
-
-- **[vectorless rag](crates/statespace-templates/app/vectorless_rag)**
-- **[postgresql](crates/statespace-templates/app/postgresql)**
-- **[pgvector](crates/statespace-templates/app/pgvector)**
-- **[mysql](crates/statespace-templates/app/mysql)**
-- **[sqlite](crates/statespace-templates/app/sqlite)**
-- **[duckdb](crates/statespace-templates/app/duckdb)**
-- **[snowflake](crates/statespace-templates/app/snowflake)**
-- **[mssql](crates/statespace-templates/app/mssql)**
-- **[mongodb](crates/statespace-templates/app/mongodb)**
-- **[clickhouse](crates/statespace-templates/app/clickhouse)**
-- **[redis](crates/statespace-templates/app/redis)**
-- **[elasticsearch](crates/statespace-templates/app/elasticsearch)**
-- **[qdrant](crates/statespace-templates/app/qdrant)**
-- **[weaviate](crates/statespace-templates/app/weaviate)**
 
 ## Community & Contributing
 

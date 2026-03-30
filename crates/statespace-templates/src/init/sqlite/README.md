@@ -1,9 +1,9 @@
 ---
 tools:
-  - [sqlite3, data.db, { regex: "^(SELECT|PRAGMA|EXPLAIN)\\b.*" }]
+  - [sqlite3, {}, { regex: "^(SELECT|PRAGMA|EXPLAIN)\\b.*" }]
 ---
 
 # Instructions
-- List tables with `SELECT name FROM sqlite_master WHERE type = 'table'`
-- Inspect columns with `PRAGMA table_info(<table>)`
-- See [SQLite documentation](https://www.sqlite.org/docs.html) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://www.sqlite.org/docs.html) as needed

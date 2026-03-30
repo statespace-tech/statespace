@@ -4,7 +4,6 @@ tools:
 ---
 
 # Instructions
-- Explore key patterns with `SCAN 0 MATCH <pattern> COUNT 100`
-- Discover search indexes with `FT._LIST` and inspect them with `FT.INFO <index>`
-- Vector similarity search requires a RediSearch index with a VECTOR field
-- See [Redis documentation](https://redis.io/docs/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://redis.io/docs/) as needed

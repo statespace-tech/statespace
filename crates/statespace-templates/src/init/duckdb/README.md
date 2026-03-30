@@ -4,6 +4,6 @@ tools:
 ---
 
 # Instructions
-- Query files directly with `SELECT * FROM 'path/to/file.parquet'` or `read_csv('path/to/file.csv')`
-- Inspect columns with `DESCRIBE SELECT * FROM '<file>'`
-- See [DuckDB documentation](https://duckdb.org/docs/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://duckdb.org/docs/) as needed

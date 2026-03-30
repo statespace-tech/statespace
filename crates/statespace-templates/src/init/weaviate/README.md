@@ -4,7 +4,6 @@ tools:
 ---
 
 # Instructions
-- Inspect the schema with `GET $WEAVIATE_URL/v1/schema` before querying
-- Collections are called "classes" and are capitalized by convention, e.g. `Document`
-- GraphQL is the primary query interface — POST to `/v1/graphql` with a `query` field
-- See [Weaviate documentation](https://weaviate.io/developers/weaviate) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://weaviate.io/developers/weaviate) as needed

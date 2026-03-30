@@ -4,6 +4,6 @@ tools:
 ---
 
 # Instructions
-- Explore with `SHOW DATABASES`, `SHOW SCHEMAS IN DATABASE <db>`, `SHOW TABLES IN SCHEMA <db>.<schema>`
-- Inspect a table with `DESCRIBE TABLE <db>.<schema>.<table>`
-- See [Snowflake documentation](https://docs.snowflake.com/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://docs.snowflake.com/) as needed

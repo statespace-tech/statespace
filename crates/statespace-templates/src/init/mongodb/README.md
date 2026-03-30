@@ -4,6 +4,6 @@ tools:
 ---
 
 # Instructions
-- List collections with `db.getCollectionNames()`
-- Sample a document with `db.<collection>.findOne()` to understand the schema before querying
-- See [MongoDB documentation](https://www.mongodb.com/docs/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://www.mongodb.com/docs/) as needed

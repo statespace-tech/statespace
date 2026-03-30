@@ -4,6 +4,6 @@ tools:
 ---
 
 # Instructions
-- Explore with `SHOW DATABASES`, `SHOW TABLES FROM <database>`, and `DESCRIBE TABLE <database>.<table>`
-- ClickHouse is columnar — prefer aggregations over row lookups
-- See [ClickHouse documentation](https://clickhouse.com/docs/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://clickhouse.com/docs/) as needed

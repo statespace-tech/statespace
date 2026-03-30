@@ -4,5 +4,6 @@ tools:
 ---
 
 # Instructions
-- Explore the schema with `SHOW TABLES` and `DESCRIBE <table>`
-- See [MySQL documentation](https://dev.mysql.com/doc/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://dev.mysql.com/doc/) as needed
