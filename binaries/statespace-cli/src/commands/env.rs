@@ -3,12 +3,13 @@ use statespace_tool_runtime::validate_env_map;
 use std::collections::HashMap;
 use std::path::Path;
 
+
 pub(crate) fn resolve_env_overrides(
-    mut env: HashMap<String, String>,
     flags: &[String],
     file: Option<&Path>,
     mode: &str,
 ) -> Result<HashMap<String, String>> {
+    let mut env = HashMap::new();
     if let Some(path) = file {
         let content = std::fs::read_to_string(path).map_err(|e| {
             Error::cli(format!("Failed to read env file '{}': {e}", path.display()))
@@ -62,7 +63,7 @@ mod tests {
         writeln!(f, "  # another comment").unwrap();
         writeln!(f, "API_KEY=[REDACTED:api-key]").unwrap();
 
-        let result = resolve_env_overrides(HashMap::new(), &[], Some(f.path()), "serve").unwrap();
+        let result = resolve_env_overrides(&[], Some(f.path()), "serve").unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result["DB"], "postgres://localhost/test");
         assert_eq!(result["API_KEY"], "[REDACTED:api-key]");
@@ -74,34 +75,27 @@ mod tests {
         writeln!(f, "DB=from_file").unwrap();
 
         let flags = vec!["DB=from_flag".to_string()];
-        let result =
-            resolve_env_overrides(HashMap::new(), &flags, Some(f.path()), "deploy").unwrap();
+        let result = resolve_env_overrides(&flags, Some(f.path()), "deploy").unwrap();
         assert_eq!(result["DB"], "from_flag");
     }
 
     #[test]
-    fn merge_order_is_flags_then_file_then_config() {
+    fn flags_override_file_values() {
         let mut f = NamedTempFile::new().unwrap();
         writeln!(f, "A=from_file").unwrap();
         writeln!(f, "B=from_file").unwrap();
 
-        let mut config_env = HashMap::new();
-        config_env.insert("A".to_string(), "from_config".to_string());
-        config_env.insert("C".to_string(), "from_config".to_string());
-
         let flags = vec!["A=from_flag".to_string(), "D=from_flag".to_string()];
-        let result = resolve_env_overrides(config_env, &flags, Some(f.path()), "serve").unwrap();
+        let result = resolve_env_overrides(&flags, Some(f.path()), "serve").unwrap();
 
         assert_eq!(result["A"], "from_flag");
         assert_eq!(result["B"], "from_file");
-        assert_eq!(result["C"], "from_config");
         assert_eq!(result["D"], "from_flag");
     }
 
     #[test]
     fn invalid_flag_format_returns_error() {
-        let result =
-            resolve_env_overrides(HashMap::new(), &["NO_EQUALS".to_string()], None, "serve");
+        let result = resolve_env_overrides(&["NO_EQUALS".to_string()], None, "serve");
         assert!(result.is_err());
     }
 
@@ -111,16 +105,13 @@ mod tests {
         writeln!(f, "GOOD=value").unwrap();
         writeln!(f, "bad line no equals").unwrap();
 
-        let result = resolve_env_overrides(HashMap::new(), &[], Some(f.path()), "deploy");
+        let result = resolve_env_overrides(&[], Some(f.path()), "deploy");
         assert!(result.is_err());
     }
 
     #[test]
-    fn invalid_env_key_returns_error() {
-        let mut config_env = HashMap::new();
-        config_env.insert("USER-ID".to_string(), "42".to_string());
-
-        let result = resolve_env_overrides(config_env, &[], None, "serve");
+    fn invalid_env_key_in_flag_returns_error() {
+        let result = resolve_env_overrides(&["USER-ID=42".to_string()], None, "serve");
         assert!(result.is_err());
     }
 }

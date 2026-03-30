@@ -1,8 +1,7 @@
 use crate::args::RunArgs;
 use crate::commands::env::resolve_env_overrides;
-use crate::config::load_merged_app_env;
 use crate::error::{Error, Result};
-use statespace_server::{ServerConfig, build_router, initialize_templates};
+use statespace_server::{ServerConfig, build_router};
 use statespace_tool_runtime::{ExecutionLimits, SandboxEnv, parse_frontmatter};
 use std::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,7 +10,7 @@ use std::path::Path;
 use tokio::net::TcpListener;
 use walkdir::WalkDir;
 
-pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> {
+pub(crate) async fn run_server(args: RunArgs) -> Result<()> {
     let dir = args
         .path
         .canonicalize()
@@ -21,13 +20,7 @@ pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> 
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
     }
 
-    let config_env = load_merged_app_env(config_path, Some(&dir))?;
-    let env = resolve_env_overrides(
-        config_env,
-        &args.env_vars,
-        args.env_file.as_deref(),
-        "serve",
-    )?;
+    let env = resolve_env_overrides(&args.env_vars, args.env_file.as_deref(), "serve")?;
     let sandbox_env = SandboxEnv::from_host_process();
     let limits = ExecutionLimits {
         timeout: Duration::from_secs(args.timeout),
@@ -42,8 +35,6 @@ pub(crate) async fn run_server(args: RunArgs, config_path: &Path) -> Result<()> 
         .with_env(env)
         .with_sandbox_env(sandbox_env)
         .with_limits(limits);
-
-    initialize_templates(&config.content_root).await?;
 
     if !config.content_root.join("README.md").is_file() {
         return Err(Error::cli(
@@ -191,31 +182,6 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
-
-    #[test]
-    fn app_config_env_overrides_global_config_env() {
-        let workspace = TempDir::new().unwrap();
-        let global_config_path = workspace.path().join("global-config.toml");
-        let app_dir = workspace.path().join("app");
-        fs::create_dir_all(&app_dir).unwrap();
-
-        fs::write(
-            &global_config_path,
-            "[env]\nUSER_ID = \"global\"\nGLOBAL_ONLY = \"present\"\n",
-        )
-        .unwrap();
-        fs::write(
-            app_dir.join("config.toml"),
-            "[env]\nUSER_ID = \"app\"\nAPP_ONLY = \"present\"\n",
-        )
-        .unwrap();
-
-        let env = load_merged_app_env(&global_config_path, Some(&app_dir)).unwrap();
-
-        assert_eq!(env["USER_ID"], "app");
-        assert_eq!(env["GLOBAL_ONLY"], "present");
-        assert_eq!(env["APP_ONLY"], "present");
-    }
 
     #[test]
     fn collect_declared_exec_tools_ignores_non_exec_commands() {
