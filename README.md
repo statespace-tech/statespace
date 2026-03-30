@@ -33,10 +33,16 @@ AI doesn't know your data. Statespace is a framework for building self-documenti
 
 ## Quickstart
 
-Install the CLI and pass the instructions to your coding agent:
+Install the CLI: 
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | sh && statespace guide | claude
+curl -fsSL https://statespace.com/install.sh | sh
+```
+
+Then, pass the Statespace guide to your coding agent:
+
+```
+statespace guide | claude
 ```
 
 ## Example
