@@ -1,7 +1,7 @@
 use crate::config::Credentials;
 use crate::error::{ApiErrorCode, GatewayError, Result};
 use crate::gateway::applications::{
-    Application, ApplicationFile, DeployResult, UpsertResult, Visibility,
+    Application, ApplicationFile, UpsertResult,
 };
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 #[cfg(feature = "ssh")]
@@ -13,7 +13,7 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::{Component, Path};
+use std::path::Path;
 use std::time::Duration;
 
 const USER_AGENT: &str = concat!("statespace-cli/", env!("CARGO_PKG_VERSION"));
@@ -102,34 +102,6 @@ impl GatewayClient {
 
         files.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(files)
-    }
-
-    pub(crate) async fn create_application(
-        &self,
-        name: &str,
-        files: Vec<ApplicationFile>,
-        visibility: Option<Visibility>,
-    ) -> Result<DeployResult> {
-        #[derive(Serialize)]
-        struct Payload<'a> {
-            name: &'a str,
-            files: Vec<ApplicationFile>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            visibility: Option<Visibility>,
-        }
-
-        let url = format!("{}/api/v1/environments", self.base_url);
-        let resp = self
-            .with_headers(self.http.post(&url))
-            .json(&Payload {
-                name,
-                files,
-                visibility,
-            })
-            .send()
-            .await?;
-
-        parse_api_response(resp).await
     }
 
     pub(crate) async fn list_applications(&self) -> Result<Vec<Application>> {
@@ -389,74 +361,39 @@ impl GatewayClient {
     }
 }
 
-struct DeployIgnoreMatcher {
+struct GitignoreMatcher {
     gitignore: Option<Gitignore>,
 }
 
-impl DeployIgnoreMatcher {
-    fn load(root: &Path) -> Result<Self> {
-        let path = root.join(".statespaceignore");
+impl GitignoreMatcher {
+    fn load(root: &Path) -> Self {
+        let path = root.join(".gitignore");
         if !path.is_file() {
-            return Ok(Self { gitignore: None });
+            return Self { gitignore: None };
         }
-
         let mut builder = GitignoreBuilder::new(root);
         builder.add(path);
-        let gitignore = builder
-            .build()
-            .map_err(|e| crate::error::Error::cli(format!("Invalid .statespaceignore: {e}")))?;
-
-        Ok(Self {
-            gitignore: Some(gitignore),
-        })
+        Self {
+            gitignore: builder.build().ok(),
+        }
     }
 
     fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
-        self.gitignore.as_ref().is_some_and(|gitignore| {
-            gitignore
-                .matched_path_or_any_parents(path, is_dir)
-                .is_ignore()
+        self.gitignore.as_ref().is_some_and(|g| {
+            g.matched_path_or_any_parents(path, is_dir).is_ignore()
         })
     }
 }
 
-fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &DeployIgnoreMatcher) -> bool {
-    const IGNORED_DIRS: [&str; 2] = [".git", ".statespace"];
-
+fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &GitignoreMatcher) -> bool {
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-
-    if relative.components().any(|component| match component {
-        Component::Normal(name) => IGNORED_DIRS
-            .iter()
-            .any(|ignored| name == std::ffi::OsStr::new(ignored)),
-        _ => false,
-    }) {
-        return true;
-    }
-
-    if relative == Path::new("config.toml") {
-        return true;
-    }
-
-    if relative == Path::new(".statespaceignore") {
-        return true;
-    }
-
-    if relative
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == ".env" || name.starts_with(".env."))
-    {
-        return true;
-    }
-
     matcher.is_ignored(relative, path.is_dir())
 }
 
 fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let matcher = DeployIgnoreMatcher::load(dir)?;
+    let matcher = GitignoreMatcher::load(dir);
     let mut results = Vec::new();
     for entry in walkdir::WalkDir::new(dir)
         .into_iter()
@@ -653,52 +590,40 @@ mod tests {
         assert_eq!(decoded, vec![0, 1, 2, 3]);
     }
 
-    #[test]
-    fn scan_deploy_files_excludes_internal_directories() {
-        let dir = TempDir::new().expect("tempdir");
-        write_file(&dir, "README.md", b"# Hello");
-        write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
-        write_file(&dir, ".git/config", b"[core]");
-
-        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
-        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
-
-        assert_eq!(paths, vec!["README.md"]);
-    }
 
     #[test]
-    fn scan_deploy_files_excludes_local_config_and_env_files() {
+    fn scan_deploy_files_excludes_via_gitignore() {
         let dir = TempDir::new().expect("tempdir");
         write_file(&dir, "README.md", b"# Hello");
-        write_file(
-            &dir,
-            "config.toml",
-            b"[env]\nAPI_URL='http://localhost:3000'\n",
-        );
+        write_file(&dir, "config.toml", b"keep me\n");
         write_file(&dir, ".env", b"DATABASE_URL=postgres://localhost/dev\n");
         write_file(&dir, ".env.production", b"DATABASE_URL=postgres://prod\n");
         write_file(&dir, "nested/.env.test", b"API_KEY=test\n");
-        write_file(&dir, "nested/config.toml", b"keep me\n");
+        write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
+        write_file(&dir, ".git/config", b"[core]");
+        write_file(&dir, ".gitignore", b".env\n.env.*\nnested/.env.*\n.statespace\n.git\n");
 
         let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
 
-        assert_eq!(paths, vec!["README.md", "nested/config.toml"]);
+        // .gitignore itself is deployed (it contains no secrets)
+        assert_eq!(paths, vec![".gitignore", "README.md", "config.toml"]);
     }
 
     #[test]
-    fn scan_deploy_files_respects_statespaceignore() {
+    fn scan_deploy_files_respects_gitignore() {
         let dir = TempDir::new().expect("tempdir");
         write_file(&dir, "README.md", b"# Hello");
         write_file(&dir, "keep.txt", b"keep\n");
         write_file(&dir, "ignore.me", b"ignore\n");
         write_file(&dir, "important.me", b"keep this\n");
         write_file(&dir, "build/output.txt", b"ignored\n");
-        write_file(&dir, ".statespaceignore", b"*.me\n!important.me\nbuild/\n");
+        // .gitignore itself is deployed (it contains no secrets)
+        write_file(&dir, ".gitignore", b"*.me\n!important.me\nbuild/\n");
 
         let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
 
-        assert_eq!(paths, vec!["README.md", "important.me", "keep.txt"]);
+        assert_eq!(paths, vec![".gitignore", "README.md", "important.me", "keep.txt"]);
     }
 }
