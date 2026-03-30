@@ -40,15 +40,11 @@ async fn run() -> Result<()> {
     match command {
         Commands::Init(args) => commands::init::run_init(args).await,
 
-        Commands::Run(args) => {
-            let config_path = resolve_config_path(None);
-            commands::run::run_server(args, &config_path).await
-        }
+        Commands::Run(args) => commands::run::run_server(args).await,
 
         Commands::Deploy(args) => {
             let gateway = build_gateway(&args.cloud)?;
-            let config_path = resolve_config_path(args.cloud.config.as_deref());
-            commands::deploy::run_deploy(args, &config_path, gateway).await
+            commands::deploy::run_deploy(args, gateway).await
         }
 
         Commands::Auth { cloud, command } => {
@@ -57,11 +53,6 @@ async fn run() -> Result<()> {
         }
 
         Commands::App { cloud, command } => match command {
-            AppCommands::Deploy(args) => {
-                let gateway = build_gateway(&args.cloud)?;
-                let config_path = resolve_config_path(args.cloud.config.as_deref());
-                commands::deploy::run_deploy(args, &config_path, gateway).await
-            }
             AppCommands::List => commands::app::run_list(build_gateway(&cloud)?).await,
             AppCommands::Get(args) => commands::app::run_get(args, build_gateway(&cloud)?).await,
             AppCommands::Delete(args) => {

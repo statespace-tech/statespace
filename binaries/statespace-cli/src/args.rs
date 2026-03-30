@@ -1,7 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use crate::gateway::applications::Visibility;
 
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
@@ -112,10 +111,6 @@ pub(crate) enum TokenOutputFormat {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AppCommands {
-    /// Deploy an application (create-or-update, alias for top-level deploy)
-    #[command(hide = true)]
-    Deploy(AppDeployArgs),
-
     /// List all applications.
     List,
 
@@ -170,12 +165,11 @@ pub(crate) struct InitArgs {
 
 #[derive(Debug, Parser)]
 pub(crate) struct AppDeployArgs {
-    /// Directory to deploy. If omitted, creates an empty application.
-    pub path: Option<PathBuf>,
-
-    /// Application visibility (default: public on free-tier, otherwise private).
-    #[arg(long, value_enum)]
-    pub visibility: Option<Visibility>,
+    /// Directory to deploy (default: current directory). Secrets (.env, .env.*) and
+    /// internal directories (.git, .statespace) are never uploaded. Additional
+    /// exclusions can be defined in .gitignore.
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
 
     /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]
