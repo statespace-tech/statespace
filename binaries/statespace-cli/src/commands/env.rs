@@ -3,7 +3,6 @@ use statespace_tool_runtime::validate_env_map;
 use std::collections::HashMap;
 use std::path::Path;
 
-
 pub(crate) fn resolve_env_overrides(
     flags: &[String],
     file: Option<&Path>,
@@ -50,7 +49,6 @@ pub(crate) fn resolve_env_overrides(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::resolve_env_overrides;
-    use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
 

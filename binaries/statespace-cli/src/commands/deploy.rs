@@ -90,10 +90,7 @@ impl DeployOutcome {
     }
 }
 
-pub(crate) async fn run_deploy(
-    args: AppDeployArgs,
-    gateway: impl DeployGateway,
-) -> Result<()> {
+pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway) -> Result<()> {
     let AppDeployArgs {
         path,
         name,
@@ -102,9 +99,9 @@ pub(crate) async fn run_deploy(
         cloud: _,
     } = args;
 
-    let dir = path.canonicalize().map_err(|e| {
-        crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display()))
-    })?;
+    let dir = path
+        .canonicalize()
+        .map_err(|e| crate::error::Error::cli(format!("Invalid path '{}': {e}", path.display())))?;
 
     if !dir.is_dir() {
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
@@ -119,7 +116,7 @@ pub(crate) async fn run_deploy(
     }
 
     let cached = load_state(&dir)?;
-    let target = resolve_target(name, cached.as_ref())?;
+    let target = resolve_target(name, cached.as_ref());
 
     let files = GatewayClient::scan_deploy_files(&dir)?;
 
@@ -245,14 +242,13 @@ fn checksum_env_map(env: &HashMap<String, String>) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn resolve_target(explicit_name: Option<String>, cached: Option<&DeployState>) -> Result<DeployTarget> {
+fn resolve_target(explicit_name: Option<String>, cached: Option<&DeployState>) -> DeployTarget {
     let name = explicit_name
         .or_else(|| cached.map(|s| s.name.clone()))
         .unwrap_or_else(generate_name);
 
-    Ok(DeployTarget { name })
+    DeployTarget { name }
 }
-
 
 #[cfg(test)]
 #[allow(clippy::expect_used)]
@@ -376,8 +372,7 @@ mod tests {
         )
         .expect("save state");
 
-        let (mock, upsert_calls, _, _) =
-            MockDeployGateway::new(upsert_result(false, "cached-app"));
+        let (mock, upsert_calls, _, _) = MockDeployGateway::new(upsert_result(false, "cached-app"));
 
         run_deploy(deploy_args(dir.path().to_path_buf(), None), mock)
             .await
@@ -393,8 +388,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
-        let (mock, upsert_calls, _, _) =
-            MockDeployGateway::new(upsert_result(false, "generated"));
+        let (mock, upsert_calls, _, _) = MockDeployGateway::new(upsert_result(false, "generated"));
 
         run_deploy(deploy_args(dir.path().to_path_buf(), None), mock)
             .await
@@ -413,14 +407,11 @@ mod tests {
         std::fs::write(dir.path().join("assets/config.json"), "{\"enabled\":true}")
             .expect("write json");
 
-        let (mock, upsert_calls, _, _) =
-            MockDeployGateway::new(upsert_result(false, "bar"));
+        let (mock, upsert_calls, _, _) = MockDeployGateway::new(upsert_result(false, "bar"));
 
         let args = deploy_args(dir.path().to_path_buf(), Some("bar"));
 
-        run_deploy(args, mock)
-            .await
-            .expect("run_deploy");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded_upserts = upsert_calls.lock().expect("lock");
         assert_eq!(recorded_upserts.len(), 1);
@@ -438,14 +429,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Updated").expect("write");
 
-        let (mock, upsert_calls, _, _) =
-            MockDeployGateway::new(upsert_result(false, "bar"));
+        let (mock, upsert_calls, _, _) = MockDeployGateway::new(upsert_result(false, "bar"));
 
         let args = deploy_args(dir.path().to_path_buf(), Some("bar"));
 
-        run_deploy(args, mock)
-            .await
-            .expect("run_deploy");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let recorded_upserts = upsert_calls.lock().expect("lock");
         assert_eq!(recorded_upserts.len(), 1);
@@ -458,8 +446,7 @@ mod tests {
         let file_path = dir.path().join("somefile.txt");
         std::fs::write(&file_path, "not a dir").expect("write");
 
-        let (mock, _, _, _) =
-            MockDeployGateway::new(upsert_result(false, "unused"));
+        let (mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "unused"));
 
         let args = deploy_args(file_path, Some("test-app"));
 
@@ -473,8 +460,7 @@ mod tests {
     async fn deploy_missing_readme_returns_error() {
         let dir = tempfile::tempdir().expect("tempdir");
 
-        let (mock, _, _, _) =
-            MockDeployGateway::new(upsert_result(false, "unused"));
+        let (mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "unused"));
 
         let args = deploy_args(dir.path().to_path_buf(), Some("test-app"));
 
@@ -489,8 +475,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir(dir.path().join("README.md")).expect("create README.md dir");
 
-        let (mock, _, _, _) =
-            MockDeployGateway::new(upsert_result(false, "unused"));
+        let (mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "unused"));
 
         let args = deploy_args(dir.path().to_path_buf(), Some("test-app"));
 
@@ -522,9 +507,7 @@ mod tests {
             ..deploy_args(dir.path().to_path_buf(), Some("app"))
         };
 
-        run_deploy(args, mock)
-            .await
-            .expect("run_deploy");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         let set_calls = set_secret_calls.lock().expect("lock");
         let set_map: BTreeMap<&str, &str> = set_calls
@@ -546,8 +529,7 @@ mod tests {
         std::fs::write(dir.path().join("README.md"), "# Hello").expect("write readme");
         std::fs::write(dir.path().join(".gitignore"), ".statespace\n").expect("write gitignore");
 
-        let (first_mock, _, _, _) =
-            MockDeployGateway::new(upsert_result(false, "app"));
+        let (first_mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "app"));
         let first_args = deploy_args(dir.path().to_path_buf(), Some("app"));
         run_deploy(first_args, first_mock)
             .await
@@ -574,8 +556,7 @@ mod tests {
         let env_file = dir.path().join(".env");
         std::fs::write(&env_file, "A=1\n").expect("write env");
 
-        let (first_mock, _, _, _) =
-            MockDeployGateway::new(upsert_result(false, "app"));
+        let (first_mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "app"));
         let first_args = AppDeployArgs {
             env_file: Some(env_file.clone()),
             ..deploy_args(dir.path().to_path_buf(), Some("app"))
@@ -612,14 +593,11 @@ mod tests {
         std::fs::write(dir.path().join("README.md"), "# Hello").expect("write readme");
         std::fs::write(dir.path().join(".env"), "FROM_DOTENV=secret\n").expect("write dotenv");
 
-        let (mock, _, set_secret_calls, _) =
-            MockDeployGateway::new(upsert_result(false, "app"));
+        let (mock, _, set_secret_calls, _) = MockDeployGateway::new(upsert_result(false, "app"));
 
         let args = deploy_args(dir.path().to_path_buf(), Some("app"));
 
-        run_deploy(args, mock)
-            .await
-            .expect("run_deploy");
+        run_deploy(args, mock).await.expect("run_deploy");
 
         assert!(set_secret_calls.lock().expect("lock").is_empty());
     }

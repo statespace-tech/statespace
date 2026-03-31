@@ -76,7 +76,7 @@ impl BuiltinTool {
 
         let cmd = &command[0];
         Ok(Self::Exec {
-            command: cmd.to_string(),
+            command: cmd.clone(),
             args: command[1..].to_vec(),
         })
     }

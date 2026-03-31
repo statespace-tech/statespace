@@ -38,7 +38,7 @@ async fn run() -> Result<()> {
     let Cli { command } = Cli::parse();
 
     match command {
-        Commands::Init(args) => commands::init::run_init(args).await,
+        Commands::Init(args) => commands::init::run_init(&args),
 
         Commands::Run(args) => commands::run::run_server(args).await,
 
@@ -69,7 +69,10 @@ async fn run() -> Result<()> {
             commands::tokens::run(command, build_gateway(&cloud)?).await
         }
 
-        Commands::Guide => commands::guide::run_guide(),
+        Commands::Guide => {
+            commands::guide::run_guide();
+            Ok(())
+        }
 
         Commands::Update => commands::update::run_update().await,
 

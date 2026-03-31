@@ -16,14 +16,22 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
 }
 
 fn write_if_confirmed(path: &Path, content: &str, yes: bool) -> Result<bool> {
-    if path.exists() && !confirm(&format!("Overwrite existing {}?", path.file_name().unwrap_or_default().to_string_lossy()), yes)? {
+    if path.exists()
+        && !confirm(
+            &format!(
+                "Overwrite existing {}?",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            yes,
+        )?
+    {
         return Ok(false);
     }
     fs::write(path, content)?;
     Ok(true)
 }
 
-pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
+pub(crate) fn run_init(args: &InitArgs) -> Result<()> {
     let output = &args.path;
 
     fs::create_dir_all(output)?;
@@ -31,7 +39,7 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
     let (readme_content, dockerfile_content) = match args.template {
         Some(ref template) => {
             let t = statespace_templates::get(template)
-                .expect("clap validated the template name but it wasn't found");
+                .ok_or_else(|| Error::cli(format!("unknown template: {template}")))?;
             (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
         None => (String::new(), None),
@@ -66,7 +74,10 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
     }
 
     eprintln!("Initialized: {}", created.join(", "));
-    eprintln!("Read AGENTS.md, then run `statespace run {}`", output.display());
+    eprintln!(
+        "Read AGENTS.md, then run `statespace run {}`",
+        output.display()
+    );
 
     Ok(())
 }
@@ -86,10 +97,7 @@ mod tests {
             yes: true,
         };
 
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(run_init(args))
-            .unwrap();
+        run_init(&args).unwrap();
 
         assert!(dir.path().join("README.md").exists());
         assert!(dir.path().join("AGENTS.md").exists());
@@ -108,10 +116,7 @@ mod tests {
             yes: true,
         };
 
-        tokio::runtime::Runtime::new()
-            .unwrap()
-            .block_on(run_init(args))
-            .unwrap();
+        run_init(&args).unwrap();
 
         let content = fs::read_to_string(dir.path().join("README.md")).unwrap();
         assert!(content.is_empty());
