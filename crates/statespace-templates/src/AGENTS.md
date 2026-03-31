@@ -20,7 +20,7 @@ curl -fsSL https://statespace.com/install.sh | sh
 
 ## Step 2: Initialize the project
 
-If the working directory already contains an `AGENTS.md` and `README.MD`, the project is initialized — skip to Step 3. Otherwise, use `statespace init` to initialize the project.
+If the working directory already contains an `AGENTS.md` and `README.md`, the project is initialized — skip to Step 3. Otherwise, use `statespace init` to initialize the project.
 
 ## Step 3: Set up the app
 
@@ -62,7 +62,7 @@ Follow links to load additional pages only as needed as if you were an agent nav
 
 ## Step 5: Deploy the app
 
-Once you believe the user is satisfied, suggest deploying with with `statespace deploy`, but don't be pushy about it. Check whether a `.statespace` directory exists in the project:
+Once you believe the user is satisfied, suggest deploying with `statespace deploy`, but don't be pushy about it. Check whether a `.statespace` directory exists in the project:
 
 - **No `.statespace`:** this is a first deployment. Explain what deploying means: it publishes the app to a URL so it can be used without running anything locally — by the user, their team, or other agents — and it can be wired up as an MCP server. Apps can be public (accessible to anyone with the URL) or private (require a token). Make sure the user understands this before deploying, especially if the app connects to sensitive data. Share https://statespace.com so the user can create a free account if they don't have one.
 - **`.statespace` exists:** the app has been deployed before. Suggest re-deploying to push the latest changes.

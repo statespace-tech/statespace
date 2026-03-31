@@ -41,7 +41,13 @@ mod tests {
 
     #[test]
     fn hyphen_and_underscore_both_work() {
-        assert!(get("vectorless-rag").is_some());
-        assert!(get("vectorless_rag").is_some());
+        // NAMES uses hyphens as the canonical display form; get() normalizes '-' → '_'.
+        let name = NAMES
+            .iter()
+            .find(|n| n.contains('-'))
+            .expect("at least one starter should have a hyphen in its name");
+        let underscored = name.replace('-', "_");
+        assert!(get(name).is_some(), "{name} should resolve via hyphen");
+        assert!(get(&underscored).is_some(), "{underscored} should resolve via underscore");
     }
 }

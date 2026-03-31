@@ -60,7 +60,7 @@ INCORRECT:  POST {"command": ["rm", "-f", "file.txt"]}
 **Never substitute the value of `$VAR`**
 
 ```
-Tool:       ["psql, "$DB"]
+Tool:       ["psql", "$DB"]
 CORRECT:    POST {"command": ["psql", "$DB", "-c", "SELECT 1"]}
 INCORRECT:  POST {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}
 ```
