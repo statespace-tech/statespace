@@ -1,6 +1,5 @@
 # Statespace instructions
 
-
 Statespace lets you build self-documenting data apps that describe themselves to agents over HTTP. Apps expose content and tools that any agent can discover and use without prior knowledge.
 
 Before running any CLI command for the first time, run it with `--help` to see all available options and flags.
