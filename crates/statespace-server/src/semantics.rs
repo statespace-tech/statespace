@@ -1,11 +1,6 @@
 use std::path::Path;
 
 #[must_use]
-pub fn is_agents_request(path: &str) -> bool {
-    path == "AGENTS" || path == "AGENTS.md"
-}
-
-#[must_use]
 pub fn markdown_lookup_candidates(path: &str) -> Vec<String> {
     let normalized = path.trim_start_matches('/');
 
@@ -63,10 +58,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn agents_requests_are_explicit_only() {
-        assert!(is_agents_request("AGENTS"));
-        assert!(is_agents_request("AGENTS.md"));
-        assert!(!is_agents_request("agents"));
-    }
 }
