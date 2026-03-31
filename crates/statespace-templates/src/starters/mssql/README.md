@@ -1,6 +1,6 @@
 ---
 tools:
-  - [sqlcmd, -S, $MSSQL_SERVER, -Q, { regex: "^SELECT\\b.*" }, ;]
+  - [sqlcmd, -S, $MSSQL_SERVER, -Q, { regex: "^\\s*SELECT\\b[^;]*$" }, ;]
 ---
 
 # Instructions

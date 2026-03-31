@@ -158,6 +158,29 @@ mod tests {
     }
 
     #[test]
+    fn postgresql_template_creates_expected_files() {
+        let dir = TempDir::new().unwrap();
+        let args = InitArgs {
+            path: dir.path().to_path_buf(),
+            template: Some("postgresql".into()),
+            yes: true,
+        };
+
+        run_init(&args).unwrap();
+
+        assert!(dir.path().join("README.md").exists());
+        assert!(dir.path().join("AGENTS.md").exists());
+        assert!(dir.path().join("CLAUDE.md").exists());
+        assert!(dir.path().join("API.md").exists());
+        assert!(dir.path().join(".gitignore").exists());
+        assert!(!dir.path().join("Dockerfile").exists());
+
+        let readme = fs::read_to_string(dir.path().join("README.md")).unwrap();
+        assert!(readme.contains("psql"));
+        assert!(readme.contains("DATABASE_URL"));
+    }
+
+    #[test]
     fn gitignore_created_from_template() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".gitignore");

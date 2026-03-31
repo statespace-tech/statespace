@@ -20,6 +20,9 @@
 .roomodes
 .clinerules/
 
+# Coding agent config
+AGENTS.md
+CLAUDE.md
+
 # Statespace
 .statespace/
-site/

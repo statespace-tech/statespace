@@ -1,5 +1,5 @@
 use crate::config::Credentials;
-use crate::error::{ApiErrorCode, GatewayError, Result};
+use crate::error::{ApiErrorCode, Error, GatewayError, Result};
 use crate::gateway::applications::{Application, ApplicationFile, UpsertResult};
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 #[cfg(feature = "ssh")]
@@ -364,16 +364,19 @@ struct GitignoreMatcher {
 }
 
 impl GitignoreMatcher {
-    fn load(root: &Path) -> Self {
+    fn load(root: &Path) -> Result<Self> {
         let path = root.join(".gitignore");
         if !path.is_file() {
-            return Self { gitignore: None };
+            return Ok(Self { gitignore: None });
         }
         let mut builder = GitignoreBuilder::new(root);
         builder.add(path);
-        Self {
-            gitignore: builder.build().ok(),
-        }
+        let gitignore = builder
+            .build()
+            .map_err(|e| Error::cli(format!("Failed to parse .gitignore: {e}")))?;
+        Ok(Self {
+            gitignore: Some(gitignore),
+        })
     }
 
     fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
@@ -387,17 +390,11 @@ fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &GitignoreMatcher) 
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
-    // Always exclude these regardless of .gitignore contents.
-    if let Some(top) = relative.components().next() {
-        if matches!(top.as_os_str().to_str(), Some(".git" | ".statespace")) {
-            return true;
-        }
-    }
     matcher.is_ignored(relative, path.is_dir())
 }
 
 fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
-    let matcher = GitignoreMatcher::load(dir);
+    let matcher = GitignoreMatcher::load(dir)?;
     let mut results = Vec::new();
     for entry in walkdir::WalkDir::new(dir)
         .into_iter()

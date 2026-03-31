@@ -1,6 +1,6 @@
 ---
 tools:
-  - [clickhouse-client, --host, $CLICKHOUSE_HOST, --port, $CLICKHOUSE_PORT, --user, $CLICKHOUSE_USER, --password, $CLICKHOUSE_PASSWORD, --query, { regex: "^(SELECT|SHOW|DESCRIBE|EXPLAIN)\\b.*" }, ;]
+  - [clickhouse-client, --host, $CLICKHOUSE_HOST, --port, $CLICKHOUSE_PORT, --user, $CLICKHOUSE_USER, --password, $CLICKHOUSE_PASSWORD, --query, { regex: "^(SELECT|SHOW|DESCRIBE|EXPLAIN)\\b[^;]*$" }, ;]
 ---
 
 # Instructions

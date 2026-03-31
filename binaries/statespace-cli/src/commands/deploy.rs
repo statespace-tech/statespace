@@ -109,16 +109,16 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
 
     let deploy_env = resolve_env_overrides(&env_vars, env_file.as_deref(), "deploy")?;
 
-    if !dir.join("README.md").is_file() {
-        return Err(Error::cli(
-            "README.md not found. Create it before deploying your app.".to_string(),
-        ));
-    }
-
     let cached = load_state(&dir)?;
     let target = resolve_target(name, cached.as_ref());
 
     let files = GatewayClient::scan_deploy_files(&dir)?;
+
+    if !files.iter().any(|f| f.path == "README.md") {
+        return Err(Error::cli(
+            "README.md not found. Create it before deploying your app.".to_string(),
+        ));
+    }
 
     if files.is_empty() {
         eprintln!("No files found in {}", dir.display());
