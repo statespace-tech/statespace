@@ -1,7 +1,7 @@
 use crate::args::InitArgs;
 use crate::error::{Error, Result};
 use inquire::Confirm;
-use statespace_templates::{AGENTS_MD, FAVICON_SVG, GITIGNORE};
+use statespace_templates::{AGENTS_MD, API_MD, GITIGNORE};
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +23,6 @@ fn write_if_confirmed(path: &Path, content: &str, yes: bool) -> Result<bool> {
     Ok(true)
 }
 
-
 pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
     let output = &args.path;
 
@@ -31,7 +30,7 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
 
     let (readme_content, dockerfile_content) = match args.template {
         Some(ref template) => {
-            let t = statespace_templates::templates::get(template)
+            let t = statespace_templates::get(template)
                 .expect("clap validated the template name but it wasn't found");
             (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
@@ -48,18 +47,22 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
         created.push("AGENTS.md");
     }
 
-    if write_if_confirmed(&output.join("favicon.svg"), FAVICON_SVG, args.yes)? {
-        created.push("favicon.svg");
+    if write_if_confirmed(&output.join("CLAUDE.md"), AGENTS_MD, args.yes)? {
+        created.push("CLAUDE.md");
+    }
+
+    if write_if_confirmed(&output.join("API.md"), API_MD, args.yes)? {
+        created.push("API.md");
+    }
+
+    if write_if_confirmed(&output.join(".gitignore"), GITIGNORE, args.yes)? {
+        created.push(".gitignore");
     }
 
     if let Some(dockerfile) = dockerfile_content {
         if write_if_confirmed(&output.join("Dockerfile"), &dockerfile, args.yes)? {
             created.push("Dockerfile");
         }
-    }
-
-    if write_if_confirmed(&output.join(".gitignore"), GITIGNORE, args.yes)? {
-        created.push(".gitignore");
     }
 
     eprintln!("Initialized: {}", created.join(", "));
@@ -90,7 +93,8 @@ mod tests {
 
         assert!(dir.path().join("README.md").exists());
         assert!(dir.path().join("AGENTS.md").exists());
-        assert!(dir.path().join("favicon.svg").exists());
+        assert!(dir.path().join("CLAUDE.md").exists());
+        assert!(dir.path().join("API.md").exists());
         assert!(dir.path().join(".gitignore").exists());
         assert!(!dir.path().join("Dockerfile").exists());
     }
@@ -133,7 +137,6 @@ mod tests {
         let path = dir.path().join(".gitignore");
         fs::write(&path, "target/\n").unwrap();
 
-        // yes=false would prompt interactively; yes=true overwrites
         let changed = write_if_confirmed(&path, GITIGNORE, true).unwrap();
         assert!(changed);
         let content = fs::read_to_string(&path).unwrap();

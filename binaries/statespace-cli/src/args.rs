@@ -154,7 +154,7 @@ pub(crate) struct InitArgs {
     /// Start from a built-in template
     #[arg(
         long,
-        value_parser = clap::builder::PossibleValuesParser::new(statespace_templates::templates::NAMES)
+        value_parser = clap::builder::PossibleValuesParser::new(statespace_templates::NAMES)
     )]
     pub template: Option<String>,
 
