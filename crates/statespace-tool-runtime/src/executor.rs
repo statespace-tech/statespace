@@ -262,9 +262,8 @@ mod tests {
     #[tokio::test]
     async fn missing_binary_returns_clear_invalid_command_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let executor =
-            ToolExecutor::new(dir.path().to_path_buf(), ExecutionLimits::default())
-                .with_sandbox_env(SandboxEnv::default());
+        let executor = ToolExecutor::new(dir.path().to_path_buf(), ExecutionLimits::default())
+            .with_sandbox_env(SandboxEnv::default());
         let tool = BuiltinTool::Exec {
             command: "definitely-not-a-real-binary".to_string(),
             args: vec![],

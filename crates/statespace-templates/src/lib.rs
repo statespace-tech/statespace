@@ -48,6 +48,9 @@ mod tests {
             .expect("at least one starter should have a hyphen in its name");
         let underscored = name.replace('-', "_");
         assert!(get(name).is_some(), "{name} should resolve via hyphen");
-        assert!(get(&underscored).is_some(), "{underscored} should resolve via underscore");
+        assert!(
+            get(&underscored).is_some(),
+            "{underscored} should resolve via underscore"
+        );
     }
 }
