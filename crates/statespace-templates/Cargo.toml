@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Embedded assets (AGENTS.md, favicon) and init templates for Statespace"
+description = "Embedded templates for Statespace project initialization"
 
 [lints]
 workspace = true

@@ -25,13 +25,13 @@ fn escape_rust_str(s: &str) -> String {
 
 fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let app_dir = Path::new(&manifest_dir).join("src").join("init");
+    let app_dir = Path::new(&manifest_dir).join("src").join("starters");
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let dest = Path::new(&out_dir).join("templates_generated.rs");
     let mut f = fs::File::create(&dest).unwrap();
 
     let mut entries: Vec<_> = fs::read_dir(&app_dir)
-        .expect("crates/statespace-templates/src/init/ directory not found")
+        .expect("starters/ directory not found")
         .filter_map(Result::ok)
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .collect();

@@ -1966,7 +1966,6 @@ dependencies = [
  "pulldown-cmark",
  "serde",
  "serde_json",
- "statespace-templates",
  "statespace-tool-runtime",
  "tempfile",
  "thiserror 2.0.18",
