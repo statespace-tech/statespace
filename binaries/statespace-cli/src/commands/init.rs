@@ -173,7 +173,7 @@ mod tests {
         assert!(dir.path().join("CLAUDE.md").exists());
         assert!(dir.path().join("API.md").exists());
         assert!(dir.path().join(".gitignore").exists());
-        assert!(!dir.path().join("Dockerfile").exists());
+        assert!(dir.path().join("Dockerfile").exists());
 
         let readme = fs::read_to_string(dir.path().join("README.md")).unwrap();
         assert!(readme.contains("psql"));
