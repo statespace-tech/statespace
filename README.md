@@ -41,7 +41,7 @@ curl -fsSL https://statespace.com/install.sh | sh
 
 Then, pass the Statespace guide to your coding agent:
 
-```
+```bash
 statespace guide | claude
 ```
 
