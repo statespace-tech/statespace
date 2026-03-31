@@ -1,11 +1,9 @@
 use crate::args::InitArgs;
 use crate::error::{Error, Result};
 use inquire::Confirm;
-use statespace_templates::{AGENTS_MD, FAVICON_SVG};
+use statespace_templates::{AGENTS_MD, FAVICON_SVG, GITIGNORE};
 use std::fs;
 use std::path::Path;
-
-const GITIGNORE_ENTRIES: &[&str] = &[".env", ".statespace", ".git"];
 
 fn confirm(prompt: &str, yes: bool) -> Result<bool> {
     if yes {
@@ -25,43 +23,6 @@ fn write_if_confirmed(path: &Path, content: &str, yes: bool) -> Result<bool> {
     Ok(true)
 }
 
-fn handle_gitignore(path: &Path, yes: bool) -> Result<bool> {
-    if !path.exists() {
-        let content = GITIGNORE_ENTRIES.join("\n") + "\n";
-        fs::write(path, content)?;
-        return Ok(true);
-    }
-
-    let existing = fs::read_to_string(path)?;
-    let missing: Vec<&str> = GITIGNORE_ENTRIES
-        .iter()
-        .filter(|&&entry| !existing.lines().any(|l| l.trim() == entry))
-        .copied()
-        .collect();
-
-    if missing.is_empty() {
-        return Ok(false);
-    }
-
-    let prompt = format!(
-        "Append {} to existing .gitignore?",
-        missing.join(", ")
-    );
-    if !confirm(&prompt, yes)? {
-        return Ok(false);
-    }
-
-    let mut appended = existing;
-    if !appended.ends_with('\n') {
-        appended.push('\n');
-    }
-    for entry in &missing {
-        appended.push_str(entry);
-        appended.push('\n');
-    }
-    fs::write(path, appended)?;
-    Ok(true)
-}
 
 pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
     let output = &args.path;
@@ -97,7 +58,7 @@ pub(crate) async fn run_init(args: InitArgs) -> Result<()> {
         }
     }
 
-    if handle_gitignore(&output.join(".gitignore"), args.yes)? {
+    if write_if_confirmed(&output.join(".gitignore"), GITIGNORE, args.yes)? {
         created.push(".gitignore");
     }
 
@@ -153,39 +114,29 @@ mod tests {
     }
 
     #[test]
-    fn gitignore_created_with_entries() {
+    fn gitignore_created_from_template() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".gitignore");
 
-        handle_gitignore(&path, true).unwrap();
+        write_if_confirmed(&path, GITIGNORE, true).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains(".env"));
         assert!(content.contains(".statespace"));
-        assert!(content.contains(".git"));
+        assert!(content.contains(".claude/"));
+        assert!(content.contains(".cursor/"));
     }
 
     #[test]
-    fn gitignore_appends_missing_entries() {
+    fn gitignore_prompts_on_existing_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".gitignore");
-        fs::write(&path, "target/\n.env\n").unwrap();
+        fs::write(&path, "target/\n").unwrap();
 
-        handle_gitignore(&path, true).unwrap();
-
+        // yes=false would prompt interactively; yes=true overwrites
+        let changed = write_if_confirmed(&path, GITIGNORE, true).unwrap();
+        assert!(changed);
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains(".statespace"));
-        assert!(content.contains(".git"));
-        assert_eq!(content.matches(".env").count(), 1);
-    }
-
-    #[test]
-    fn gitignore_skips_when_all_present() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join(".gitignore");
-        fs::write(&path, ".env\n.statespace\n.git\n").unwrap();
-
-        let changed = handle_gitignore(&path, true).unwrap();
-        assert!(!changed);
     }
 }

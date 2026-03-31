@@ -37,8 +37,3 @@ AGENTS.local.md
 
 # Statespace
 .statespace/
-data/
-output/
-site/
-examples/**/AGENTS.md
-examples/**/favicon.svg
