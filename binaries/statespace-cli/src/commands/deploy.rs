@@ -134,21 +134,21 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
 
     if let Some(ref prev) = cached {
         if prev.name == target.name {
+            let filtered_checksums: Vec<(&str, &str)> = checksums
+                .iter()
+                .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
             let prev_map: HashMap<&str, &str> = prev
                 .checksums
                 .iter()
                 .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
-            let files_changed = checksums
-                .iter()
-                .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
-                .count()
-                != prev_map.len()
-                || checksums
+            let files_changed = filtered_checksums.len() != prev_map.len()
+                || filtered_checksums
                     .iter()
-                    .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
-                    .any(|(p, c)| prev_map.get(p.as_str()) != Some(&c.as_str()));
+                    .any(|(p, c)| prev_map.get(p) != Some(c));
             let env_changed = prev
                 .checksums
                 .get(ENV_STATE_CHECKSUM_KEY)

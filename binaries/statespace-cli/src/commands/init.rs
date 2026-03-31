@@ -2,6 +2,7 @@ use crate::args::InitArgs;
 use crate::error::{Error, Result};
 use inquire::Confirm;
 use statespace_templates::{AGENTS_MD, API_MD, GITIGNORE};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -13,6 +14,40 @@ fn confirm(prompt: &str, yes: bool) -> Result<bool> {
         .with_default(false)
         .prompt()
         .map_err(|e| Error::cli(format!("Prompt failed: {e}")))
+}
+
+fn merge_gitignore(path: &Path, template: &str) -> Result<bool> {
+    if !path.exists() {
+        fs::write(path, template)?;
+        return Ok(true);
+    }
+    let existing = fs::read_to_string(path)?;
+    let existing_entries: HashSet<&str> = existing
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let missing: Vec<&str> = template
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#') && !existing_entries.contains(t)
+        })
+        .collect();
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let mut content = existing;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push('\n');
+    for line in missing {
+        content.push_str(line);
+        content.push('\n');
+    }
+    fs::write(path, content)?;
+    Ok(true)
 }
 
 fn write_if_confirmed(path: &Path, content: &str, yes: bool) -> Result<bool> {
@@ -63,7 +98,7 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<()> {
         created.push("API.md");
     }
 
-    if write_if_confirmed(&output.join(".gitignore"), GITIGNORE, args.yes)? {
+    if merge_gitignore(&output.join(".gitignore"), GITIGNORE)? {
         created.push(".gitignore");
     }
 
@@ -127,7 +162,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".gitignore");
 
-        write_if_confirmed(&path, GITIGNORE, true).unwrap();
+        merge_gitignore(&path, GITIGNORE).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains(".env"));
@@ -137,14 +172,25 @@ mod tests {
     }
 
     #[test]
-    fn gitignore_prompts_on_existing_file() {
+    fn gitignore_merges_missing_entries_into_existing_file() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join(".gitignore");
         fs::write(&path, "target/\n").unwrap();
 
-        let changed = write_if_confirmed(&path, GITIGNORE, true).unwrap();
+        let changed = merge_gitignore(&path, GITIGNORE).unwrap();
         assert!(changed);
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains(".statespace"));
+        assert!(content.contains("target/"), "existing entry preserved");
+        assert!(content.contains(".statespace"), "missing entry appended");
+    }
+
+    #[test]
+    fn gitignore_no_change_when_all_entries_present() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".gitignore");
+        merge_gitignore(&path, GITIGNORE).unwrap();
+
+        let changed = merge_gitignore(&path, GITIGNORE).unwrap();
+        assert!(!changed, "nothing to add on second run");
     }
 }

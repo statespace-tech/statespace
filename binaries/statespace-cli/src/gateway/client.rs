@@ -387,6 +387,12 @@ fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &GitignoreMatcher) 
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
+    // Always exclude these regardless of .gitignore contents.
+    if let Some(top) = relative.components().next() {
+        if matches!(top.as_os_str().to_str(), Some(".git" | ".statespace")) {
+            return true;
+        }
+    }
     matcher.is_ignored(relative, path.is_dir())
 }
 
