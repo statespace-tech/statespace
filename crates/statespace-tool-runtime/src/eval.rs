@@ -182,7 +182,10 @@ pub async fn execute_eval_block_with_sandbox(
     let Ok(result) = tokio::time::timeout(limits.timeout, fut).await else {
         warn!("Eval block timed out after {:?}", limits.timeout);
         return EvalResult {
-            output: format!("[eval error: timed out after {}s]", limits.timeout.as_secs()),
+            output: format!(
+                "[eval error: timed out after {}s]",
+                limits.timeout.as_secs()
+            ),
             success: false,
         };
     };
@@ -311,8 +314,16 @@ pub async fn process_eval_blocks_with_sandbox(
                     },
                 );
             };
-            let result =
-                execute_eval_block_with_sandbox(&block, &wd, None, None, &env, &sandbox_env, &limits).await;
+            let result = execute_eval_block_with_sandbox(
+                &block,
+                &wd,
+                None,
+                None,
+                &env,
+                &sandbox_env,
+                &limits,
+            )
+            .await;
             (i, block.range, result)
         });
     }

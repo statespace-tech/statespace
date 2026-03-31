@@ -1,8 +1,6 @@
 use crate::config::Credentials;
 use crate::error::{ApiErrorCode, GatewayError, Result};
-use crate::gateway::applications::{
-    Application, ApplicationFile, UpsertResult,
-};
+use crate::gateway::applications::{Application, ApplicationFile, UpsertResult};
 use crate::gateway::auth::{DeviceCodeResponse, DeviceTokenResponse};
 #[cfg(feature = "ssh")]
 use crate::gateway::ssh::SshKey;
@@ -379,9 +377,9 @@ impl GitignoreMatcher {
     }
 
     fn is_ignored(&self, path: &Path, is_dir: bool) -> bool {
-        self.gitignore.as_ref().is_some_and(|g| {
-            g.matched_path_or_any_parents(path, is_dir).is_ignore()
-        })
+        self.gitignore
+            .as_ref()
+            .is_some_and(|g| g.matched_path_or_any_parents(path, is_dir).is_ignore())
     }
 }
 
@@ -590,7 +588,6 @@ mod tests {
         assert_eq!(decoded, vec![0, 1, 2, 3]);
     }
 
-
     #[test]
     fn scan_deploy_files_excludes_via_gitignore() {
         let dir = TempDir::new().expect("tempdir");
@@ -601,7 +598,11 @@ mod tests {
         write_file(&dir, "nested/.env.test", b"API_KEY=test\n");
         write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
         write_file(&dir, ".git/config", b"[core]");
-        write_file(&dir, ".gitignore", b".env\n.env.*\nnested/.env.*\n.statespace\n.git\n");
+        write_file(
+            &dir,
+            ".gitignore",
+            b".env\n.env.*\nnested/.env.*\n.statespace\n.git\n",
+        );
 
         let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
@@ -624,6 +625,9 @@ mod tests {
         let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
         let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
 
-        assert_eq!(paths, vec![".gitignore", "README.md", "important.me", "keep.txt"]);
+        assert_eq!(
+            paths,
+            vec![".gitignore", "README.md", "important.me", "keep.txt"]
+        );
     }
 }

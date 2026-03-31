@@ -1,7 +1,6 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
 #[command(about = "Run, deploy, and manage Statespace apps.")]
@@ -144,7 +143,6 @@ pub(crate) struct AppSshArgs {
     pub port: u16,
 }
 
-
 #[derive(Debug, Parser)]
 pub(crate) struct InitArgs {
     /// Directory to initialize
@@ -216,7 +214,6 @@ pub(crate) struct RunArgs {
     /// Maximum combined stdout+stderr size per tool call in megabytes
     #[arg(long, default_value = "1", value_name = "MB")]
     pub max_output: usize,
-
 }
 
 #[derive(Debug, Parser)]

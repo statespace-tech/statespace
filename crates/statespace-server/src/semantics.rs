@@ -57,5 +57,4 @@ mod tests {
             vec!["docs/intro/README.md"]
         );
     }
-
 }

@@ -37,8 +37,16 @@ fn main() {
         .collect();
     entries.sort_by_key(std::fs::DirEntry::file_name);
 
-    writeln!(f, "/// Returns the template for `name`, or `None` if unrecognized.").unwrap();
-    writeln!(f, "/// Matching is case-insensitive; hyphens and underscores are equivalent.").unwrap();
+    writeln!(
+        f,
+        "/// Returns the template for `name`, or `None` if unrecognized."
+    )
+    .unwrap();
+    writeln!(
+        f,
+        "/// Matching is case-insensitive; hyphens and underscores are equivalent."
+    )
+    .unwrap();
     writeln!(f, "pub fn get(name: &str) -> Option<Template> {{").unwrap();
     writeln!(f, "    let key = name.to_lowercase().replace('-', \"_\");").unwrap();
     writeln!(f, "    match key.as_str() {{").unwrap();

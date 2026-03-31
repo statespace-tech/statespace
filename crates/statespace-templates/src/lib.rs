@@ -27,7 +27,10 @@ mod tests {
     #[test]
     fn all_named_starters_resolve() {
         for name in NAMES {
-            assert!(get(name).is_some(), "Starter '{name}' listed in NAMES but not found");
+            assert!(
+                get(name).is_some(),
+                "Starter '{name}' listed in NAMES but not found"
+            );
         }
     }
 
