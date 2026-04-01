@@ -393,3 +393,16 @@ pub(crate) struct TokenRevokeArgs {
     #[arg(long, short)]
     pub yes: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn hidden_experimental_template_is_still_accepted() {
+        let cli = Cli::try_parse_from(["statespace", "init", "--template", "clickhouse"]);
+
+        assert!(cli.is_ok());
+    }
+}

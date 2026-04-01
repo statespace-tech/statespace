@@ -25,7 +25,6 @@ pub const EXPERIMENTAL_TEMPLATE_NAMES: &[&str] = &[
     "clickhouse",
     "duckdb",
     "elasticsearch",
-    "mssql",
     "qdrant",
     "redis",
     "snowflake",
