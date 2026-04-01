@@ -1,7 +1,0 @@
-2026-03-10T07:55:00Z INFO  deployment=d-4821 branch=main commit=a3f9c2e status=started
-2026-03-10T07:55:12Z INFO  deployment=d-4821 step=build status=completed duration=12s
-2026-03-10T07:55:18Z INFO  deployment=d-4821 step=test status=completed duration=6s tests_passed=148
-2026-03-10T07:55:20Z INFO  deployment=d-4821 step=push_image tag=v2.4.1 registry=ghcr.io
-2026-03-10T07:55:35Z INFO  deployment=d-4821 step=rolling_update replicas=3 status=in_progress
-2026-03-10T07:55:50Z INFO  deployment=d-4821 step=rolling_update replicas=3 status=completed healthy=3
-2026-03-10T07:55:51Z INFO  deployment=d-4821 status=completed total_duration=51s

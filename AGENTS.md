@@ -30,7 +30,6 @@ export LIBRARY_PATH="$(xcrun --show-sdk-path)/usr/lib${LIBRARY_PATH:+:$LIBRARY_P
 ```
 statespace/
 ├── Cargo.toml                      # Workspace manifest
-├── shell.nix                       # Nix development environment
 ├── binaries/
 │   └── statespace-cli/             # CLI binary
 │       └── src/
@@ -52,14 +51,21 @@ statespace/
 │   │       ├── spec.rs
 │   │       ├── tools.rs
 │   │       └── validation.rs
-│   └── statespace-server/          # HTTP server library
+│   ├── statespace-server/          # HTTP server library
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── content.rs
+│   │       ├── error.rs
+│   │       ├── semantics.rs
+│   │       └── server.rs
+│   └── statespace-templates/       # Embedded init templates and starters
+│       ├── build.rs
 │       └── src/
 │           ├── lib.rs
-│           ├── content.rs
-│           ├── error.rs
-│           ├── init.rs
-│           ├── server.rs
-│           └── templates.rs
+│           ├── AGENTS.md
+│           ├── API.md
+│           ├── .gitignore
+│           └── starters/           # Per-database starter projects
 └── docs/
     └── design/                     # RFDs
 ```
@@ -76,8 +82,8 @@ This is a **stateless CLI** — the gateway's actor model, sagas, and stateful l
 - **Immutable data with methods** — domain structs are values with pure business logic methods.
 
 **Module roles:**
-- **Pure modules** (no I/O): `frontmatter`, `spec`, `security`, `protocol`, `validation`, `templates`
-- **Effectful edge**: `executor`, `content`, `server`, `init`, `gateway/`
+- **Pure modules** (no I/O): `frontmatter`, `spec`, `security`, `protocol`, `validation`
+- **Effectful edge**: `executor`, `content`, `server`, `gateway/`
 - **Commands**: thin orchestration — parse args, call gateway, format output
 
 ### Code Organization
@@ -94,20 +100,19 @@ This is a **stateless CLI** — the gateway's actor model, sagas, and stateful l
 - ❌ `#![allow(dead_code)]` to hide unused code — delete it, or annotate individual items with a justification
 - ❌ Inline validation/parsing in command handlers — extract to pure functions that can be unit tested
 - ❌ Hidden I/O in "pure" modules — if it touches the network or filesystem, it belongs at the edge
-- ❌ Edit Cargo.toml use `cargo add`
+- ❌ Edit Cargo.toml directly — use `cargo add`
 - ❌ Skip `cargo fmt`
 - ❌ Merge without running clippy
 - ❌ Comment self-evident operations (`// Initialize`, `// Return result`), getters/setters, constructors, or standard Rust idioms
 - ❌ Add comments that restate what code does
-- ❌ Make things optional that don't need to be - the compiler will enforce
-- ❌ Add error context that doesn't add anything useful information (e.g., `.context("Failed to X")` when error already says it failed)
 
 ### Dependency Graph
 
 ```
 statespace-cli ──► statespace-server ──► statespace-tool-runtime
        │                                          ▲
-       └──────────────────────────────────────────┘
+       ├──────────────────────────────────────────┘
+       └──► statespace-templates
 ```
 
 ## Rust Code Guidelines
@@ -129,8 +134,6 @@ statespace-cli ──► statespace-server ──► statespace-tool-runtime
 - Clean up existing logs, don't add more unless for errors or security events
 
 - Avoid overly defensive code - trust Rust's type system
-
-- Clean up existing logs, don't add more unless for errors or security events
 
 ## Entry Points
 - CLI: binaries/statespace-cli/src/main.rs

@@ -11,7 +11,7 @@
 
 <br>
 
-*A simpler way to build agent-native APIs.*
+*Self-documenting AI applications*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,166 +29,87 @@
 
 ---
 
-Statespace is a Markdown framework for building REST APIs that agents can directly interact with. Build RAG, text-to-SQL, knowledge bases, and more — in pure Markdown. Once you’ve created an app, you can deploy, manage, and share it from our [cloud platform](https://statespace.com/).
+AI doesn't know your data. Statespace is a framework for building self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
 
+## Quickstart
 
-## Installation
-
-Install the CLI:
+Install the CLI: 
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | bash
+curl -fsSL https://statespace.com/install.sh | sh
+```
+
+Then, pass the Statespace guide to your coding agent:
+
+```bash
+statespace guide | claude
 ```
 
 ## Example
 
 ### 1. Create it
 
-Create a file `README.md` with:
-
-````yaml
----
-tools:
-    - [date]
----
-
-```component
-echo "Hello, world!"
-```
-
-This is an example application.
-
-# Instructions
-- Check the current timestamp with `date`
-````
-
-### 2. Run it
+Initialize a new project in the current directory:
 
 ```bash
-statespace serve .
+statespace init --template postgresql
 ```
 
-### 3. Ask it
-
-Pass the URL to your agents:
-
-```bash
-claude "What can I do with the API at http://127.0.0.1:8000?"
-```
-
-### 4. Update it
-
-Add data files, scripts, and more Markdown pages to your app:
-
-```text
-demo/
-├── README.md           # from above
-├── script.py
-├── data.db
-├── data/
-│   ├── log1.txt
-│   ├── log2.txt
-│   └── ...
-└── knowledge/
-    ├── kubernetes.md   # declares K8s tools
-    └── networking.md   # declares networking tools
-```
-
-Then update `README.md` with more tools and instructions:
-
-````yaml
----
-tools:
-  - [date]
-  - [grep, -r]
-  - [python3, script.py, { }]
-  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
----
-
-```component
-echo "Hello, world!"
-```
-
-# Instructions
-- Check the current timestamp with `date`
-- Search through files with `grep`
-- Analyze and summarize logs with `script.py`
-- Run read-only queries against `data.db`
-- Browse `./knowledge` for infrastructure context
-````
-
-### 5. Deploy it
-
-Optionally, create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
-
-```bash
-statespace deploy . --public
-```
-
-### More examples
-
-See the [`examples/`](examples/) directory for ready-to-run apps:
-
-- **[rag](examples/rag)** — Search and analyze log files with `grep`
-- **[knowledge_base](examples/knowledge_base)** — Navigate a multi-page documentation tree
-- **[text_to_sql](examples/text_to_sql)** — Query a SQLite database with natural language
-- **[workflow](examples/workflow)** — Chain API calls to track the ISS and its trajectory
-- **[agent_skill](examples/agent_skill)** — An agent skill for using the Statespace CLI
-- **[toolkit](examples/toolkit)** — Python scripts for querying Reddit
-
-## Concepts
-
-<details open>
-<summary><b>Tools</b> — Give agents controlled access to CLI commands over HTTP.</summary>
+Templates define just enough tools and instructions for your agent to start exploring your data:
 
 ```yaml
 ---
 tools:
-  - [date]
-  - [grep, -r]
-  - [python3, script.py, { }]
-  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
+  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }]
 ---
-```
 
-</details>
-
-<details>
-<summary><b>Components</b> — Render live data inside pages with <code>component</code> code blocks.</summary>
-
-````markdown
-```component
-echo "Hello, world!"
-```
-````
-
-</details>
-
-<details>
-<summary><b>Instructions</b> — Guide agents through your data, workflows, and pages.</summary>
-
-```markdown
 # Instructions
-- Check the current timestamp with `date`
-- Search through files with `grep`
-- Analyze and summarize logs with `script.py`
-- Run read-only queries against `data.db`
-- Browse `./knowledge` for infrastructure context
+- Explore the schema with `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
+- Inspect columns with `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '<table>'`
+- See [PostgreSQL documentation](https://www.postgresql.org/docs/) for reference
 ```
 
-</details>
+### 2. Build it
 
-## Features
+Iterate with your coding agent:
 
-✅ **Simple** — It's just Markdown. Easy to learn, easy to use, easy to maintain.
+```bash
+claude "Document my database's schema and add summarize script"
+```
 
-⚡ **Lightweight** — Install a single, lightning-fast Rust binary. No dependencies.
+Your agent will run your app locally and iterate on it until it looks something like this:
 
-🌐 **Universal** — Works directly with any agent that can make HTTP requests.
+```text
+my-app/
+├── README.md
+├── summarize.py
+└── schema/
+    ├── users.md
+    └── products.md
+```
 
-📦 **Portable** — Run or deploy your apps with a single CLI command.
+### 3. Ship it
 
-🔒 **Secure** — Restrict access to your private apps with token-based authentication.
+Optionally, deploy your app to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+
+```bash
+statespace deploy my-app/
+```
+
+Then give other agents the API URL:
+
+```bash
+claude "Use the API at https://my-app.statespace.app to find out the number of users"
+```
+
+Or wire it up as an MCP server:
+
+```json
+"statespace": {
+  "command": "uvx",
+  "args": ["statespace-mcp", "https://my-app.statespace.app"]
+}
+```
 
 ## Community & Contributing
 

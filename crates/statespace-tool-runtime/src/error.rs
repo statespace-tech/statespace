@@ -25,11 +25,11 @@ pub enum Error {
     #[error("output too large: {size} bytes (limit: {limit})")]
     OutputTooLarge { size: usize, limit: usize },
 
-    #[error("path traversal attempt: tried to access {attempted} outside boundary {boundary}")]
-    PathTraversal { attempted: String, boundary: String },
-
     #[error("file not found: {0}")]
     NotFound(String),
+
+    #[error("path traversal attempt: {attempted} escapes {boundary}")]
+    PathTraversal { attempted: String, boundary: String },
 
     #[error("security violation: {0}")]
     Security(String),
@@ -60,10 +60,10 @@ impl Error {
             Self::OutputTooLarge { size, limit } => {
                 format!("Output too large: {size} bytes (limit: {limit} bytes)")
             }
-            Self::PathTraversal { attempted, .. } => {
-                format!("Access denied: cannot access '{attempted}'")
-            }
             Self::NotFound(path) => format!("File not found: {path}"),
+            Self::PathTraversal { attempted, .. } => {
+                format!("Path traversal attempt blocked: {attempted}")
+            }
             Self::Security(msg) => format!("Security violation: {msg}"),
             Self::Network(msg) => format!("Network error: {msg}"),
             Self::Io(e) => format!("IO error: {e}"),

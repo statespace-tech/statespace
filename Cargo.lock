@@ -650,12 +650,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glob"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
-
-[[package]]
 name = "globset"
 version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1948,6 +1942,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "statespace-server",
+ "statespace-templates",
  "statespace-tool-runtime",
  "tar",
  "tempfile",
@@ -1971,7 +1966,6 @@ dependencies = [
  "pulldown-cmark",
  "serde",
  "serde_json",
- "statespace-templates",
  "statespace-tool-runtime",
  "tempfile",
  "thiserror 2.0.18",
@@ -1989,8 +1983,6 @@ name = "statespace-tool-runtime"
 version = "0.1.7"
 dependencies = [
  "async-trait",
- "chrono",
- "glob",
  "regex",
  "reqwest",
  "serde",

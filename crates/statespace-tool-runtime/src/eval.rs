@@ -1,17 +1,15 @@
 //! Component block processing for dynamic markdown content.
 
 use crate::env_validation::is_reserved_env_key;
+use crate::executor::ExecutionLimits;
 use crate::sandbox::SandboxEnv;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::path::Path;
-use std::time::Duration;
 use tokio::process::Command;
 use tracing::warn;
 
-pub const EVAL_BLOCK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const EVAL_MAX_BLOCKS_PER_DOCUMENT: usize = 20;
-pub const EVAL_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const EVAL_MAX_BLOCKS_PER_DOCUMENT: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvalBlock {
@@ -140,6 +138,7 @@ pub async fn execute_eval_block(
         workspace_dir,
         user_env,
         &SandboxEnv::default(),
+        &ExecutionLimits::default(),
     )
     .await
 }
@@ -152,6 +151,7 @@ pub async fn execute_eval_block_with_sandbox(
     workspace_dir: Option<&Path>,
     user_env: &HashMap<String, String>,
     sandbox_env: &SandboxEnv,
+    limits: &ExecutionLimits,
 ) -> EvalResult {
     let mut command = Command::new("sh");
     command
@@ -179,10 +179,13 @@ pub async fn execute_eval_block_with_sandbox(
 
     let fut = command.output();
 
-    let Ok(result) = tokio::time::timeout(EVAL_BLOCK_TIMEOUT, fut).await else {
-        warn!("Eval block timed out after {:?}", EVAL_BLOCK_TIMEOUT);
+    let Ok(result) = tokio::time::timeout(limits.timeout, fut).await else {
+        warn!("Eval block timed out after {:?}", limits.timeout);
         return EvalResult {
-            output: "[eval error: timed out after 5s]".to_string(),
+            output: format!(
+                "[eval error: timed out after {}s]",
+                limits.timeout.as_secs()
+            ),
             success: false,
         };
     };
@@ -194,8 +197,8 @@ pub async fn execute_eval_block_with_sandbox(
 
             if output.status.success() {
                 let mut out = stdout.trim_end().to_string();
-                if out.len() > EVAL_MAX_OUTPUT_BYTES {
-                    let mut limit = EVAL_MAX_OUTPUT_BYTES;
+                if out.len() > limits.max_output_bytes {
+                    let mut limit = limits.max_output_bytes;
                     while !out.is_char_boundary(limit) {
                         limit -= 1;
                     }
@@ -249,7 +252,14 @@ pub async fn process_eval_blocks(
     working_dir: &Path,
     user_env: &HashMap<String, String>,
 ) -> String {
-    process_eval_blocks_with_sandbox(content, working_dir, user_env, &SandboxEnv::default()).await
+    process_eval_blocks_with_sandbox(
+        content,
+        working_dir,
+        user_env,
+        &SandboxEnv::default(),
+        &ExecutionLimits::default(),
+    )
+    .await
 }
 
 #[allow(clippy::implicit_hasher)]
@@ -258,6 +268,7 @@ pub async fn process_eval_blocks_with_sandbox(
     working_dir: &Path,
     user_env: &HashMap<String, String>,
     sandbox_env: &SandboxEnv,
+    limits: &ExecutionLimits,
 ) -> String {
     let mut blocks = parse_eval_blocks(content);
 
@@ -282,6 +293,7 @@ pub async fn process_eval_blocks_with_sandbox(
 
     let user_env = std::sync::Arc::new(user_env.clone());
     let sandbox_env = std::sync::Arc::new(sandbox_env.clone());
+    let limits = std::sync::Arc::new(limits.clone());
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
     let mut tasks = tokio::task::JoinSet::new();
 
@@ -290,6 +302,7 @@ pub async fn process_eval_blocks_with_sandbox(
         let wd = working_dir.to_path_buf();
         let env = user_env.clone();
         let sandbox_env = sandbox_env.clone();
+        let limits = limits.clone();
         tasks.spawn(async move {
             let Ok(_permit) = sem.acquire().await else {
                 return (
@@ -301,8 +314,16 @@ pub async fn process_eval_blocks_with_sandbox(
                     },
                 );
             };
-            let result =
-                execute_eval_block_with_sandbox(&block, &wd, None, None, &env, &sandbox_env).await;
+            let result = execute_eval_block_with_sandbox(
+                &block,
+                &wd,
+                None,
+                None,
+                &env,
+                &sandbox_env,
+                &limits,
+            )
+            .await;
             (i, block.range, result)
         });
     }

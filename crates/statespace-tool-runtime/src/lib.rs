@@ -25,7 +25,7 @@ pub mod validation;
 
 pub use env_validation::{EnvValidationError, validate_env_map};
 pub use error::{Error, Result};
-pub use executor::{ExecutionLimits, FileInfo, ToolExecutor, ToolOutput};
+pub use executor::{ExecutionLimits, ToolExecutor, ToolOutput};
 pub use frontmatter::{Frontmatter, parse_frontmatter};
 pub use protocol::{ActionRequest, ActionResponse, ErrorResponse, SuccessResponse};
 pub use sandbox::SandboxEnv;

@@ -11,13 +11,6 @@ pub(crate) struct ApplicationFile {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct DeployResult {
-    pub id: String,
-    pub auth_token: Option<String>,
-    pub url: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
 pub(crate) struct UpsertResult {
     pub created: bool,
@@ -25,13 +18,6 @@ pub(crate) struct UpsertResult {
     pub name: String,
     pub url: Option<String>,
     pub auth_token: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, clap::ValueEnum, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Visibility {
-    Public,
-    Private,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

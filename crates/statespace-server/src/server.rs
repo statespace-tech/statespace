@@ -2,7 +2,6 @@
 
 use crate::content::{ContentResolver, LocalContentResolver};
 use crate::error::ErrorExt;
-use crate::templates::{FAVICON_SVG, OPENAPI_JSON};
 use axum::{
     Json, Router,
     extract::{Path, Query, State, rejection::JsonRejection},
@@ -165,7 +164,6 @@ pub fn build_router(config: &ServerConfig) -> crate::error::Result<Router> {
 
     let router = Router::new()
         .route("/", get(index_handler).post(action_handler_root))
-        .route("/openapi.json", get(openapi_handler))
         .route("/favicon.svg", get(favicon_handler))
         .route("/favicon.ico", get(favicon_handler))
         .route("/{*path}", get(file_handler).post(action_handler))
@@ -177,30 +175,19 @@ async fn index_handler(
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
 ) -> Response {
-    serve_page("AGENTS.md", &query_env, &state).await
+    serve_page("API.md", &query_env, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {
-    let content = match fs::read_to_string(state.content_root.join("favicon.svg")).await {
-        Ok(custom) => custom,
-        Err(_) => FAVICON_SVG.to_string(),
-    };
-
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/svg+xml")],
-        content,
-    )
-        .into_response()
-}
-
-async fn openapi_handler() -> Response {
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "application/json")],
-        OPENAPI_JSON,
-    )
-        .into_response()
+    match fs::read_to_string(state.content_root.join("favicon.svg")).await {
+        Ok(content) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/svg+xml")],
+            content,
+        )
+            .into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn file_handler(
@@ -237,6 +224,7 @@ async fn serve_page(
         working_dir,
         &merged_env,
         &state.sandbox_env,
+        &state.limits,
     )
     .await;
 

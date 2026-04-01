@@ -1,6 +1,0 @@
-2026-03-10T08:00:00Z INFO  job=daily_report scheduled_at=08:00:00 status=started
-2026-03-10T08:00:45Z INFO  job=daily_report status=completed duration=45s rows_processed=12483
-2026-03-10T08:01:00Z INFO  job=cache_cleanup scheduled_at=08:01:00 status=started
-2026-03-10T08:01:03Z INFO  job=cache_cleanup status=completed duration=3s keys_evicted=217
-2026-03-10T08:02:00Z INFO  job=health_check scheduled_at=08:02:00 status=started
-2026-03-10T08:02:01Z INFO  job=health_check status=completed all_services=healthy

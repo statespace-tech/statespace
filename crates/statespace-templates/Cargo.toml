@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Shared templates (AGENTS.md, favicon, page.html) for Statespace servers"
+description = "Embedded templates for Statespace project initialization"
 
 [lints]
 workspace = true

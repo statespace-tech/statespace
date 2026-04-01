@@ -1,9 +1,10 @@
 pub(crate) mod app;
 pub(crate) mod auth;
 pub(crate) mod deploy;
-pub(crate) mod docs;
 pub(crate) mod env;
-pub(crate) mod serve;
+pub(crate) mod guide;
+pub(crate) mod init;
+pub(crate) mod run;
 #[cfg(feature = "ssh")]
 pub(crate) mod ssh;
 #[cfg(feature = "ssh")]

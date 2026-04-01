@@ -57,6 +57,7 @@ urlencoding = "2.1.3"
 walkdir = "2.5.0"
 petname = { version = "2", default-features = false, features = ["default-rng", "default-words"] }
 statespace-tool-runtime = { version = "0.1.7", path = "../../crates/statespace-tool-runtime" }
+statespace-templates = { workspace = true }
 ignore = "0.4.25"
 semver = "1.0.27"
 flate2 = "1.1.9"

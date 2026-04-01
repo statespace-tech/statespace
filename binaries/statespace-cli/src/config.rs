@@ -1,11 +1,9 @@
 use crate::error::{ConfigError, Result};
 use crate::gateway::{AuthorizedUser, ExchangeTokenResponse};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 const DEFAULT_API_URL: &str = "https://api.statespace.com";
-const APP_CONFIG_FILE_NAME: &str = "config.toml";
 
 fn default_api_url() -> String {
     DEFAULT_API_URL.to_string()
@@ -17,8 +15,6 @@ pub(crate) struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub profile: ProfileConfig,
-    #[serde(default)]
-    pub env: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,24 +80,6 @@ pub(crate) fn load_config(path: &Path) -> Result<Option<Config>> {
         ConfigError::Invalid(format!("Failed to parse config '{}': {e}", path.display()))
     })?;
     Ok(Some(config))
-}
-
-pub(crate) fn load_merged_app_env(
-    global_config_path: &Path,
-    app_dir: Option<&Path>,
-) -> Result<HashMap<String, String>> {
-    let mut merged = load_config(global_config_path)?
-        .map(|config| config.env)
-        .unwrap_or_default();
-
-    if let Some(app_dir) = app_dir {
-        let app_config_path = app_dir.join(APP_CONFIG_FILE_NAME);
-        if let Some(app_config) = load_config(&app_config_path)? {
-            merged.extend(app_config.env);
-        }
-    }
-
-    Ok(merged)
 }
 
 pub(crate) fn save_config(path: &Path, config: &Config) -> Result<()> {
@@ -426,7 +404,6 @@ mod tests {
                     org_id: None,
                 },
                 profile: ProfileConfig::default(),
-                env: HashMap::new(),
             },
         )
         .unwrap();
@@ -446,31 +423,6 @@ mod tests {
 
         let err = resolve_api_url(None, &path).unwrap_err();
         assert!(matches!(err, Error::Config(ConfigError::Invalid(_))));
-    }
-
-    #[test]
-    fn load_merged_app_env_prefers_app_over_global() {
-        let dir = tempfile::tempdir().unwrap();
-        let global_path = dir.path().join("global.toml");
-        let app_dir = dir.path().join("app");
-        std::fs::create_dir_all(&app_dir).unwrap();
-
-        std::fs::write(
-            &global_path,
-            "[env]\nSHARED = \"global\"\nGLOBAL_ONLY = \"yes\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            app_dir.join("config.toml"),
-            "[env]\nSHARED = \"app\"\nAPP_ONLY = \"yes\"\n",
-        )
-        .unwrap();
-
-        let env = load_merged_app_env(&global_path, Some(&app_dir)).unwrap();
-
-        assert_eq!(env.get("SHARED"), Some(&"app".to_string()));
-        assert_eq!(env.get("GLOBAL_ONLY"), Some(&"yes".to_string()));
-        assert_eq!(env.get("APP_ONLY"), Some(&"yes".to_string()));
     }
 
     #[test]

@@ -18,7 +18,6 @@ path = "src/lib.rs"
 [dependencies]
 # Core runtime
 statespace-tool-runtime.workspace = true
-statespace-templates.workspace = true
 
 # Web framework
 axum.workspace = true

@@ -61,7 +61,6 @@ impl FromStr for HttpMethod {
 #[serde(tag = "type", rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum BuiltinTool {
-    Glob { pattern: String },
     Curl { url: String, method: HttpMethod },
     Exec { command: String, args: Vec<String> },
 }
@@ -75,28 +74,16 @@ impl BuiltinTool {
             return Err(Error::InvalidCommand("Command cannot be empty".to_string()));
         }
 
-        match command[0].as_str() {
-            "glob" => {
-                if command.len() < 2 {
-                    return Err(Error::InvalidCommand(
-                        "glob requires a pattern argument".to_string(),
-                    ));
-                }
-                Ok(Self::Glob {
-                    pattern: command[1].clone(),
-                })
-            }
-            cmd => Ok(Self::Exec {
-                command: cmd.to_string(),
-                args: command[1..].to_vec(),
-            }),
-        }
+        let cmd = &command[0];
+        Ok(Self::Exec {
+            command: cmd.clone(),
+            args: command[1..].to_vec(),
+        })
     }
 
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
-            Self::Glob { .. } => "glob",
             Self::Curl { .. } => "curl",
             Self::Exec { .. } => "exec",
         }
@@ -108,7 +95,6 @@ impl BuiltinTool {
 
     pub fn is_free_tier_allowed(&self) -> bool {
         match self {
-            Self::Glob { .. } => true,
             Self::Curl { .. } => false,
             Self::Exec { command, .. } => FREE_TIER_COMMAND_ALLOWLIST.contains(&command.as_str()),
         }
@@ -227,17 +213,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_command_glob() {
-        let tool = BuiltinTool::from_command(&["glob".to_string(), "*.md".to_string()]).unwrap();
-        assert_eq!(
-            tool,
-            BuiltinTool::Glob {
-                pattern: "*.md".to_string()
-            }
-        );
-    }
-
-    #[test]
     fn test_from_command_curl() {
         let tool =
             BuiltinTool::from_command(&["curl".to_string(), "https://api.github.com".to_string()])
@@ -285,14 +260,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_free_tier_allowed_glob() {
-        let tool = BuiltinTool::Glob {
-            pattern: "*.md".to_string(),
-        };
-        assert!(tool.is_free_tier_allowed());
-    }
-
-    #[test]
     fn test_is_free_tier_allowed_curl_blocked() {
         let tool = BuiltinTool::Curl {
             url: "https://example.com".to_string(),
@@ -331,13 +298,6 @@ mod tests {
             BuiltinTool::Curl {
                 url: "https://example.com".to_string(),
                 method: HttpMethod::Get,
-            }
-            .requires_egress()
-        );
-
-        assert!(
-            !BuiltinTool::Glob {
-                pattern: "*.md".to_string(),
             }
             .requires_egress()
         );

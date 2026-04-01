@@ -1,85 +1,117 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{
+    Args, Parser, Subcommand, ValueEnum,
+    builder::{PossibleValue, PossibleValuesParser},
+};
 use std::path::PathBuf;
 
-use crate::gateway::applications::Visibility;
+fn init_template_values() -> PossibleValuesParser {
+    PossibleValuesParser::new(
+        statespace_templates::CURATED_TEMPLATE_NAMES
+            .iter()
+            .copied()
+            .map(PossibleValue::new)
+            .chain(
+                statespace_templates::EXPERIMENTAL_TEMPLATE_NAMES
+                    .iter()
+                    .copied()
+                    .map(|name| PossibleValue::new(name).hide(true)),
+            ),
+    )
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
 #[command(about = "Run, deploy, and manage Statespace apps.")]
 #[command(version)]
+#[command(disable_help_subcommand = true)]
 #[allow(unreachable_pub)]
 pub struct Cli {
-    /// API key override
-    #[arg(long, global = true)]
-    pub api_key: Option<String>,
-
-    /// Organization ID override
-    #[arg(long, global = true)]
-    pub org_id: Option<String>,
-
-    #[arg(long, global = true, env = "STATESPACE_GATEWAY_URL", hide = true)]
-    pub api_url: Option<String>,
-
-    /// Path to configuration.
-    #[arg(long, global = true)]
-    pub config: Option<PathBuf>,
-
     #[command(subcommand)]
     pub command: Commands,
 }
 
+/// Options for commands that interact with the Statespace cloud API.
+#[derive(Debug, Args)]
+pub(crate) struct CloudArgs {
+    /// API key override
+    #[arg(long)]
+    pub api_key: Option<String>,
+
+    /// Organization ID override
+    #[arg(long)]
+    pub org_id: Option<String>,
+
+    #[arg(long, env = "STATESPACE_GATEWAY_URL", hide = true)]
+    pub api_url: Option<String>,
+
+    /// Path to configuration
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
-    /// Run an app locally (no account required)
-    Serve(ServeArgs),
+    /// Create a new project.
+    Init(InitArgs),
 
-    /// Deploy an app (create or update)
+    /// Run an app locally (no account required).
+    Run(RunArgs),
+
+    /// Deploy an app (create or update).
     Deploy(AppDeployArgs),
 
-    /// Application commands
+    /// Application commands.
     App {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: AppCommands,
     },
 
-    /// Authentication commands
+    /// Authentication commands.
     Auth {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: AuthCommands,
     },
 
-    /// Token management commands
+    /// Token management commands.
     Tokens {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: TokensCommands,
     },
 
-    /// SSH configuration management
+    /// SSH configuration management.
     #[cfg(feature = "ssh")]
     Ssh {
+        #[command(flatten)]
+        cloud: CloudArgs,
         #[command(subcommand)]
         command: SshCommands,
     },
 
-    /// Open the Statespace documentation in your browser
-    Docs,
+    /// Print the agent-friendly guide (AGENTS.md).
+    Guide,
 
-    /// Update this CLI to the latest version
+    /// Update this CLI to the latest version.
     Update,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AuthCommands {
-    /// Log in via browser (device auth flow)
+    /// Log in via browser (device auth flow).
     Login,
 
-    /// Log out and clear stored credentials
+    /// Log out and clear stored credentials.
     Logout,
 
-    /// Show current authentication status
+    /// Show current authentication status.
     Status,
 
-    /// Print the current API token
+    /// Print the current API token.
     Token {
         /// Output format
         #[arg(long, short, default_value = "plain")]
@@ -96,23 +128,19 @@ pub(crate) enum TokenOutputFormat {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AppCommands {
-    /// Deploy an application (create-or-update, alias for top-level deploy)
-    #[command(hide = true)]
-    Deploy(AppDeployArgs),
-
-    /// List all applications
+    /// List all applications.
     List,
 
-    /// Show details for an application
+    /// Show details for an application.
     Get(AppGetArgs),
 
-    /// Delete an application
+    /// Delete an application.
     Delete(AppDeleteArgs),
 
-    /// Restart an application (pulls latest runtime image)
+    /// Restart an application (pulls latest runtime image).
     Restart(AppRestartArgs),
 
-    /// SSH into an application
+    /// SSH into an application.
     #[cfg(feature = "ssh")]
     Ssh(AppSshArgs),
 }
@@ -128,19 +156,36 @@ pub(crate) struct AppSshArgs {
     #[arg(long, short)]
     pub user: Option<String>,
 
-    /// SSH port (default: 22)
+    /// SSH port
     #[arg(long, short, default_value = "22")]
     pub port: u16,
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct AppDeployArgs {
-    /// Directory to deploy. If omitted, creates an empty application.
-    pub path: Option<PathBuf>,
+pub(crate) struct InitArgs {
+    /// Directory to initialize
+    #[arg(long, value_name = "PATH", default_value = ".")]
+    pub path: PathBuf,
 
-    /// Application visibility (default: public on free-tier, otherwise private).
-    #[arg(long, value_enum)]
-    pub visibility: Option<Visibility>,
+    /// Start from a built-in template. Help shows curated starters; experimental starters remain accepted but hidden.
+    #[arg(
+        long,
+        value_parser = init_template_values()
+    )]
+    pub template: Option<String>,
+
+    /// Skip confirmation prompts and overwrite existing files
+    #[arg(long, short)]
+    pub yes: bool,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct AppDeployArgs {
+    /// Directory to deploy (default: current directory). Secrets (.env, .env.*) and
+    /// internal directories (.git, .statespace) are never uploaded. Additional
+    /// exclusions can be defined in .gitignore.
+    #[arg(default_value = ".")]
+    pub path: PathBuf,
 
     /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]
@@ -153,11 +198,14 @@ pub(crate) struct AppDeployArgs {
     /// Load deployed app secrets from a file
     #[arg(long = "env-file", value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub cloud: CloudArgs,
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct ServeArgs {
-    /// Directory to serve (default: current directory)
+pub(crate) struct RunArgs {
+    /// Directory to serve
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
@@ -176,6 +224,14 @@ pub(crate) struct ServeArgs {
     /// Load environment variables from a file
     #[arg(long = "env-file", value_name = "PATH")]
     pub env_file: Option<PathBuf>,
+
+    /// Tool execution timeout in seconds
+    #[arg(long, default_value = "30", value_name = "SECS")]
+    pub timeout: u64,
+
+    /// Maximum combined stdout+stderr size per tool call in megabytes
+    #[arg(long, default_value = "1", value_name = "MB")]
+    pub max_output: usize,
 }
 
 #[derive(Debug, Parser)]
@@ -336,4 +392,17 @@ pub(crate) struct TokenRevokeArgs {
     /// Skip confirmation prompt
     #[arg(long, short)]
     pub yes: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn hidden_experimental_template_is_still_accepted() {
+        let cli = Cli::try_parse_from(["statespace", "init", "--template", "clickhouse"]);
+
+        assert!(cli.is_ok());
+    }
 }
