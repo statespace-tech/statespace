@@ -11,11 +11,12 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::Duration;
 
 const USER_AGENT: &str = concat!("statespace-cli/", env!("CARGO_PKG_VERSION"));
 const TOKEN_SCOPE_PREFIX: &str = "environments";
+const ALWAYS_EXCLUDED_DEPLOY_DIRS: &[&str] = &[".git", ".statespace"];
 
 #[derive(Clone)]
 pub(crate) struct GatewayClient {
@@ -390,7 +391,22 @@ fn is_ignored_deploy_path(root: &Path, path: &Path, matcher: &GitignoreMatcher) 
     let Ok(relative) = path.strip_prefix(root) else {
         return false;
     };
+    if is_always_excluded_deploy_path(relative) {
+        return true;
+    }
     matcher.is_ignored(relative, path.is_dir())
+}
+
+fn is_always_excluded_deploy_path(relative: &Path) -> bool {
+    relative.components().any(|component| match component {
+        Component::Normal(name) => {
+            let name = name.to_string_lossy();
+            ALWAYS_EXCLUDED_DEPLOY_DIRS.contains(&name.as_ref())
+                || name == ".env"
+                || name.starts_with(".env.")
+        }
+        _ => false,
+    })
 }
 
 fn collect_files(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
@@ -589,6 +605,23 @@ mod tests {
             .expect("logo file should be present");
         let decoded = BASE64.decode(&logo.content).expect("decode base64 content");
         assert_eq!(decoded, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn scan_deploy_files_excludes_reserved_paths_without_gitignore() {
+        let dir = TempDir::new().expect("tempdir");
+        write_file(&dir, "README.md", b"# Hello");
+        write_file(&dir, "config.toml", b"keep me\n");
+        write_file(&dir, ".env", b"DATABASE_URL=postgres://localhost/dev\n");
+        write_file(&dir, ".env.production", b"DATABASE_URL=postgres://prod\n");
+        write_file(&dir, "nested/.env.test", b"API_KEY=test\n");
+        write_file(&dir, ".statespace/state.json", br#"{"name":"demo"}"#);
+        write_file(&dir, ".git/config", b"[core]");
+
+        let files = GatewayClient::scan_deploy_files(dir.path()).expect("scan files");
+        let paths: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+
+        assert_eq!(paths, vec!["README.md", "config.toml"]);
     }
 
     #[test]

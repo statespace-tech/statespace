@@ -21,6 +21,7 @@ pub struct Template {
 include!(concat!(env!("OUT_DIR"), "/templates_generated.rs"));
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

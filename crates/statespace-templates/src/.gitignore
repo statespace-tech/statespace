@@ -1,5 +1,6 @@
 # Environment
 .env
+.env.*
 .envrc
 .direnv/*
 
@@ -25,4 +26,5 @@ AGENTS.md
 CLAUDE.md
 
 # Statespace
+.git/
 .statespace/
