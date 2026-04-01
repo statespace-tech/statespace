@@ -198,6 +198,24 @@ async fn file_handler(
     serve_page(&path, &query_env, &state).await
 }
 
+fn content_type_for_path(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("md") => "text/markdown; charset=utf-8",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("yaml" | "yml") => "text/yaml; charset=utf-8",
+        Some("csv") => "text/csv; charset=utf-8",
+        Some("html" | "htm") => "text/html; charset=utf-8",
+        Some("toml") => "text/plain; charset=utf-8",
+        _ => "text/plain; charset=utf-8",
+    }
+}
+
 async fn serve_page(
     path: &str,
     query_env: &HashMap<String, String>,
@@ -216,6 +234,7 @@ async fn serve_page(
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
     };
 
+    let content_type = content_type_for_path(&file_path);
     let working_dir = file_path.parent().unwrap_or(&state.content_root);
     let has_eval = !eval::parse_eval_blocks(&content).is_empty();
     let merged_env = eval::merge_eval_env(state.env.as_ref(), query_env);
@@ -231,7 +250,7 @@ async fn serve_page(
     if has_eval {
         (
             [
-                (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+                (header::CONTENT_TYPE, content_type),
                 (header::CACHE_CONTROL, "no-store"),
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
@@ -241,7 +260,7 @@ async fn serve_page(
     } else {
         (
             [
-                (header::CONTENT_TYPE, "text/markdown; charset=utf-8"),
+                (header::CONTENT_TYPE, content_type),
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             ],
             rendered,

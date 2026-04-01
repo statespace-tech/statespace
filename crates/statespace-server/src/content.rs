@@ -171,12 +171,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_index_html_not_found() {
+    async fn test_resolve_non_markdown_file() {
         let dir = setup_test_dir();
         let resolver = LocalContentResolver::new(dir.path()).unwrap();
 
-        let result = resolver.resolve("index.html").await;
-        assert!(matches!(result, Err(Error::NotFound(_))));
+        let content = resolver.resolve("index.html").await.unwrap();
+        assert!(content.contains("<h1>index</h1>"));
     }
 
     #[tokio::test]

@@ -12,10 +12,7 @@ pub fn markdown_lookup_candidates(path: &str) -> Vec<String> {
         return vec![format!("{normalized}README.md")];
     }
 
-    if Path::new(normalized)
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-    {
+    if Path::new(normalized).extension().is_some() {
         return vec![normalized.to_string()];
     }
 
@@ -47,6 +44,14 @@ mod tests {
         assert_eq!(
             markdown_lookup_candidates("docs/intro.md"),
             vec!["docs/intro.md"]
+        );
+    }
+
+    #[test]
+    fn markdown_candidates_for_non_markdown_file() {
+        assert_eq!(
+            markdown_lookup_candidates("data/export.csv"),
+            vec!["data/export.csv"]
         );
     }
 
