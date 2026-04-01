@@ -17,6 +17,7 @@ pub fn markdown_lookup_candidates(path: &str) -> Vec<String> {
     }
 
     vec![
+        normalized.to_string(),
         format!("{normalized}/README.md"),
         format!("{normalized}.md"),
     ]
@@ -35,7 +36,7 @@ mod tests {
     fn markdown_candidates_for_extensionless_path() {
         assert_eq!(
             markdown_lookup_candidates("docs/intro"),
-            vec!["docs/intro/README.md", "docs/intro.md"]
+            vec!["docs/intro", "docs/intro/README.md", "docs/intro.md"]
         );
     }
 

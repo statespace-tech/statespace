@@ -90,10 +90,20 @@ Use `statespace tokens create` to create a token with the appropriate scope.
 
 ## App protocol
 
-A Statespace app is a directory of Markdown files served over HTTP. Each file is a page. Pages have two parts:
+A Statespace app is a directory of files served over HTTP. Each Markdown file is a page. Pages have two parts:
 
 - **Frontmatter:** declares tools agents can call via POST
 - **Body:** instructions and components agents read via GET
+
+### URL resolution
+
+| Request | Resolves to |
+|---|---|
+| `GET /` | `API.md` |
+| `GET /page` | `page`, then `page/README.md`, then `page.md` |
+| `GET /dir/` | `dir/README.md` |
+| `GET /page.md` | `page.md` |
+| `GET /file.txt` | `file.txt` |
 
 ### Tools
 
