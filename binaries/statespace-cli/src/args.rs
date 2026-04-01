@@ -1,5 +1,23 @@
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{
+    Args, Parser, Subcommand, ValueEnum,
+    builder::{PossibleValue, PossibleValuesParser},
+};
 use std::path::PathBuf;
+
+fn init_template_values() -> PossibleValuesParser {
+    PossibleValuesParser::new(
+        statespace_templates::CURATED_TEMPLATE_NAMES
+            .iter()
+            .copied()
+            .map(PossibleValue::new)
+            .chain(
+                statespace_templates::EXPERIMENTAL_TEMPLATE_NAMES
+                    .iter()
+                    .copied()
+                    .map(|name| PossibleValue::new(name).hide(true)),
+            ),
+    )
+}
 
 #[derive(Debug, Parser)]
 #[command(name = "statespace")]
@@ -149,10 +167,10 @@ pub(crate) struct InitArgs {
     #[arg(long, value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
-    /// Start from a built-in template
+    /// Start from a built-in template. Help shows curated starters; experimental starters remain accepted but hidden.
     #[arg(
         long,
-        value_parser = clap::builder::PossibleValuesParser::new(statespace_templates::NAMES)
+        value_parser = init_template_values()
     )]
     pub template: Option<String>,
 
