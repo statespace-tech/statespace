@@ -95,15 +95,11 @@ A Statespace app is a directory of files served over HTTP. Each Markdown file is
 - **Frontmatter:** declares tools agents can call via POST
 - **Body:** instructions and components agents read via GET
 
-### URL resolution
+For URL resolution rules and full tool invocation reference, read `API.md` from the running app:
 
-| Request | Resolves to |
-|---|---|
-| `GET /` | `API.md` |
-| `GET /page` | `page`, then `page/README.md`, then `page.md` |
-| `GET /dir/` | `dir/README.md` |
-| `GET /page.md` | `page.md` |
-| `GET /file.txt` | `file.txt` |
+```bash
+curl http://localhost:8000/
+```
 
 ### Tools
 
@@ -122,60 +118,6 @@ tools:
 ```
 
 To execute a tool, POST `{"command": [...]}` to the path of the page that declares it. Commands run without a shell — each array element is a direct process argument (no expansion, pipes, or globbing).
-
-#### Tool rules
-
-**Extra arguments are allowed by default**
-
-```
-Tool:       [ls]
-CORRECT:    {"command": ["ls", "."]}
-CORRECT:    {"command": ["ls", "-la", "."]}
-```
-
-**`{ }` accepts exactly one argument**
-
-```
-Tool:       [ls, { }]
-CORRECT:    {"command": ["ls", "src"]}
-CORRECT:    {"command": ["ls", "src", "lib"]}  ← extra arguments are fine
-INCORRECT:  {"command": ["ls"]}                ← missing argument
-```
-
-**`{ regex: "pattern" }` accepts one argument matching the pattern**
-
-```
-Tool:       [cat, { regex: ".*\\.txt$" }]
-CORRECT:    {"command": ["cat", "notes.txt"]}
-CORRECT:    {"command": ["cat", "notes.txt", "logs.csv"]}     ← extra arguments are fine
-INCORRECT:  {"command": ["cat", "notes.py"]}                  ← doesn't match pattern
-```
-
-**Fixed elements are immutable**
-
-```
-Tool:       [grep, -r, -i, { }, ../data/]
-CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/"]}
-CORRECT:    {"command": ["grep", "-r", "-i", "error", "../data/", "-l"]}    ← extra arguments are fine
-INCORRECT:  {"command": ["grep", "-r", "-i", "error", "../data/file.txt"]}  ← changed fixed path
-INCORRECT:  {"command": ["grep", "-r", "error", "../data/"]}                ← removed fixed flag
-```
-
-**Trailing `;` locks the argument list**
-
-```
-Tool:       [rm, { }, ;]
-CORRECT:    {"command": ["rm", "file.txt"]}
-INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
-```
-
-**Write environment variables literally.** The server expands them at execution time.
-
-```
-Tool:       [psql, $DATABASE_URL, -c, { }]
-CORRECT:    {"command": ["psql", "$DATABASE_URL", "-c", "SELECT 1"]}
-INCORRECT:  {"command": ["psql", "postgres://localhost/mydb", "-c", "SELECT 1"]}  ← substituted value
-```
 
 ### Components
 
