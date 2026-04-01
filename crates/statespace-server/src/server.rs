@@ -202,16 +202,14 @@ fn content_type_for_path(path: &std::path::Path) -> &'static str {
     match path
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .as_deref()
     {
         Some("md") => "text/markdown; charset=utf-8",
-        Some("txt") => "text/plain; charset=utf-8",
         Some("json") => "application/json; charset=utf-8",
         Some("yaml" | "yml") => "text/yaml; charset=utf-8",
         Some("csv") => "text/csv; charset=utf-8",
         Some("html" | "htm") => "text/html; charset=utf-8",
-        Some("toml") => "text/plain; charset=utf-8",
         _ => "text/plain; charset=utf-8",
     }
 }
