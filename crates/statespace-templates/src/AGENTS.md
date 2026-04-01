@@ -95,11 +95,7 @@ A Statespace app is a directory of files served over HTTP. Each Markdown file is
 - **Frontmatter:** declares tools agents can call via POST
 - **Body:** instructions and components agents read via GET
 
-For URL resolution rules and full tool invocation reference, read `API.md` from the running app:
-
-```bash
-curl http://localhost:8000/
-```
+> **For URL resolution rules and tool invocation reference, read `API.md`.**
 
 ### Tools
 
@@ -145,12 +141,6 @@ Large apps can be split across multiple pages. Link them from `README.md` or bet
 ```
 
 Load pages progressively — only fetch pages relevant to the current task.
-
-### Constraints
-
-- Only declared tools can be executed.
-- Commands run relative to the app's root directory.
-- All interaction is over HTTP.
 
 ## Troubleshooting
 
