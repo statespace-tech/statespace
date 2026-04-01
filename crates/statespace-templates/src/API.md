@@ -1,13 +1,11 @@
 # API instructions
 
-This file defines how agents use the app over HTTP. The server exposes this guidance at `/`.
-
 This Statespace application exposes content and commands over HTTP.
 
 ## Quick start
 
 1. **`GET /README.md`** — discover what this application does, root-level commands, and where to navigate.
-2. **Follow links** — `GET /{path}` to read Markdown pages. Directories resolve to `README.md`, and extensionless paths resolve to Markdown candidates.
+2. **Follow links** — `GET /{path}` to read any file (Markdown, data files, etc.).
 3. **Execute a command** — `POST /{path}` with `{"command": [...]}` where the command is declared in that page's frontmatter.
 
 ## Command Rules
