@@ -1,5 +1,7 @@
 # API instructions
 
+This file defines how agents use the app over HTTP. The server exposes this guidance at `/`.
+
 This Statespace application exposes content and commands over HTTP.
 
 ## Quick start
