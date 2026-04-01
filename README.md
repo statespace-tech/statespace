@@ -60,13 +60,13 @@ Templates define just enough tools and instructions for your agent to start expl
 ```yaml
 ---
 tools:
-  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }]
+  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
 ---
 
 # Instructions
-- Explore the schema with `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'`
-- Inspect columns with `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '<table>'`
-- See [PostgreSQL documentation](https://www.postgresql.org/docs/) for reference
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://www.postgresql.org/docs/) as needed
 ```
 
 ### 2. Build it
