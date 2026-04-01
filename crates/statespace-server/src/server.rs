@@ -175,7 +175,7 @@ async fn index_handler(
     Query(query_env): Query<HashMap<String, String>>,
     State(state): State<ServerState>,
 ) -> Response {
-    serve_page("API.md", &query_env, &state).await
+    serve_page("", &query_env, &state).await
 }
 
 async fn favicon_handler(State(state): State<ServerState>) -> Response {

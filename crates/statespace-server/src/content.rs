@@ -114,6 +114,7 @@ mod tests {
 
     fn setup_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
+        write(dir.path().join("API.md"), "# Root API").unwrap();
         write(dir.path().join("README.md"), "# Root README").unwrap();
         write(dir.path().join("file.md"), "# File").unwrap();
         write(dir.path().join("no_readme.md"), "# No Readme File").unwrap();
@@ -125,12 +126,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_resolve_root_readme() {
+    async fn test_resolve_root() {
         let dir = setup_test_dir();
         let resolver = LocalContentResolver::new(dir.path()).unwrap();
 
         let content = resolver.resolve("").await.unwrap();
-        assert!(content.contains("# Root README"));
+        assert!(content.contains("# Root API"));
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ pub fn markdown_lookup_candidates(path: &str) -> Vec<String> {
     let normalized = path.trim_start_matches('/');
 
     if normalized.is_empty() {
-        return vec!["README.md".to_string()];
+        return vec!["API.md".to_string()];
     }
 
     if normalized.ends_with('/') {
@@ -31,7 +31,7 @@ mod tests {
 
     #[test]
     fn markdown_candidates_for_root() {
-        assert_eq!(markdown_lookup_candidates(""), vec!["README.md"]);
+        assert_eq!(markdown_lookup_candidates(""), vec!["API.md"]);
     }
 
     #[test]
