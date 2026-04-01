@@ -34,6 +34,8 @@ For environment variables, ask the user how they'd like to proceed:
 
 **Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing.
 
+If the app uses a `.env` file, start it with `statespace run --env-file .env` so those values are loaded explicitly.
+
 ## Step 4: Iterate on the app
 
 Always interact with the user's data through the running app — never connect to it directly. The whole point of the app is to define and test the tools that will be used in production. Bypassing the app means you're not testing what will be deployed.

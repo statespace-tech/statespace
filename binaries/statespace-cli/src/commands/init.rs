@@ -109,8 +109,9 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<()> {
     }
 
     eprintln!("Initialized: {}", created.join(", "));
+    eprintln!("Read AGENTS.md for setup and run instructions.");
     eprintln!(
-        "Read AGENTS.md, then run `statespace run {}`",
+        "If your app uses a `.env` file, load it explicitly with `statespace run --env-file .env {}`",
         output.display()
     );
 

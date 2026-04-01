@@ -20,12 +20,32 @@ pub(crate) async fn run_server(args: RunArgs) -> Result<()> {
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
     }
 
-    let env = resolve_env_overrides(&args.env_vars, args.env_file.as_deref(), "serve")?;
+    let env = resolve_env_overrides(&args.env_vars, args.env_file.as_deref(), "run")?;
     let sandbox_env = SandboxEnv::from_host_process();
     let limits = ExecutionLimits {
         timeout: Duration::from_secs(args.timeout),
         max_output_bytes: args.max_output * 1024 * 1024,
     };
+
+    if !dir.join("README.md").is_file() {
+        return Err(Error::cli(
+            "README.md not found. Create it before running your app.".to_string(),
+        ));
+    }
+
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .compact()
+        .try_init();
+
+    if args.env_vars.is_empty() && args.env_file.is_none() && dir.join(".env").is_file() {
+        tracing::warn!(
+            "Found .env in {} but it was not loaded. Re-run with `statespace run --env-file .env {}` to use it.",
+            dir.display(),
+            dir.display()
+        );
+    }
 
     emit_missing_tool_warnings(&dir, &sandbox_env);
 
@@ -35,18 +55,6 @@ pub(crate) async fn run_server(args: RunArgs) -> Result<()> {
         .with_env(env)
         .with_sandbox_env(sandbox_env)
         .with_limits(limits);
-
-    if !config.content_root.join("README.md").is_file() {
-        return Err(Error::cli(
-            "README.md not found. Create it before serving your app.".to_string(),
-        ));
-    }
-
-    let _ = tracing_subscriber::fmt()
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .compact()
-        .try_init();
 
     let addr = config.socket_addr();
     let router =
@@ -81,7 +89,7 @@ fn emit_missing_tool_warnings(content_root: &Path, sandbox_env: &SandboxEnv) {
     }
 
     tracing::warn!(
-        "{} tool command(s) declared in markdown are not available in the serve runtime PATH. \
+        "{} tool command(s) declared in markdown are not available in the run runtime PATH. \
          Requests using these commands will fail until the binaries are installed or PATH is updated.",
         missing.len()
     );
