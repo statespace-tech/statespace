@@ -75,7 +75,7 @@ impl ErrorResponse {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
         Self {
-            error: format!("{}. See /AGENTS.md for API instructions.", message.into()),
+            error: format!("{}. See / for API instructions.", message.into()),
         }
     }
 }
@@ -119,5 +119,12 @@ mod tests {
         assert_eq!(error.returncode, 1);
         assert_eq!(error.stdout, "");
         assert_eq!(error.stderr, "command not found");
+    }
+
+    #[test]
+    fn test_error_response_points_to_root_api_guide() {
+        let error = ErrorResponse::new("File not found");
+
+        assert_eq!(error.error, "File not found. See / for API instructions.");
     }
 }
