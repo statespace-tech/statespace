@@ -107,10 +107,11 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         return Err(Error::cli(format!("Not a directory: {}", dir.display())));
     }
 
-    let deploy_env = resolve_env_overrides(&env_vars, env_file.as_deref(), "deploy")?;
-
     let cached = load_state(&dir)?;
     let target = resolve_target(name, cached.as_ref());
+    let deploy_env = (!env_vars.is_empty() || env_file.is_some())
+        .then(|| resolve_env_overrides(&env_vars, env_file.as_deref(), "deploy"))
+        .transpose()?;
 
     let files = GatewayClient::scan_deploy_files(&dir)?;
 
@@ -124,13 +125,21 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         eprintln!("No files found in {}", dir.display());
         return Ok(());
     }
-    let env_checksum = checksum_env_map(&deploy_env);
+    let env_checksum = deploy_env.as_ref().map(checksum_env_map);
+    let persisted_env_checksum = env_checksum.clone().or_else(|| {
+        cached
+            .as_ref()
+            .filter(|prev| prev.name == target.name)
+            .and_then(|prev| prev.checksums.get(ENV_STATE_CHECKSUM_KEY).cloned())
+    });
 
     let mut checksums: Vec<(String, String)> = files
         .iter()
         .map(|f| (f.path.clone(), f.checksum.clone()))
         .collect();
-    checksums.push((ENV_STATE_CHECKSUM_KEY.to_string(), env_checksum.clone()));
+    if let Some(env_checksum) = &persisted_env_checksum {
+        checksums.push((ENV_STATE_CHECKSUM_KEY.to_string(), env_checksum.clone()));
+    }
 
     if let Some(ref prev) = cached {
         if prev.name == target.name {
@@ -149,11 +158,12 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                 || filtered_checksums
                     .iter()
                     .any(|(p, c)| prev_map.get(p) != Some(c));
-            let env_changed = prev
-                .checksums
-                .get(ENV_STATE_CHECKSUM_KEY)
-                .map(String::as_str)
-                != Some(env_checksum.as_str());
+            let env_changed = env_checksum.as_ref().is_some_and(|env_checksum| {
+                prev.checksums
+                    .get(ENV_STATE_CHECKSUM_KEY)
+                    .map(String::as_str)
+                    != Some(env_checksum.as_str())
+            });
 
             if !files_changed && !env_changed {
                 eprintln!("No changes detected, skipping deploy.");
@@ -172,7 +182,10 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
     let upsert_result = gateway.upsert_application(&target.name, files).await?;
     let result = DeployOutcome::from_upsert(upsert_result);
 
-    let sync = sync_application_secrets(&gateway, &result.id, &deploy_env).await?;
+    let sync = match deploy_env.as_ref() {
+        Some(deploy_env) => sync_application_secrets(&gateway, &result.id, deploy_env).await?,
+        None => SecretSyncSummary::default(),
+    };
 
     let action = if result.created { "Created" } else { "Updated" };
     eprintln!("{action} application '{}'", result.name);
@@ -524,6 +537,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deploy_without_env_input_preserves_existing_secrets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "# Hello").expect("write readme");
+
+        let (mut mock, _, set_secret_calls, delete_secret_calls) =
+            MockDeployGateway::new(upsert_result(false, "app"));
+        mock.existing_secret_keys = vec!["KEEP".to_string()];
+
+        run_deploy(deploy_args(dir.path().to_path_buf(), Some("app")), mock)
+            .await
+            .expect("run_deploy");
+
+        assert!(set_secret_calls.lock().expect("lock").is_empty());
+        assert!(delete_secret_calls.lock().expect("lock").is_empty());
+    }
+
+    #[tokio::test]
     async fn deploy_with_unchanged_files_and_unchanged_env_skips() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("README.md"), "# Hello").expect("write readme");
@@ -585,6 +615,39 @@ mod tests {
                 .iter()
                 .any(|(_, key, value)| key == "A" && value == "2")
         );
+    }
+
+    #[tokio::test]
+    async fn deploy_with_cached_env_checksum_and_no_env_input_skips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "# Hello").expect("write readme");
+        std::fs::write(dir.path().join(".gitignore"), ".statespace\n").expect("write gitignore");
+
+        let env_file = dir.path().join("deploy.env");
+        std::fs::write(&env_file, "A=1\n").expect("write env");
+
+        let (first_mock, _, _, _) = MockDeployGateway::new(upsert_result(false, "app"));
+        let first_args = AppDeployArgs {
+            env_file: Some(env_file),
+            ..deploy_args(dir.path().to_path_buf(), Some("app"))
+        };
+        run_deploy(first_args, first_mock)
+            .await
+            .expect("first deploy");
+
+        let (second_mock, upsert_calls, set_secret_calls, delete_secret_calls) =
+            MockDeployGateway::new(upsert_result(false, "app"));
+
+        run_deploy(
+            deploy_args(dir.path().to_path_buf(), Some("app")),
+            second_mock,
+        )
+        .await
+        .expect("second deploy");
+
+        assert!(upsert_calls.lock().expect("lock").is_empty());
+        assert!(set_secret_calls.lock().expect("lock").is_empty());
+        assert!(delete_secret_calls.lock().expect("lock").is_empty());
     }
 
     #[tokio::test]
