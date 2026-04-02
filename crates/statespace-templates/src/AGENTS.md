@@ -7,7 +7,7 @@
 ## Set up
 
 - Check if the CLI is installed: `statespace --version`. If not: `curl -fsSL https://statespace.com/install.sh | sh`.
-- If the directory has no `AGENTS.md`, initialize it, preferrably from a template: `statespace init`
+- If the directory has no `AGENTS.md`, initialize it, preferably from a template: `statespace init`
 - Read `README.md` to understand what the app needs to run — environment variables, local files, or nothing at all. Prompt the user for anything missing before continuing.
 - If the app uses environment variables, ask the user how they'd like to proceed:
   - **Option 1** — ask for each value and write the `.env` file before continuing.
@@ -100,7 +100,7 @@ echo "Row count: $(psql $DATABASE_URL -Atc 'SELECT COUNT(*) FROM users')"
 
 Apps aren't limited to Markdown — create scripts and data files as needed alongside your pages:
 
-```
+```text
 my-app/
 ├── API.md
 ├── README.md
@@ -146,7 +146,6 @@ statespace deploy .
 
 ```bash
 statespace tokens create my-token --scope read    # GET only
-statespace tokens create my-token --scope execute # GET + POST
 statespace tokens create my-token --scope admin   # full access
 ```
 
