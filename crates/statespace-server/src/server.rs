@@ -303,7 +303,10 @@ async fn execute_action(path: &str, state: &ServerState, request: ActionRequest)
     };
 
     if file_path.extension().and_then(|e| e.to_str()) != Some("md") {
-        return json_error(StatusCode::BAD_REQUEST, "POST is only supported on Markdown pages");
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            "POST is only supported on Markdown pages",
+        );
     }
 
     let content = match state.content_resolver.resolve(path).await {
