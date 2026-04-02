@@ -11,7 +11,7 @@
 
 <br>
 
-*Self-documenting AI applications*
+*Self-describing AI applications*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,7 +29,9 @@
 
 ---
 
-AI doesn't know your data. Statespace is a framework for building self-documenting data applications that describe themselves to agents. Build RAG, text-to-SQL, and knowledge bases that agents can maintain and improve on their own. Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
+Statespace is a framework for building data apps that describe themselves, so agents can maintain and improve them as your data evolves.
+Build Build RAG, text-to-SQL, and knowledge bases that always stay relevant and accurate.
+Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
 
 ## Quickstart
 
@@ -77,7 +79,7 @@ Iterate with your coding agent:
 claude "Document my database's schema and add summarize script"
 ```
 
-Your agent will run your app locally and iterate on it until it looks something like this:
+Your agent will run your app locally and work on it until it looks something like this:
 
 ```text
 my-app/
@@ -106,8 +108,8 @@ Or wire it up as an MCP server:
 
 ```json
 "statespace": {
-  "command": "uvx",
-  "args": ["statespace-mcp", "https://my-app.statespace.app"]
+  "command": "npx",
+  "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
 }
 ```
 
