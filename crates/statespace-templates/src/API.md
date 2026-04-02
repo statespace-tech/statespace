@@ -13,13 +13,13 @@ This Statespace application exposes content and commands over HTTP.
 - The same resolution rules apply to both `GET` and `POST`.
 - `POST` must resolve to a Markdown file - only Markdown pages declare tools in their frontmatter.
 
-| Request | Resolves to |
-|---|---|
-| `GET /` | `API.md` |
-| `GET /page` | `page`, then `page/README.md`, then `page.md` |
-| `GET /dir/` | `dir/README.md` |
-| `GET /page.md` | `page.md` |
-| `GET /file.txt` | `file.txt` |
+| Path             | Resolves to                                    |
+|------------------|------------------------------------------------|
+| `/`              | `API.md`                                       |
+| `/page`          | `page`, then `page/README.md`, then `page.md`  |
+| `/dir/`          | `dir/README.md`                                |
+| `/page.md`       | `page.md`                                      |
+| `/file.txt`      | `file.txt`                                     |
 
 ## Command Rules
 
