@@ -11,7 +11,7 @@
 
 <br>
 
-*Self-describing AI applications*
+*Database APIs for AI Agents*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,8 +29,8 @@
 
 ---
 
-Statespace is a framework for building data apps that describe themselves, so agents can maintain and improve them as your data evolves.
-Build Build RAG, text-to-SQL, and knowledge bases that always stay relevant and accurate.
+Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
+Statespace lets you quickly turn that domain knowledge into APIs that AI agents can use to understand and query your databases.
 Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
 
 ## Quickstart
@@ -73,13 +73,13 @@ tools:
 
 ### 2. Build it
 
-Iterate with your coding agent:
+Work with your coding agent to document your schema, rules, and context: 
 
 ```bash
 claude "Document my database's schema and add summarize script"
 ```
 
-Your agent will run your app locally and work on it until it looks something like this:
+Your agent will run your app locally and iterate on it until it looks something like this:
 
 ```text
 my-app/
