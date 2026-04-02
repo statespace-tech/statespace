@@ -8,7 +8,7 @@
 //!   - [psql, -c, { regex: "^SELECT" }, ;]  # Trailing ; disables extra args
 //! ```
 
-use regex::Regex;
+use fancy_regex::Regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolPart {
@@ -146,7 +146,7 @@ fn matches_spec(command: &[String], spec: &ToolSpec) -> bool {
             ToolPart::Placeholder {
                 regex: Some(compiled),
             } => {
-                if !compiled.regex.is_match(cmd_part) {
+                if !compiled.regex.is_match(cmd_part).unwrap_or(false) {
                     return false;
                 }
             }

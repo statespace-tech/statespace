@@ -62,8 +62,8 @@ statespace/
 │       ├── build.rs
 │       └── src/
 │           ├── lib.rs
-│           ├── AGENTS.md
-│           ├── API.md
+│           ├── AGENTS.md           # Written to new projects — guides coding agents building/iterating on the app
+│           ├── API.md              # Written to new projects — served at GET / of deployed apps; describes the HTTP API contract to consuming agents
 │           ├── .gitignore
 │           └── starters/           # Per-database starter projects
 └── docs/

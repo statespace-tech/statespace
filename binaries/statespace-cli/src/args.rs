@@ -6,16 +6,10 @@ use std::path::PathBuf;
 
 fn init_template_values() -> PossibleValuesParser {
     PossibleValuesParser::new(
-        statespace_templates::CURATED_TEMPLATE_NAMES
+        statespace_templates::NAMES
             .iter()
             .copied()
-            .map(PossibleValue::new)
-            .chain(
-                statespace_templates::EXPERIMENTAL_TEMPLATE_NAMES
-                    .iter()
-                    .copied()
-                    .map(|name| PossibleValue::new(name).hide(true)),
-            ),
+            .map(PossibleValue::new),
     )
 }
 
@@ -167,7 +161,7 @@ pub(crate) struct InitArgs {
     #[arg(long, value_name = "PATH", default_value = ".")]
     pub path: PathBuf,
 
-    /// Start from a built-in template. Help shows curated starters; experimental starters remain accepted but hidden.
+    /// Start from a built-in template.
     #[arg(
         long,
         value_parser = init_template_values()
@@ -400,9 +394,10 @@ mod tests {
     use clap::Parser;
 
     #[test]
-    fn hidden_experimental_template_is_still_accepted() {
-        let cli = Cli::try_parse_from(["statespace", "init", "--template", "clickhouse"]);
-
-        assert!(cli.is_ok());
+    fn all_templates_are_accepted() {
+        for name in statespace_templates::NAMES {
+            let cli = Cli::try_parse_from(["statespace", "init", "--template", name]);
+            assert!(cli.is_ok(), "template '{name}' should be accepted");
+        }
     }
 }

@@ -4,15 +4,28 @@ This Statespace application exposes content and commands over HTTP.
 
 ## Quick start
 
-1. **`GET /README.md`** — discover what this application does, root-level commands, and where to navigate.
-2. **Follow links** — `GET /{path}` to read any file (Markdown, data files, etc.).
+1. **`GET /`** — read the API instructions and discover what this application does.
+2. **Follow links** — `GET /{path}` to read any file.
 3. **Execute a command** — `POST /{path}` with `{"command": [...]}` where the command is declared in that page's frontmatter.
+
+## URL resolution
+
+- The same resolution rules apply to both `GET` and `POST`.
+- `POST` must resolve to a Markdown file - only Markdown pages declare tools in their frontmatter.
+
+| Request | Resolves to |
+|---|---|
+| `GET /` | `API.md` |
+| `GET /page` | `page`, then `page/README.md`, then `page.md` |
+| `GET /dir/` | `dir/README.md` |
+| `GET /page.md` | `page.md` |
+| `GET /file.txt` | `file.txt` |
 
 ## Command Rules
 
-Commands are declared in YAML frontmatter of Markdown pages.
-To execute a command, POST to the page path with the command array.
-For example, if `page.md` declares `[grep]`, POST `{"command": ["grep", ...]}` to `/page.md`.
+- Commands are declared in YAML frontmatter of Markdown pages.
+- To execute a command, `POST` to the page path with the command array.
+- For example, if `page.md` declares `[grep]`, POST `{"command": ["grep", ...]}` to `/page.md`.
 
 **Extra arguments are allowed by default**
 
