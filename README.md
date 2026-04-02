@@ -31,7 +31,7 @@
 
 Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
 Statespace lets you quickly turn that domain knowledge into APIs that AI agents can use to understand and query your databases.
-Once you’ve created an app, you can deploy, monitor, and share it with our [cloud platform](https://statespace.com/).
+Once you’ve created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
 
 ## Quickstart
 
@@ -57,7 +57,7 @@ Initialize a new project in the current directory:
 statespace init --template postgresql
 ```
 
-Templates define just enough tools and instructions for your agent to start exploring your data:
+Templates define just enough tools and instructions for your agent to start working on your API:
 
 ```yaml
 ---
@@ -73,35 +73,46 @@ tools:
 
 ### 2. Build it
 
-Work with your coding agent to document your schema, rules, and context: 
+Tell your coding agent what you know about your data:
 
 ```bash
-claude "Document my database's schema and add summarize script"
+claude "Help me document my database's schema, business rules, and context"
 ```
 
-Your agent will run your app locally and iterate on it until it looks something like this:
+Your agent will build, run, and test your API locally based on what you share:
 
 ```text
 my-app/
 ├── README.md
-├── summarize.py
-└── schema/
-    ├── users.md
-    └── products.md
+├── schema/
+│   ├── orders.md
+│   ├── customers.md
+│   └── products.md
+├── reports/
+│   ├── revenue/
+│   │   ├── monthly.md
+│   │   └── by_region.md
+│   ├── churn.md
+│   └── summarize.py
+├── queries/
+│   └── funnel.sql
+└── data/
+    ├── metrics.csv
+    └── segments.csv
 ```
 
 ### 3. Ship it
 
-Optionally, deploy your app to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Optionally, deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
 
 ```bash
 statespace deploy my-app/
 ```
 
-Then give other agents the API URL:
+Then share the API URL with other agents:
 
 ```bash
-claude "Use the API at https://my-app.statespace.app to find out the number of users"
+claude "Use the API at https://my-app.statespace.app to break down revenue by region for Q1"
 ```
 
 Or wire it up as an MCP server:
