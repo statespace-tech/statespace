@@ -10,6 +10,9 @@ This Statespace application exposes content and commands over HTTP.
 
 ## URL resolution
 
+- The same resolution rules apply to both `GET` and `POST`.
+- `POST` must resolve to a Markdown file - only Markdown pages declare tools in their frontmatter.
+
 | Request | Resolves to |
 |---|---|
 | `GET /` | `API.md` |
@@ -20,9 +23,9 @@ This Statespace application exposes content and commands over HTTP.
 
 ## Command Rules
 
-Commands are declared in YAML frontmatter of Markdown pages.
-To execute a command, POST to the page path with the command array.
-For example, if `page.md` declares `[grep]`, POST `{"command": ["grep", ...]}` to `/page.md`.
+- Commands are declared in YAML frontmatter of Markdown pages.
+- To execute a command, `POST` to the page path with the command array.
+- For example, if `page.md` declares `[grep]`, POST `{"command": ["grep", ...]}` to `/page.md`.
 
 **Extra arguments are allowed by default**
 

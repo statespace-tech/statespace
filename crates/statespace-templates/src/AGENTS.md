@@ -1,105 +1,68 @@
 # Statespace instructions
 
-This file guides local coding agents working on the app source tree. It is not the deployed HTTP API contract; see `API.md` for that.
+- This file guides coding agents working on a Statespace application.
+- Your job is to help the user create, iterate on, and deploy the app.
+- For the HTTP API contract, read `API.md`.
 
-Statespace lets you build self-documenting data apps that describe themselves to agents over HTTP. Apps expose content and tools that any agent can discover and use without prior knowledge.
+## Set up
 
-Before running any CLI command for the first time, run it with `--help` to see all available options and flags.
+- Check if the CLI is installed: `statespace --version`. If not: `curl -fsSL https://statespace.com/install.sh | sh`.
+- If the directory has no `AGENTS.md`, initialize it, preferrably from a template: `statespace init`
+- Read `README.md` to understand what the app needs to run — environment variables, local files, or nothing at all. Prompt the user for anything missing before continuing.
+- If the app uses environment variables, ask the user how they'd like to proceed:
+  - **Option 1** — ask for each value and write the `.env` file before continuing.
+  - **Option 2** — create a `.env` with empty values and wait for the user to fill them in before continuing.
+- Run any unfamiliar CLI commands with `--help` before using them.
 
-## Step 1: Install the CLI
+## Run the app
 
-Check if the CLI is already installed:
-
-```bash
-statespace --version
-```
-
-If not, install it:
-
-```bash
-curl -fsSL https://statespace.com/install.sh | sh
-```
-
-## Step 2: Initialize the project
-
-If the working directory already contains an `AGENTS.md` and `README.md`, the project is initialized — skip to Step 3. Otherwise, use `statespace init` to initialize the project.
-
-## Step 3: Set up the app
-
-Read the project's `README.md` to understand what the app needs to run. This could be environment variables, local files, or nothing at all. Prompt the user for anything that's missing before continuing.
-
-For environment variables, ask the user how they'd like to proceed:
-
-**Option 1 — Ask the user for each value** and write the `.env` file yourself before continuing.
-
-**Option 2 — Create a `.env` with empty values** and wait for the user to fill them in before continuing.
-
-If the app uses a `.env` file, start it with `statespace run --env-file .env` so those values are loaded explicitly.
-
-## Step 4: Iterate on the app
-
-Always interact with the user's data through the running app — never connect to it directly. The whole point of the app is to define and test the tools that will be used in production. Bypassing the app means you're not testing what will be deployed.
-
-Always use `curl` (or raw HTTP requests) to interact with Statespace apps. Web fetch tools that summarize pages will not work — you need unfiltered HTTP responses.
-
-Start by reading `README.md` to discover what the app does, its tools, and where to navigate:
+Start the app:
 
 ```bash
-curl http://localhost:8000/README.md
+statespace run .
+# or with env vars:
+statespace run --env-file .env .
 ```
+
+If the port is taken, try a different one with `--port`.
+
+Read the page to discover its contents:
+
+```bash
+curl http://localhost:8000/page.md
+```
+
+`GET` returns the raw file content (Markdown, plain text, etc.).
 
 Execute a tool declared on a page:
 
 ```bash
-curl -X POST http://localhost:8000/README.md \
+curl -X POST http://localhost:8000/page.md \
   -H "Content-Type: application/json" \
   -d '{"command": ["tool-name", "arg1", "arg2"]}'
 ```
 
-The response includes stdout, stderr, and the exit code:
+`POST` returns a JSON envelope:
 
 ```json
 {"data": {"stdout": "...", "stderr": "...", "returncode": 0}}
 ```
 
-Follow links to load additional pages only as needed as if you were an agent navigating the app for the first time. Edit app files, verify the results by curling the running app, get feedback from the user, and repeat. Changes are picked up live — no restart needed.
+- Use `curl` or raw HTTP requests — never use web fetch tools that summarize responses.
+- Changes are picked up live — no restart needed.
+- Stop the server when you're done working on the app.
 
-## Step 5: Deploy the app
+## Build the app
 
-Once you believe the user is satisfied, suggest deploying with `statespace deploy`, but don't be pushy about it. Check whether a `.statespace` directory exists in the project:
+- Never bypass the running app to connect to data sources directly — the app is what gets tested and deployed.
+- Work on local files, curl the running app to verify, get feedback from the user, and repeat.
+- When the user is satisfied, offer to deploy with `statespace deploy`.
 
-- **No `.statespace`:** this is a first deployment. Explain what deploying means: it publishes the app to a URL so it can be used without running anything locally — by the user, their team, or other agents — and it can be wired up as an MCP server. Apps can be public (accessible to anyone with the URL) or private (require a token). Make sure the user understands this before deploying, especially if the app connects to sensitive data. Share https://statespace.com so the user can create a free account if they don't have one.
-- **`.statespace` exists:** the app has been deployed before. Suggest re-deploying to push the latest changes.
+### Pages
 
-Before (re)deploying, make sure the `Dockerfile` is up to date. It defines the runtime image and must include every CLI tool the app relies on (e.g. `psql`, `mongosh`). If you added tools during iteration that aren't in the `Dockerfile`, add them before deploying.
+Pages are Markdown files — the frontmatter declares tools agents can call, the body contains instructions and components.
 
-
-For private apps, access requires a token. Tokens can be shared with teammates or other agents. Agents must include the token in requests:
-
-```bash
-curl -H "Authorization: Bearer <TOKEN>" https://<name>.statespace.app/README.md
-```
-
-Tokens have three scopes — choose the minimum needed:
-
-- `read` — fetch pages (GET only)
-- `execute` — fetch pages and call tools (GET + POST)
-- `admin` — full access including deployment
-
-Use `statespace tokens create` to create a token with the appropriate scope.
-
-## App protocol
-
-A Statespace app is a directory of files served over HTTP. Each Markdown file is a page. Pages have two parts:
-
-- **Frontmatter:** declares tools agents can call via POST
-- **Body:** instructions and components agents read via GET
-
-> **For URL resolution rules and tool invocation reference, read `API.md`.**
-
-### Tools
-
-Tools are CLI commands declared in the YAML frontmatter of a page:
+**Tools** — CLI commands agents can invoke via POST:
 
 ```markdown
 ---
@@ -113,45 +76,100 @@ tools:
 ...
 ```
 
-To execute a tool, POST `{"command": [...]}` to the path of the page that declares it. Commands run without a shell — each array element is a direct process argument (no expansion, pipes, or globbing).
+Commands run without a shell — each array element is a direct process argument (no expansion, pipes, or globbing).
 
-### Components
-
-Component code blocks run when the page is fetched. Their output replaces the block in the response:
+**Components** — shell commands that run on every GET and whose output replaces the block:
 
 ````markdown
-# This is an app
+# My page
 
 ```component
-echo "Server time: $(date)"
+echo "Row count: $(psql $DATABASE_URL -Atc 'SELECT COUNT(*) FROM users')"
 ```
 ````
 
-Agents see the output, not the command. Use components for live data that should be fresh every time the page loads (e.g. current time, row counts, recent logs).
-
-### Multi-page apps
-
-Large apps can be split across multiple pages. Link them from `README.md` or between pages:
+**Multi-page apps** — link pages for progressive disclosure:
 
 ```markdown
-# My App
-
-- See [search](pages/search.md) for search capabilities
-- See [analytics](pages/analytics.md) for reporting
+- See [schema](schema.md) for the data model
+- See [reports](reports.md) for reporting tools
+- Check out [summary](summary.txt) for an overview
 ```
 
-Load pages progressively — only fetch pages relevant to the current task.
+### Scripts & data files
 
-## Troubleshooting
+Apps aren't limited to Markdown — create scripts and data files as needed alongside your pages:
 
-**`400 Bad Request` on a tool call** — the command isn't declared in that page's frontmatter, or the arguments don't satisfy the constraints (missing placeholder, regex mismatch, extra args blocked by `;`). Check the frontmatter of the page you're POSTing to.
+```
+my-app/
+├── API.md
+├── README.md
+├── schema/
+│   ├── users.md
+│   └── orders.md
+├── reports/
+│   ├── summary.md
+│   └── generate.py
+└── data/
+    └── seed.csv
+```
 
-**`404 Not Found`** — the page path is wrong, or you're POSTing to a page that doesn't declare the tool you're trying to run. Tools must be called on the page that declares them.
+- Use scripts when logic is too complex to inline as a shell one-liner.
+- Use data files for static inputs (seed data, config, lookup tables).
+- Reference scripts and data files from tools or components using relative paths.
 
-**Environment variable not expanding** — make sure the variable is present in `.env` and that you started the server with `--env-file .env`. Restart the server if you added variables after it started.
+## Deploy
 
-**Server won't start (port in use)** — another process is on port 8000. Run `statespace run --help` and use `--port` to pick a different one.
+Before deploying, make sure the `Dockerfile` includes every CLI tool the app uses (e.g. `psql`, `mongosh`, `python3`).
 
-**curl returns unexpected results or an empty response** — you may be using a web fetch tool that summarizes responses. Use `curl` directly — Statespace apps require unfiltered HTTP responses.
+**First deployment** — no `.statespace` directory present:
 
-**`statespace deploy` fails with auth error** — run `statespace auth login` first, then retry.
+```bash
+statespace deploy --name my-app .
+```
+
+Use `--name` to set the app's URL (`<name>.statespace.app`). If omitted, a name is auto-generated.
+
+- This publishes the app to a URL accessible by the user, their team, or other agents.
+- Apps can be public (anyone can access) or private (requires an auth token).
+- The deployed app can also be wired up as an MCP server so other agents can use it directly.
+- If the app connects to sensitive data, warn the user about visibility before deploying.
+- Direct the user to https://statespace.com to create a free account if needed.
+
+**Re-deploying** — `.statespace` already exists:
+
+```bash
+statespace deploy .
+```
+
+**Private app tokens** — create a token with the minimum needed scope:
+
+```bash
+statespace tokens create my-token --scope read    # GET only
+statespace tokens create my-token --scope execute # GET + POST
+statespace tokens create my-token --scope admin   # full access
+```
+
+Agents include the token in requests:
+
+```bash
+curl -H "Authorization: Bearer <TOKEN>" https://<name>.statespace.app/
+```
+
+**Managing deployed apps:**
+
+```bash
+statespace app list              # list all deployed apps
+statespace app get <id>          # show details and URL
+statespace app restart <id>      # restart a running app
+statespace app delete <id>       # delete an app
+```
+
+## Troubleshoot
+
+- **`400 Bad Request`** — command not declared in frontmatter, or arguments don't satisfy constraints. Check the frontmatter of the page you're POSTing to.
+- **`404 Not Found`** — wrong path, or POSTing to a page that doesn't declare the tool. Tools must be called on the page that declares them.
+- **Env var not expanding** — make sure the var is in `.env` and you started with `--env-file .env`. Restart if you added vars after startup.
+- **Port in use** — use `statespace run --port <PORT> .` to pick a different one.
+- **Empty or summarized curl response** — you're using a web fetch tool. Use `curl` directly.
+- **`statespace deploy` auth error** — run `statespace auth login` first.
