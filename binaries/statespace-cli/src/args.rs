@@ -87,9 +87,6 @@ pub(crate) enum Commands {
         command: SshCommands,
     },
 
-    /// Print the agent-friendly guide (AGENTS.md).
-    Guide,
-
     /// Update this CLI to the latest version.
     Update,
 }

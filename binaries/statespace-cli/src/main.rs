@@ -69,11 +69,6 @@ async fn run() -> Result<()> {
             commands::tokens::run(command, build_gateway(&cloud)?).await
         }
 
-        Commands::Guide => {
-            commands::guide::run_guide();
-            Ok(())
-        }
-
         Commands::Update => commands::update::run_update().await,
 
         #[cfg(feature = "ssh")]
