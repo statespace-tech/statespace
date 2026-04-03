@@ -25,8 +25,8 @@ nav = [
     {"Security" = "pages/deploy/security.md"},
   ]},
   {"Connect" = [
-    {"Agents" = "pages/connect/agents.md"},
-    {"SSH" = "pages/connect/ssh.md"},
+    {"API" = "pages/connect/api.md"},
+    {"MCP" = "pages/connect/mcp.md"},
   ]},
   {"Reference" = [
     {"CLI" = "pages/reference/cli.md"},

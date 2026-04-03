@@ -63,6 +63,8 @@ tools:
 - Reference [documentation](https://www.postgresql.org/docs/) as needed
 ```
 
+> Note: Run `statespace init --help` to see all available templates.
+
 ### 2. Build it
 
 Tell your coding agent what you know about your data:
@@ -104,7 +106,7 @@ statespace deploy my-app/
 Then share the API URL with other agents:
 
 ```bash
-claude "Use the API at https://my-app.statespace.app to break down revenue by region for Q1"
+claude "Use the API at https://my-app.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
@@ -123,7 +125,7 @@ Or wire it up as an MCP server:
 - 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
 - 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
 - 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
-- 📖 **Composable** — split schemas across pages so agents load only what they need and save tokens
+- 📖 **Composable** — split your app across pages so agents load only what they need and save tokens
 - 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
 
 ## Community & Contributing

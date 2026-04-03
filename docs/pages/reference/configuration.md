@@ -16,7 +16,6 @@ email = "you@example.com"
 name = "Your Name"
 user_id = "user_123"
 
-[env]
 ```
 
 Override the default config for any command with `--config`:
@@ -54,12 +53,3 @@ user_id = "user_123"
 org_name = "Acme Corp"
 ```
 
-## `[env]`
-
-Environment variables set when serving or deploying apps:
-
-```toml
-[env]
-USER_NAME = "admin"
-LOG_LEVEL = "debug"
-```

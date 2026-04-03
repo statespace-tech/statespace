@@ -22,54 +22,15 @@ tools:
 - See [analyze](src/analyze.md) for more workflows
 ````
 
-## Base pages
+## App structure
 
-Every app requires a `README.md` and auto-generates an `AGENTS.md`:
+Every app is initialized with five base files:
 
-```
-app/
-├── AGENTS.md           # auto-generated, modify with caution!
-├── README.md           # required, you write this
-└── ...
-```
-
-Add general instructions and tools to your `README.md`:
-
-```yaml title="README.md"
----
-tools:
-  - [echo]
----
-
-# My app's README
-
-- You are a data analyst
-- Answer the user's prompt
-- Do not make assumptions
-```
-
-`AGENTS.md` teaches agents how to interact with your app through its [REST API](../reference/api.md):
-
-```markdown title="AGENTS.md"
-# App instructions
-
-This Statespace web application exposes content and tools over HTTP. Follow these instructions exactly.
-
-## Quick start
-
-1. **GET `/README.md`** — discover what this application does, root-level tools, and where to navigate.
-2. **Follow links** — GET any path to read content (Markdown, data files, etc.).
-3. **Execute tools** — POST to the page where the tool is declared with `{"command": ["tool-name", "arg1", "arg2"]}`.
-
-...
-```
-
-While `AGENTS.md` is served at the root URL for onboarding, `README.md` is served normally:
-
-```bash
-curl https://demo.statespace.app/            # returns AGENTS.md
-curl https://demo.statespace.app/README.md   # returns README.md
-```
+- **`README.md`** — the main page of your app. Add tools, components, and instructions here for agents consuming your API. You write and maintain this.
+- **`AGENTS.md`** — auto-generated instructions that teach coding agents how to build and work on the app via its [REST API](../reference/api.md). Served at the root URL (`/`).
+- **`CLAUDE.md`** — same content as `AGENTS.md`, picked up automatically by Claude Code when working inside the project directory.
+- **`API.md`** — the HTTP contract for the app. Documents URL resolution, request format, and response format for agents consuming the API.
+- **`.gitignore`** — pre-configured to exclude secrets, build artifacts, and editor files.
 
 ## Links
 
