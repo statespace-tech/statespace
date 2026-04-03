@@ -120,11 +120,11 @@ Or wire it up as an MCP server:
 
 ## Features
 
-- 🔌 **Any database** — works with any database that has a CLI: `psql`, `sqlite3`, `duckdb`, `mongosh`, `snowflake`, and more
-- 🔒 **Safe by default** — regex constraints mean agents can never run destructive queries, structurally, not just by prompt
-- 🧠 **Self-describing** — APIs act as both the documentation and the interface, so agents always know what they can do and how
-- 📖 **Progressive disclosure** — split schemas across pages so agents load only what they need and save tokens
-- 🚀 **Deploy and share** — publish your API to a URL, wire it up as an MCP server, or share with teammates
+- 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
+- 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
+- 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
+- 📖 **Composable** — split schemas across pages so agents load only what they need and save tokens
+- 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
 
 ## Community & Contributing
 
