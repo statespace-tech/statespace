@@ -11,10 +11,20 @@ release level:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Bump version + commit + tag (no publish — CI handles that)
-    cargo release --workspace --no-publish --execute {{level}}
+    PREV_HEAD=$(git rev-parse HEAD)
+    PREV_TAG=$(git describe --tags --abbrev=0)
 
+    # Bump version + commit + tag (no publish — CI handles that)
+    cargo release --workspace --no-publish --no-confirm --execute {{level}}
+
+    NEW_HEAD=$(git rev-parse HEAD)
     TAG=$(git describe --tags --abbrev=0)
+
+    if [ "$NEW_HEAD" = "$PREV_HEAD" ] || [ "$TAG" = "$PREV_TAG" ]; then
+        echo "Release did not create a new commit and tag; refusing to push or trigger CI."
+        exit 1
+    fi
+
     echo "Tag: ${TAG}"
 
     git push origin main --follow-tags
