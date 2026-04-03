@@ -11,7 +11,7 @@
 
 <br>
 
-*Tool-backed APIs for AI Agents*
+*Database APIs for AI Agents*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -51,8 +51,6 @@ statespace init --template postgresql
 ```
 
 Templates give your coding agent the tools and guardrails it needs to start exploring your database:
-
-A Statespace app is just Markdown that combines constrained tools with instructions for when and how to use them.
 
 ```yaml
 ---
