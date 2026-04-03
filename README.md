@@ -11,7 +11,7 @@
 
 <br>
 
-*Database APIs for AI Agents*
+*Tool-backed APIs for AI Agents*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -31,6 +31,7 @@
 
 Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
 Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
+The same pattern works for any CLI or SDK you can safely wrap, not just databases.
 Once you’ve created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
 
 ## Installation
@@ -50,6 +51,8 @@ statespace init --template postgresql
 ```
 
 Templates give your coding agent the tools and guardrails it needs to start exploring your database:
+
+A Statespace app is just Markdown that combines constrained tools with instructions for when and how to use them.
 
 ```yaml
 ---
@@ -109,6 +112,8 @@ claude "Use the API at https://my-app.statespace.app to break down revenue by re
 
 Or wire it up as an MCP server:
 
+That gives other agents the exact same constrained tool surface and instructions over MCP instead of relying on one local CLI setup.
+
 ```json
 "mcpServers": {
   "statespace": {
@@ -120,7 +125,7 @@ Or wire it up as an MCP server:
 
 ## Features
 
-- 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
+- 🔌 **Pluggable** — works with virtually any CLI or SDK, including databases, search backends, and observability tools
 - 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
 - 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
 - 📖 **Composable** — split schemas across pages so agents load only what they need and save tokens
