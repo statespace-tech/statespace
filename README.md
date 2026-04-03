@@ -30,34 +30,26 @@
 ---
 
 Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
-Statespace lets you quickly turn that domain knowledge into APIs that AI agents can use to understand and query your databases.
+Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
 Once you’ve created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
 
-## Quickstart
-
-Install the CLI: 
+## Installation
 
 ```bash
 curl -fsSL https://statespace.com/install.sh | bash
-```
-
-Then, pass the Statespace guide to your coding agent:
-
-```bash
-statespace guide | claude
 ```
 
 ## Example
 
 ### 1. Create it
 
-Initialize a new project in the current directory:
+Initialize a project from a template in the current directory:
 
 ```bash
 statespace init --template postgresql
 ```
 
-Templates define just enough tools and instructions for your agent to start working on your API:
+Templates give your coding agent the tools and guardrails it needs to start exploring your database:
 
 ```yaml
 ---
@@ -103,7 +95,7 @@ my-app/
 
 ### 3. Ship it
 
-Optionally, deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
 
 ```bash
 statespace deploy my-app/
@@ -118,11 +110,21 @@ claude "Use the API at https://my-app.statespace.app to break down revenue by re
 Or wire it up as an MCP server:
 
 ```json
-"statespace": {
-  "command": "npx",
-  "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+"mcpServers": {
+  "statespace": {
+    "command": "npx",
+    "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+  }
 }
 ```
+
+## Features
+
+- 🔌 **Any database** — works with any database that has a CLI: `psql`, `sqlite3`, `duckdb`, `mongosh`, `snowflake`, and more
+- 🔒 **Safe by default** — regex constraints mean agents can never run destructive queries, structurally, not just by prompt
+- 🧠 **Self-describing** — APIs act as both the documentation and the interface, so agents always know what they can do and how
+- 📖 **Progressive disclosure** — split schemas across pages so agents load only what they need and save tokens
+- 🚀 **Deploy and share** — publish your API to a URL, wire it up as an MCP server, or share with teammates
 
 ## Community & Contributing
 
