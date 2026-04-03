@@ -12,7 +12,7 @@ title: Get started
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
     <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
   </div>
-  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">A simpler way to build agent-native APIs.</p>
+  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Database APIs for AI Agents</p>
   <div style="margin-top: 1rem; display: flex; gap: 0.2rem; justify-content: center; flex-wrap: wrap;">
     <a href="https://github.com/statespace-tech/statespace/actions/workflows/test.yml"><img src="https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg" alt="Test Suite" /></a>
     <a href="https://github.com/statespace-tech/statespace/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-007ec6?style=flat-square" alt="License" /></a>
@@ -30,208 +30,119 @@ title: Get started
 
 ---
 
-Statespace is a Markdown framework for building REST APIs that agents can directly interact with. Build RAG, text-to-SQL, and knowledge base APIs for your agents — in pure Markdown. Once you’ve created an app, you can use our [cloud platform](https://statespace.com/) to deploy, manage, and share it.
+Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
+Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
+Once you've created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
 
+## Installation
+
+```bash
+curl -fsSL https://statespace.com/install.sh | bash
+```
 
 ## Example
 
 ### 1. Create it
 
-Create a file `README.md` with:
-
-````yaml title="README.md"
----
-tools:
-    - [date]
----
-
-```component
-echo "Hello, world!"
-```
-
-# Instructions
-- Use `date` to get the current timestamp
-````
-
-### 2. Run it
-
-Run the server with:
+Initialize a project from a template in the current directory:
 
 ```bash
-statespace serve .
+statespace init --template postgresql
 ```
 
-### 3. Ask it
+Templates give your coding agent the tools and guardrails it needs to start exploring your data:
 
-Pass the URL to your agents:
+```yaml title="README.md"
+---
+tools:
+  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
+---
 
-=== ":simple-claude: &nbsp; Claude Code"
+# Instructions
+- Explore the schema to understand the data model
+- Follow the user's instructions and answer their questions
+- Reference [documentation](https://www.postgresql.org/docs/) as needed
+```
 
-    ```bash
-    claude "What can I do with the API at http://127.0.0.1:8000?"
-    ```
+### 2. Build it
 
-=== ":simple-cursor: &nbsp; Cursor"
+Tell your coding agent what you know about your data:
 
-    ```bash
-    agent "What can I do with the API at http://127.0.0.1:8000?"
-    ```
+```bash
+claude "Help me document my database's schema, business rules, and context"
+```
 
-=== ":simple-githubcopilot: &nbsp; GitHub Copilot"
-
-    ```bash
-    copilot -p "What can I do with the API at http://127.0.0.1:8000?"
-    ```
-
-### 4. Update it
-
-Add data, scripts, and pages to your application:
+Your agent will build, run, and test your API locally based on what you share:
 
 ```text
-demo/
-├── README.md           # from above
-├── script.py
-├── data.db
-├── data/
-│   ├── log1.txt
-│   ├── log2.txt
-│   └── ...
-└── knowledge/
-    ├── kubernetes.md   # declares K8s tools
-    └── networking.md   # declares networking tools
+my-app/
+├── README.md
+├── schema/
+│   ├── orders.md
+│   ├── customers.md
+│   └── products.md
+├── reports/
+│   ├── revenue/
+│   │   ├── monthly.md
+│   │   └── by_region.md
+│   ├── churn.md
+│   └── summarize.py
+├── queries/
+│   └── funnel.sql
+└── data/
+    ├── metrics.csv
+    └── segments.csv
 ```
 
-Then, update `README.md` with more tools and instructions:
+### 3. Ship it
 
-````yaml hl_lines="4-6 15-19"
----
-tools:
-  - [date]
-  - [grep, -r]
-  - [python3, script.py, { }]
-  - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
----
-
-```component
-echo "Hello, world!"
-```
-
-# Instructions
-- Check the current timestamp with `date`
-- Search through files with `grep`
-- Analyze and summarize logs with `script.py`
-- Run read-only queries against `data.db`
-- Browse `./knowledge` for infrastructure context
-````
-
-### 5. Deploy it
-
-Optionally, create a free [Statespace account](https://statespace.com/auth/login) and deploy your app to the cloud:
+Deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
 
 ```bash
-statespace deploy . --public
+statespace deploy my-app/
 ```
 
-## Concepts
+Then share the API URL with other agents:
 
-=== ":lucide-wrench: &nbsp; Tools"
+```bash
+claude "Use the API at https://my-app.statespace.app to break down revenue by region"
+```
 
-    Give agents controlled access to CLI commands over HTTP. [Learn more](pages/develop/tools.md)
+Or wire it up as an MCP server:
 
-    ````yaml title="README.md" hl_lines="1-7"
-    ---
-    tools:
-      - [date]
-      - [grep, -r]
-      - [python3, script.py, { }]
-      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
-    ---
-
-    ```component
-    echo "Hello, world!"
-    ```
-
-    # Instructions
-    - Check the current timestamp with `date`
-    - Search through files with `grep`
-    - Analyze and summarize logs with `script.py`
-    - Run read-only queries against `data.db`
-    - Browse `./knowledge` for infrastructure context
-    ````
-
-=== ":lucide-sparkles: &nbsp; Components"
-
-    Render live data inside pages with `component` code blocks. [Learn more](pages/develop/components.md)
-
-    ````yaml title="README.md" hl_lines="9-11"
-    ---
-    tools:
-      - [date]
-      - [grep, -r]
-      - [python3, script.py, { }]
-      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
-    ---
-
-    ```component
-    echo "Hello, world!"
-    ```
-
-    # Instructions
-    - Check the current timestamp with `date`
-    - Search through files with `grep`
-    - Analyze and summarize logs with `script.py`
-    - Run read-only queries against `data.db`
-    - Browse `./knowledge` for infrastructure context
-    ````
-
-=== ":lucide-file-text: &nbsp; Instructions"
-
-    Guide agents through your data, workflows, and pages. [Learn more](pages/develop/instructions.md)
-
-    ````yaml title="README.md" hl_lines="13-18"
-    ---
-    tools:
-      - [date]
-      - [grep, -r]
-      - [python3, script.py, { }]
-      - [sqlite3, data.db, { regex: "^SELECT\\b.*" }]
-    ---
-
-    ```component
-    echo "Hello, world!"
-    ```
-
-    # Instructions
-    - Check the current timestamp with `date`
-    - Search through files with `grep`
-    - Analyze and summarize logs with `script.py`
-    - Run read-only queries against `data.db`
-    - Browse `./knowledge` for infrastructure context
-    ````
+```json
+"mcpServers": {
+  "statespace": {
+    "command": "npx",
+    "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+  }
+}
+```
 
 ## Features
 
-**Simple** - It's just Markdown. Easy to learn, easy to use, easy to maintain.
-
-**Lightweight** - [Install](install.md) a single, lightning-fast Rust binary. No dependencies.
-
-**Universal** - Works directly with [any agent](pages/connect/agents.md) that can make HTTP requests.
-
-**Portable** - [Run](pages/deploy/local_development.md) or [deploy](pages/deploy/cloud_deployment.md) your apps with a single CLI command.
-
-**Secure** - Restrict access to private apps with [token-based authentication](pages/deploy/security.md).
+- 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
+- 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
+- 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
+- 📖 **Composable** — split your app across pages so agents load only what they need and save tokens
+- 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
 
 ## Use cases
 
 <div class="grid cards" markdown style="grid-template-columns: repeat(3, 1fr);">
 
+-   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
+
+    ---
+
+    Query a database with natural language.
+
+
 -   :lucide-file-stack:{ .md .middle .jade } &nbsp; **RAG**
 
     ---
 
-    Search and analyze log files with `grep`.
-
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/rag)
+    Search and analyze files with `grep`.
 
 -   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
 
@@ -239,23 +150,11 @@ statespace deploy . --public
 
     Navigate a multi-page documentation tree.
 
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/knowledge_base)
-
--   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
-
-    ---
-
-    Query a SQLite database with natural language.
-
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/text_to_sql)
-
 -   :lucide-workflow:{ .md .middle .jade } &nbsp; **AI Workflows**
 
     ---
 
-    Chain API calls to track the ISS and its trajectory.
-
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/workflow)
+    Chain API calls to build complex workflows.
 
 -   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
 
@@ -263,15 +162,10 @@ statespace deploy . --public
 
     An agent skill for using the Statespace CLI.
 
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/agent_skill)
-
 -   :lucide-toolbox:{ .md .middle .jade } &nbsp; **Toolkits**
 
     ---
 
     Python scripts for querying Reddit.
 
-    [See example](https://github.com/statespace-tech/statespace/tree/main/examples/toolkit)
-
 </div>
-

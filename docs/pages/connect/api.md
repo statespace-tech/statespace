@@ -1,5 +1,5 @@
 ---
-icon: lucide/bot
+icon: lucide/plug
 ---
 
 # Agents
