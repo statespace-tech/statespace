@@ -13,7 +13,7 @@ Use the install script or install via Cargo:
 === ":octicons-terminal-16: Shell"
 
     ```bash
-    curl -fsSL https://statespace.com/install.sh | sh
+    curl -fsSL https://statespace.com/install.sh | bash
     ```
 
 === ":simple-rust: Cargo"

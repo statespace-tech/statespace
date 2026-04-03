@@ -342,7 +342,7 @@ main() {
     info "installing version: $version"
 
     TMP_DIR=$(mktemp -d) || error "failed to create temp directory"
-    chmod 700 -- "$TMP_DIR"
+    chmod 0700 "$TMP_DIR"
     trap 'rm -rf -- "$TMP_DIR"' EXIT
 
     local archive_name="${BINARY_NAME}-v${version}-${target}.tar.gz"
@@ -382,7 +382,7 @@ main() {
         rm -f -- "$tmp_bin"
         error "failed to extract binary"
     }
-    chmod 0755 -- "$tmp_bin"
+    chmod 0755 "$tmp_bin"
     mv -f -- "$tmp_bin" "$BIN_DIR/$BINARY_NAME" || error "failed to install binary"
 
     trap 'rm -rf -- "$TMP_DIR"' EXIT

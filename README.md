@@ -38,7 +38,7 @@ Once you’ve created an API, you can deploy and monitor it with our [cloud plat
 Install the CLI: 
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | sh
+curl -fsSL https://statespace.com/install.sh | bash
 ```
 
 Then, pass the Statespace guide to your coding agent:
