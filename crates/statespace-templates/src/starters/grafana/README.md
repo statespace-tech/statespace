@@ -31,21 +31,23 @@ curl http://127.0.0.1:8000/README.md
 
 ```text
 Use the app at http://127.0.0.1:8000/README.md.
-We saw elevated 500s from 1pm to 3pm UTC for gateway.
+We saw elevated 500s from 1pm to 3pm UTC for checkout-api.
 Start with Loki logs, narrow to the failing route or error family, then pivot to Tempo traces if needed.
 Summarize what changed and the likely root cause.
 ```
 
 ## Common Recipes
 
-### Recent Gateway Logs
+Replace `checkout-api` with your actual service name before running the examples below.
+
+### Recent Service Logs
 
 Use this when you want a quick feel for what the service is doing before you focus on errors.
 
 ```bash
 curl -X POST http://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"gateway\"}","--data-urlencode","since=15m","--data-urlencode","limit=20"]}'
+  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"checkout-api\"}","--data-urlencode","since=15m","--data-urlencode","limit=20"]}'
 ```
 
 ### Elevated 500s
@@ -55,7 +57,7 @@ Start with the simple literal filter. It works even when logs are not structured
 ```bash
 curl -X POST http://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"gateway\"} |= \"500\"","--data-urlencode","since=2h","--data-urlencode","limit=50"]}'
+  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"checkout-api\"} |= \"500\"","--data-urlencode","since=2h","--data-urlencode","limit=50"]}'
 ```
 
 If the logs are structured JSON, this usually gives a cleaner signal:
@@ -63,7 +65,7 @@ If the logs are structured JSON, this usually gives a cleaner signal:
 ```bash
 curl -X POST http://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"gateway\"} | json | status_code >= 500","--data-urlencode","since=2h","--data-urlencode","limit=50"]}'
+  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"checkout-api\"} | json | status_code >= 500","--data-urlencode","since=2h","--data-urlencode","limit=50"]}'
 ```
 
 ### Route Or Message Follow-Up
@@ -73,7 +75,7 @@ Once you know the suspicious route or string, add a literal filter.
 ```bash
 curl -X POST http://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"gateway\"} |= \"telemetry init failed\"","--data-urlencode","since=24h","--data-urlencode","limit=50"]}'
+  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$LOKI_QUERY_RANGE_URL","--data-urlencode","query={service_name=\"checkout-api\"} |= \"telemetry init failed\"","--data-urlencode","since=24h","--data-urlencode","limit=50"]}'
 ```
 
 ### Pivot To Traces
@@ -83,7 +85,7 @@ After Loki identifies the service or an error family, use Tempo to inspect match
 ```bash
 curl -X POST http://127.0.0.1:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$TEMPO_SEARCH_URL","--data-urlencode","q={ resource.service.name = \"gateway\" && span.http.status_code >= 500 }","--data-urlencode","limit=20","--data-urlencode","spss=3"]}'
+  -d '{"command":["curl","-sS","-G","-H","Authorization: Bearer $GRAFANA_TOKEN","$TEMPO_SEARCH_URL","--data-urlencode","q={ resource.service.name = \"checkout-api\" && span.http.status_code >= 500 }","--data-urlencode","limit=20","--data-urlencode","spss=3"]}'
 ```
 
 ## Required Environment Variables
@@ -96,14 +98,14 @@ curl -X POST http://127.0.0.1:8000/README.md \
 - `TEMPO_SEARCH_URL` usually looks like `https://<grafana-host>/api/datasources/proxy/uid/<tempo-uid>/api/search`.
 - Loki `query_range` accepts `query`, `limit`, `since`, `start`, `end`, and `direction`.
 - Useful LogQL starting points:
-  - `{service_name="gateway"}`
-  - `{service_name="gateway"} |= "500"`
-  - `{service_name="gateway"} | json | status_code >= 500`
-  - `{service_name="gateway"} |= "timeout"`
+  - `{service_name="checkout-api"}`
+  - `{service_name="checkout-api"} |= "500"`
+  - `{service_name="checkout-api"} | json | status_code >= 500`
+  - `{service_name="checkout-api"} |= "timeout"`
 - Useful TraceQL starting points:
-  - `{ resource.service.name = "gateway" }`
-  - `{ resource.service.name = "gateway" && span.http.status_code >= 500 }`
-  - `{ resource.service.name = "gateway" && name = "GET /health" }`
+  - `{ resource.service.name = "checkout-api" }`
+  - `{ resource.service.name = "checkout-api" && span.http.status_code >= 500 }`
+  - `{ resource.service.name = "checkout-api" && name = "POST /orders" }`
 - This starter stays close to raw Grafana APIs on purpose so agents do not have to learn a wrapper script first.
 
 ```component
