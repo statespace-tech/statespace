@@ -2,7 +2,7 @@
 icon: lucide/plug
 ---
 
-# Agents
+# API
 
 Connect agents to your applications.
 
