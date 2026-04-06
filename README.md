@@ -11,7 +11,7 @@
 
 <br>
 
-*Database APIs for AI Agents*
+*`curl` your filesystem and CLI tools*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,10 +29,7 @@
 
 ---
 
-Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
-Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
-The same pattern works for any CLI or SDK you can safely wrap, not just databases.
-Once you’ve created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
+Statespace lets you deploy and share filesystems and CLI tools HTTP, so any agent can `curl` them directly.
 
 ## Installation
 
@@ -50,7 +47,7 @@ Initialize a project from a template in the current directory:
 statespace init --template postgresql
 ```
 
-Templates give your coding agent the tools and guardrails it needs to start exploring your database:
+Each Markdown page in your app can expose CLI tools over HTTP.
 
 ```yaml
 ---
@@ -58,23 +55,44 @@ tools:
   - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
 ---
 
-# Instructions
-- Explore the schema to understand the data model
-- Follow the user's instructions and answer their questions
-- Reference [documentation](https://www.postgresql.org/docs/) as needed
+# Orders
+- `order_id` — primary key
+- `customer_id` — foreign key to customers
+- `status` — one of `pending`, `fulfilled`, `cancelled`
+- Revenue is `quantity * unit_price`, excluding cancelled orders
 ```
 
-> Note: Run `statespace init --help` to see all available templates.
+Any CLI tool works — `psql`, `curl`, `grep`, `python`, `gh`. The regex constraint means agents can only run what you allow.
 
-### 2. Build it
+### 2. Run it
 
-Tell your coding agent what you know about your data:
+Start the app locally:
+
+```bash
+statespace run my-app/ --port 8000
+```
+
+Any agent (or HTTP client) can now read pages and execute tools directly:
+
+```bash
+# Read a page
+curl http://localhost:8000/schema/orders.md
+
+# Execute a CLI tool
+curl -X POST http://localhost:8000/schema/orders.md \
+  -H "Content-Type: application/json" \
+  -d '{"command": ["psql", "-d", "$DATABASE_URL", "-c", "SELECT * FROM orders LIMIT 5"]}'
+```
+
+### 3. Build it
+
+Tell your coding agent what you want to share:
 
 ```bash
 claude "Help me document my database's schema, business rules, and context"
 ```
 
-Your agent will build, run, and test your API locally based on what you share:
+Your agent will build out the filesystem and tools based on what tell it:
 
 ```text
 my-app/
@@ -84,35 +102,35 @@ my-app/
 │   ├── customers.md
 │   └── products.md
 ├── reports/
-│   ├── revenue/
-│   │   ├── monthly.md
-│   │   └── by_region.md
-│   ├── churn.md
-│   └── summarize.py
-├── queries/
-│   └── funnel.sql
-└── data/
-    ├── metrics.csv
-    └── segments.csv
+│   ├── monthly.md
+│   └── churn.md
+└── queries/
+    └── funnel.sql
 ```
 
-### 3. Ship it
+### 4. Deploy it
 
-Deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Deploy to the cloud with a free [Statespace account](https://statespace.com/auth/login):
 
 ```bash
 statespace deploy my-app/
 ```
 
-Then share the API URL with other agents:
+Your filesystem and CLI tools are now live at a public URL:
+
+```bash
+curl https://my-app.statespace.app/schema/orders.md
+```
+
+### 5. Share it
+
+Point any agent at the URL directly:
 
 ```bash
 claude "Use the API at https://my-app.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
-
-That gives other agents the exact same constrained tool surface and instructions over MCP instead of relying on one local CLI setup.
 
 ```json
 "mcpServers": {
