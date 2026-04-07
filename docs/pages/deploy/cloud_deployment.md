@@ -39,7 +39,7 @@ To access **private** apps, include the token in the `Authorization` header:
 $ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
-You can manage deployed apps from the [CLI](../reference/cli.md#application-commands):
+You can manage deployed apps from the [CLI](../reference/cli.md#statespace-app):
 
 ```bash
 $ statespace app list
