@@ -4,7 +4,7 @@ icon: simple/modelcontextprotocol
 
 # Connect via MCP
 
-Statespace apps can be wired up as MCP (Model Context Protocol) servers, so agents can use them directly from their environment without making raw HTTP requests.
+Wire up any Statespace app as an MCP server so agents can use it directly from their environment.
 
 ## How it works
 

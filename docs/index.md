@@ -30,12 +30,12 @@ title: Get started
 
 ---
 
-Agents were trained on Unix and filesystems, not APIs and schemas. Statespace lets you serve your filesystem and CLI tools over HTTP, so any agent can directly `curl` them.
+Agents need your tools and data, but were trained on Unix and filesystems, not APIs and schemas. Statespace serves your filesystems and CLI tools over HTTP, so any agent can `curl` them directly.
 
 ## Installation
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | bash
+$ curl -fsSL https://statespace.com/install.sh | bash
 ```
 
 ## Quickstart
@@ -46,16 +46,6 @@ Run `statespace init` in the current directory:
 
 ```bash
 $ statespace init
-```
-
-Creates the following files:
-
-```
-.
-├── README.md     # CLI tools go here
-├── AGENTS.md     # coding agent instructions
-├── API.md        # HTTP contract
-└── ...
 ```
 
 ### 2. Build it
@@ -79,7 +69,7 @@ tools:
 Alternatively, let your coding agent build it out for you:
 
 ```bash
-claude "Document my database schema and add tools to query it"
+$ claude "Document my database schema and add tools to query it"
 ```
 
 ### 3. Run it
@@ -94,10 +84,10 @@ Agents and HTTP clients can now read pages and execute tools:
 
 ```bash
 # Read a page
-curl http://localhost:8000/README.md
+$ curl http://localhost:8000/README.md
 
 # Execute a CLI tool
-curl -X POST http://localhost:8000/README.md \
+$ curl -X POST http://localhost:8000/README.md \
   -H "Content-Type: application/json" \
   -d '{"command": ["grep", "-r", "revenue", "."]}'
 ```
@@ -107,13 +97,13 @@ curl -X POST http://localhost:8000/README.md \
 Deploy your app to the cloud:
 
 ```bash
-statespace deploy --name first-app
+$ statespace deploy --name demo
 ```
 
 Your filesystem and CLI tools are now live at a public URL:
 
 ```bash
-curl https://first-app.statespace.app/README.md
+$ curl https://demo.statespace.app/README.md
 ```
 
 ### 5. Share it
@@ -121,7 +111,7 @@ curl https://first-app.statespace.app/README.md
 Point any agent at the URL directly:
 
 ```bash
-claude "Use the API at https://first-app.statespace.app to break down revenue by region"
+$ claude "Use the API at https://demo.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
@@ -130,7 +120,7 @@ Or wire it up as an MCP server:
 "mcpServers": {
   "statespace": {
     "command": "npx",
-    "args": ["-y", "statespace-mcp", "https://first-app.statespace.app"]
+    "args": ["-y", "statespace-mcp", "https://demo.statespace.app"]
   }
 }
 ```
@@ -142,3 +132,11 @@ Or wire it up as an MCP server:
 - 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
 - 📖 **Composable** — split across pages so agents load only what they need and save tokens
 - 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
+
+## Next steps
+
+- Learn more about [filesystem](pages/develop/filesystem.md) and [CLI tools](pages/develop/cli_tools.md)
+- Run your app [locally](pages/deploy/local_development.md) or [deploy to the cloud](pages/deploy/cloud_deployment.md)
+- [Secure](pages/deploy/security.md) your apps with token-based authentication
+- Connect your agents directly to the [API](pages/connect/api.md) or through an [MCP server](pages/connect/mcp.md)
+- Explore Statespace's [commands](pages/reference/cli.md) and [HTTP API](pages/reference/api.md)

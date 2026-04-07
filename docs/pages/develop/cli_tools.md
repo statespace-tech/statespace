@@ -1,14 +1,14 @@
 ---
-icon: lucide/wrench
+icon: lucide/terminal
 ---
 
-# Tools
+# CLI tools
 
-Tools are CLI commands that agents can call through the app's [REST API](../reference/api.md#post-path).
+CLI tools let agents interact with your filesystem over HTTP.
 
-## Syntax
+## Overview
 
-List tools in the YAML frontmatter of Markdown pages:
+List tools in the YAML frontmatter of any Markdown page:
 
 ```yaml title="page.md" hl_lines="1-6"
 ---
@@ -20,6 +20,14 @@ tools:
 
 # Instructions
 - Use the provided tools
+```
+
+Agents invoke them via `POST`:
+
+```bash
+$ curl -X POST http://localhost:8000/README.md \
+  -H "Content-Type: application/json" \
+  -d '{"command": ["grep", "-r", "revenue", "."]}'
 ```
 
 By default, agents can append additional arguments to tool calls:
@@ -52,7 +60,7 @@ CORRECT:    {"command": ["ls", "src", "lib"]}  ← extra arguments are fine
 INCORRECT:  {"command": ["ls"]}                ← missing argument
 ```
 
-Tools run without shell interpretation, so placeholders are safe from command injections:
+Tools run without shell interpretation, so placeholders are safe from command injection:
 
 ```bash
 Tool:       [cat, { }]
@@ -80,8 +88,7 @@ Arguments that don't match the pattern are rejected:
 ```bash
 Tool:       [cat, { regex: ".*\\.txt$" }]
 CORRECT:    {"command": ["cat", "note.txt"]}
-CORRECT:    {"command": ["cat", "note.txt", "logs.csv"]}     ← extra arguments are fine
-INCORRECT:  {"command": ["cat", "note.py"]}                  ← doesn't match pattern
+INCORRECT:  {"command": ["cat", "note.py"]}   ← doesn't match pattern
 ```
 
 ## Options control
@@ -105,32 +112,64 @@ CORRECT:    {"command": ["rm", "file.txt"]}
 INCORRECT:  {"command": ["rm", "-f", "file.txt"]}  ← no extra arguments allowed
 ```
 
+## Components
+
+Components are shell commands that run on every `GET` and render their output inline:
+
+````markdown title="page.md"
+# Dashboard
+
+```component
+psql -c "SELECT COUNT(*) FROM orders"
+```
+````
+
+When a page loads, components are replaced with their output:
+
+```markdown title="page.md"
+# Dashboard
+
+42
+```
+
 ## Environment variables
 
-Reference environment `$VARIABLES` in your tools to hide secrets from agents:
+Reference environment `$VARIABLES` in tools and components to hide secrets from agents:
 
-```yaml
+````markdown title="page.md"
 ---
 tools:
   - [psql, -U, $USER, -d, $DB, -c, { }]
 ---
+
+```component
+echo "Connected as: $USER"
 ```
+
+# This is an example
+````
 
 [Configure them](../deploy/security.md#secrets) when serving or deploying apps:
 
 ```bash
-statespace {serve,deploy} --env USER=admin --env DB=mydb
-statespace {serve,deploy} --env-file .env
+$ statespace {serve,deploy} --env USER=admin --env DB=mydb
+$ statespace {serve,deploy} --env-file .env
 ```
 
-Alternatively, pass them in the request body of [tool calls](../reference/api.md#post):
+For tools, you can also pass them directly in the request body of [`POST` requests](../reference/api.md#post):
 
 ```bash
-curl -X POST \
+$ curl -X POST \
   -H "Content-Type: application/json" \
   "https://demo.statespace.app/page.md" \
   -d '{
     "command": ["psql", "-U", "$USER", "-d", "$DB", "-c", "SELECT * FROM users"],
     "env": {"USER": "admin", "DB": "mydb"}
   }'
+```
+
+And for components, you can pass them as query parameters in [`GET` requests](../reference/api.md#get):
+
+```bash
+$ curl "https://demo.statespace.app/page.md?USER=admin"
 ```

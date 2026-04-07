@@ -4,7 +4,7 @@ icon: lucide/plug
 
 # API
 
-Connect agents to your applications.
+Agents interact with Statespace apps over plain HTTP — `GET` to read a page, `POST` to run a tool.
 
 !!! warning "Warning"
 
