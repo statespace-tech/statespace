@@ -30,7 +30,7 @@ $ curl -X POST http://localhost:8000/README.md \
   -d '{"command": ["grep", "-r", "revenue", "."]}'
 ```
 
-By default, agents can append additional arguments to tool calls:
+By default, CLI tools accept additional arguments::
 
 ```bash
 Tool:    [ls]

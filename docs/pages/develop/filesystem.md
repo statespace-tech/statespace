@@ -4,7 +4,7 @@ icon: lucide/folder
 
 # Filesystem
 
-Statespace serves your filesystem over HTTP so agents can read and search files with `curl`
+Statespace serves files over HTTP so agents can read and search with `curl`.
 
 ## Overview
 
@@ -16,13 +16,13 @@ $ statespace init
 
 This creates the following files:
 
-- **`README.md`** — the main page of your app. Add tools, instructions, and links here.
+- **`README.md`** — the main page of your app. Add general tools, instructions, and links here.
 - **`AGENTS.md`** — instructions that teach coding agents how to build and serve on the app.
 - **`CLAUDE.md`** — same content as `AGENTS.md`, picked up automatically by Claude Code.
 - **`API.md`** — HTTP contract instructions for the agent. Served at the root URL (`/`).
 - **`.gitignore`** — pre-configured to exclude secrets and build artifacts.
 
-Agents read any file with a plain `GET`:
+Agents can read any file with a plain `GET`:
 
 ```bash
 $ curl http://localhost:8000/README.md
