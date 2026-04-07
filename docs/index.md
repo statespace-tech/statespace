@@ -62,7 +62,7 @@ Creates the following files:
 
 Add a `tools` block to `README.md` or any other Markdown file:
 
-```yaml
+```yaml title="README.md"
 ---
 tools:
   - [grep]
@@ -141,5 +141,4 @@ Or wire it up as an MCP server:
 - 🔒 **Safe by default** — regex constraints mean agents can only run what you explicitly allow
 - 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
 - 📖 **Composable** — split across pages so agents load only what they need and save tokens
-- 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
 - 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
