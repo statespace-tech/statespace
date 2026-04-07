@@ -1,5 +1,5 @@
 ---
-icon: lucide/terminal
+icon: lucide/chevrons-right
 ---
 
 # CLI reference

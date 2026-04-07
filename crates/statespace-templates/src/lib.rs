@@ -1,5 +1,8 @@
 //! Embedded templates written to new projects by `statespace init`.
 
+/// Default README written to new projects by `statespace init`.
+pub const README_MD: &str = include_str!("README.md");
+
 /// Instructions for coding agents on how to build and work with this app.
 pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 

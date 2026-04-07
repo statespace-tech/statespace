@@ -10,7 +10,7 @@ REST API for interacting with Statespace applications.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
-Read a file from the app's directory. Requesting `/` returns `AGENTS.md`.
+Read a file from the app's directory. Requesting `/` returns `API.md`.
 
 <div class="grid" markdown>
 

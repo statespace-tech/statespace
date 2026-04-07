@@ -12,7 +12,7 @@ title: Get started
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
     <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
   </div>
-  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Database APIs for AI Agents</p>
+  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);"><code>curl</code> your filesystem and CLI tools</p>
   <div style="margin-top: 1rem; display: flex; gap: 0.2rem; justify-content: center; flex-wrap: wrap;">
     <a href="https://github.com/statespace-tech/statespace/actions/workflows/test.yml"><img src="https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg" alt="Test Suite" /></a>
     <a href="https://github.com/statespace-tech/statespace/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-007ec6?style=flat-square" alt="License" /></a>
@@ -30,82 +30,88 @@ title: Get started
 
 ---
 
-Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
-Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
-Once you've created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
+Agents were trained on Unix and filesystems, not your APIs and schemas. Statespace serves your files and CLI tools over HTTP, so agents can discover and run them with nothing but `curl`.
 
 ## Installation
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | bash
+$ curl -fsSL https://statespace.com/install.sh | bash
 ```
 
-## Example
+## Quickstart
 
 ### 1. Create it
 
-Initialize a project from a template in the current directory:
+Run `statespace init` in the current directory:
 
 ```bash
-statespace init --template postgresql
-```
-
-Templates give your coding agent the tools and guardrails it needs to start exploring your data:
-
-```yaml title="README.md"
----
-tools:
-  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
----
-
-# Instructions
-- Explore the schema to understand the data model
-- Follow the user's instructions and answer their questions
-- Reference [documentation](https://www.postgresql.org/docs/) as needed
+$ statespace init
 ```
 
 ### 2. Build it
 
-Tell your coding agent what you know about your data:
+Add a `tools` block to `README.md` or any other Markdown file:
 
-```bash
-claude "Help me document my database's schema, business rules, and context"
+```yaml title="README.md"
+---
+tools:
+  - [grep]
+  - [python, scripts/summarize.py]
+  - [sqlite3, data/app.db, { regex: "^(SELECT|EXPLAIN)\\b.*" }]
+---
+
+# Instructions
+- Only run read-only queries against the database
+- Use `summarize.py` for aggregations and report generation
+- Use `grep` to search across local files and logs
 ```
 
-Your agent will build, run, and test your API locally based on what you share:
-
-```text
-my-app/
-├── README.md
-├── schema/
-│   ├── orders.md
-│   ├── customers.md
-│   └── products.md
-├── reports/
-│   ├── revenue/
-│   │   ├── monthly.md
-│   │   └── by_region.md
-│   ├── churn.md
-│   └── summarize.py
-├── queries/
-│   └── funnel.sql
-└── data/
-    ├── metrics.csv
-    └── segments.csv
-```
-
-### 3. Ship it
-
-Deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Alternatively, let your coding agent build it out for you:
 
 ```bash
-statespace deploy my-app/
+$ claude "Document my database schema and add tools to query it"
 ```
 
-Then share the API URL with other agents:
+### 3. Run it
+
+Run your app locally:
 
 ```bash
-claude "Use the API at https://my-app.statespace.app to break down revenue by region"
+$ statespace run --port 8000
+```
+
+Agents and HTTP clients can now read pages and execute tools:
+
+```bash
+# Read a page
+$ curl http://localhost:8000/README.md
+
+# Execute a CLI tool
+$ curl -X POST http://localhost:8000/README.md \
+  -H "Content-Type: application/json" \
+  -d '{"command": ["grep", "-r", "revenue", "."]}'
+```
+
+### 4. Deploy it
+
+Deploy your app to the cloud:
+
+```bash
+$ statespace deploy --name demo
+```
+
+Your filesystem and CLI tools are now live at a public URL:
+
+```bash
+$ curl https://demo.statespace.app/README.md
+```
+
+### 5. Share it
+
+Point any agent at the URL directly:
+
+```bash
+$ claude "Use the API at https://demo.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
@@ -114,58 +120,23 @@ Or wire it up as an MCP server:
 "mcpServers": {
   "statespace": {
     "command": "npx",
-    "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+    "args": ["-y", "statespace-mcp", "https://demo.statespace.app"]
   }
 }
 ```
 
 ## Features
 
-- 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
-- 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
-- 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
-- 📖 **Composable** — split your app across pages so agents load only what they need and save tokens
-- 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
+- 🔌 **Any CLI tool** — `psql`, `sqlite3`, `grep`, `python` — if it runs in a shell, it works
+- 🔒 **Safe by default** — regex constraints mean agents can only run what you explicitly allow
+- 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
+- 📖 **Composable** — split across pages so agents load only what they need and save tokens
+- 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
 
-## Use cases
+## Next steps
 
-<div class="grid cards" markdown style="grid-template-columns: repeat(3, 1fr);">
-
--   :lucide-database:{ .md .middle .jade } &nbsp; **Text-to-SQL**
-
-    ---
-
-    Query a database with natural language.
-
-
--   :lucide-file-stack:{ .md .middle .jade } &nbsp; **RAG**
-
-    ---
-
-    Search and analyze files with `grep`.
-
--   :lucide-library:{ .md .middle .jade } &nbsp; **Knowledge bases**
-
-    ---
-
-    Navigate a multi-page documentation tree.
-
--   :lucide-workflow:{ .md .middle .jade } &nbsp; **AI Workflows**
-
-    ---
-
-    Chain API calls to build complex workflows.
-
--   :lucide-sprout:{ .md .middle .jade } &nbsp; **Agent skills**
-
-    ---
-
-    An agent skill for using the Statespace CLI.
-
--   :lucide-toolbox:{ .md .middle .jade } &nbsp; **Toolkits**
-
-    ---
-
-    Python scripts for querying Reddit.
-
-</div>
+- Learn more about [filesystem](pages/develop/filesystem.md) and [CLI tools](pages/develop/cli_tools.md)
+- Run your app [locally](pages/deploy/local_development.md) or [deploy to the cloud](pages/deploy/cloud_deployment.md)
+- [Secure](pages/deploy/security.md) your apps with token-based authentication
+- Connect your agents directly to the [API](pages/connect/api.md) or through an [MCP server](pages/connect/mcp.md)
+- Explore Statespace's [commands](pages/reference/cli.md) and [HTTP API](pages/reference/api.md)

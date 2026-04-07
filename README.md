@@ -11,7 +11,7 @@
 
 <br>
 
-*Database APIs for AI Agents*
+*`curl` your filesystem and CLI tools*
 
 [![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
@@ -29,84 +29,88 @@
 
 ---
 
-Databases are a mess: schema names don't make sense, foreign keys are missing, and business context lives everywhere.
-Statespace lets you and your coding agent quickly turn that domain knowledge into APIs that any AI agent can query.
-Once you’ve created an API, you can deploy and monitor it with our [cloud platform](https://statespace.com/).
+Agents were trained on Unix and filesystems, not your APIs and schemas. Statespace serves your files and CLI tools over HTTP, so agents can discover and run them with nothing but `curl`.
 
 ## Installation
 
 ```bash
-curl -fsSL https://statespace.com/install.sh | bash
+$ curl -fsSL https://statespace.com/install.sh | bash
 ```
 
-## Example
+## Quickstart
 
 ### 1. Create it
 
-Initialize a project from a template in the current directory:
+Run `statespace init` in the current directory:
 
 ```bash
-statespace init --template postgresql
+$ statespace init
 ```
 
-Templates give your coding agent the tools and guardrails it needs to start exploring your database:
+### 2. Build it
+
+Add a `tools` block to `README.md` or any other Markdown file:
 
 ```yaml
 ---
 tools:
-  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
+  - [grep]
+  - [python, scripts/summarize.py]
+  - [sqlite3, data/app.db, { regex: "^(SELECT|EXPLAIN)\\b.*" }]
 ---
 
 # Instructions
-- Explore the schema to understand the data model
-- Follow the user's instructions and answer their questions
-- Reference [documentation](https://www.postgresql.org/docs/) as needed
+- Only run read-only queries against the database
+- Use `summarize.py` for aggregations and report generation
+- Use `grep` to search across local files and logs
 ```
 
-> Note: Run `statespace init --help` to see all available templates.
-
-### 2. Build it
-
-Tell your coding agent what you know about your data:
+Alternatively, let your coding agent build it out for you:
 
 ```bash
-claude "Help me document my database's schema, business rules, and context"
+$ claude "Document my database schema and add tools to query it"
 ```
 
-Your agent will build, run, and test your API locally based on what you share:
+### 3. Run it
 
-```text
-my-app/
-├── README.md
-├── schema/
-│   ├── orders.md
-│   ├── customers.md
-│   └── products.md
-├── reports/
-│   ├── revenue/
-│   │   ├── monthly.md
-│   │   └── by_region.md
-│   ├── churn.md
-│   └── summarize.py
-├── queries/
-│   └── funnel.sql
-└── data/
-    ├── metrics.csv
-    └── segments.csv
-```
-
-### 3. Ship it
-
-Deploy your API to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Run your app locally:
 
 ```bash
-statespace deploy my-app/
+$ statespace run --port 8000
 ```
 
-Then share the API URL with other agents:
+Agents and HTTP clients can now read pages and execute tools:
 
 ```bash
-claude "Use the API at https://my-app.statespace.app to break down revenue by region"
+# Read a page
+$ curl http://localhost:8000/README.md
+
+# Execute a CLI tool
+$ curl -X POST http://localhost:8000/README.md \
+  -H "Content-Type: application/json" \
+  -d '{"command": ["grep", "-r", "revenue", "."]}'
+```
+
+### 4. Deploy it
+
+Deploy your app to the cloud:
+
+```bash
+$ statespace deploy --name demo
+```
+
+Your filesystem and CLI tools are now live at a public URL:
+
+```bash
+$ curl https://demo.statespace.app/README.md
+```
+
+### 5. Share it
+
+Point any agent at the URL directly:
+
+```bash
+$ claude "Use the API at https://demo.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
@@ -115,18 +119,18 @@ Or wire it up as an MCP server:
 "mcpServers": {
   "statespace": {
     "command": "npx",
-    "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+    "args": ["-y", "statespace-mcp", "https://demo.statespace.app"]
   }
 }
 ```
 
 ## Features
 
-- 🔌 **Pluggable** — works with virtually any database that has a CLI or SDK
-- 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
-- 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
-- 📖 **Composable** — split your app across pages so agents load only what they need and save tokens
-- 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
+- 🔌 **Any CLI tool** — `psql`, `sqlite3`, `grep`, `python` — if it runs in a shell, it works
+- 🔒 **Safe by default** — regex constraints mean agents can only run what you explicitly allow
+- 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
+- 📖 **Composable** — split across pages so agents load only what they need and save tokens
+- 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
 
 ## Community & Contributing
 

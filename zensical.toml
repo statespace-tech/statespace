@@ -13,15 +13,13 @@ extra_javascript = [
 nav = [
   {"Get started" = "index.md"},
   {"Install" = "install.md"},
-  {"Overview" = "overview.md"},
   {"Develop" = [
-    {"Tools" = "pages/develop/tools.md"},
-    {"Components" = "pages/develop/components.md"},
-    {"Instructions" = "pages/develop/instructions.md"},
+    {"Filesystem" = "pages/develop/filesystem.md"},
+    {"CLI tools" = "pages/develop/cli_tools.md"},
   ]},
   {"Deploy" = [
-    {"Cloud deployment" = "pages/deploy/cloud_deployment.md"},
     {"Local development" = "pages/deploy/local_development.md"},
+    {"Cloud deployment" = "pages/deploy/cloud_deployment.md"},
     {"Security" = "pages/deploy/security.md"},
   ]},
   {"Connect" = [
@@ -29,8 +27,8 @@ nav = [
     {"MCP" = "pages/connect/mcp.md"},
   ]},
   {"Reference" = [
-    {"CLI" = "pages/reference/cli.md"},
-    {"REST API" = "pages/reference/api.md"},
+    {"Commands" = "pages/reference/cli.md"},
+    {"HTTP API" = "pages/reference/api.md"},
     {"Configuration" = "pages/reference/configuration.md"},
   ]},
 ]

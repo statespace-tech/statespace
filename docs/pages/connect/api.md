@@ -4,11 +4,7 @@ icon: lucide/plug
 
 # API
 
-Connect agents to your applications.
-
-!!! warning "Warning"
-
-    Always sandbox agents when connecting to public apps. Agents may have access to sensitive local data (e.g. environment variables, credentials, files), and a malicious app could use prompt injection to exfiltrate it.
+Agents can interact with Statespace apps over plain HTTP.
 
 ## Coding agents
 
@@ -85,4 +81,4 @@ response = httpx.request("GET", url=url, headers={"Authorization": "Bearer <TOKE
 
 !!! abstract "Work in progress"
 
-    Custom agents are the most secure option since tokens are injected directly into HTTP requests and never pass through the agent. We're working on similar guarantees for coding agents.
+    Custom agents are the most secure option since tokens are injected directly into HTTP requests and never pass through the agent. For coding agents, we recommend using [nv](https://github.com/statespace-tech/nv) to transparently inject secrets into HTTP requests without exposing them to the agent.
