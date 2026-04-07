@@ -137,7 +137,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         &files,
         deploy_env.as_ref(),
         visibility_value,
-        &cached,
+        cached.as_ref(),
         &target.name,
     );
 
@@ -145,7 +145,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         &checksums,
         deploy_env.as_ref(),
         visibility_value,
-        &cached,
+        cached.as_ref(),
         &target.name,
     ) {
         eprintln!("No changes detected, skipping deploy.");
@@ -192,19 +192,17 @@ fn build_checksums(
     files: &[ApplicationFile],
     deploy_env: Option<&HashMap<String, String>>,
     visibility_value: Option<&str>,
-    cached: &Option<DeployState>,
+    cached: Option<&DeployState>,
     target_name: &str,
 ) -> Vec<(String, String)> {
     let env_checksum = deploy_env.map(checksum_env_map);
     let persisted_env_checksum = env_checksum.clone().or_else(|| {
         cached
-            .as_ref()
             .filter(|prev| prev.name == target_name)
             .and_then(|prev| prev.checksums.get(ENV_STATE_CHECKSUM_KEY).cloned())
     });
     let persisted_visibility = visibility_value.or_else(|| {
         cached
-            .as_ref()
             .filter(|prev| prev.name == target_name)
             .and_then(|prev| prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str))
     });
@@ -226,10 +224,10 @@ fn has_changes(
     checksums: &[(String, String)],
     deploy_env: Option<&HashMap<String, String>>,
     visibility_value: Option<&str>,
-    cached: &Option<DeployState>,
+    cached: Option<&DeployState>,
     target_name: &str,
 ) -> bool {
-    let Some(prev) = cached.as_ref() else {
+    let Some(prev) = cached else {
         return true;
     };
     if prev.name != target_name {
