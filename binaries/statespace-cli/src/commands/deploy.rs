@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const ENV_STATE_CHECKSUM_KEY: &str = "__statespace_env__";
+const VISIBILITY_STATE_KEY: &str = "__statespace_visibility__";
 
 pub(crate) trait DeployGateway {
     fn upsert_application(
@@ -136,6 +137,17 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
             .and_then(|prev| prev.checksums.get(ENV_STATE_CHECKSUM_KEY).cloned())
     });
 
+    let visibility_value = visibility.map(|v| match v {
+        Visibility::Public => "public",
+        Visibility::Private => "private",
+    });
+    let persisted_visibility = visibility_value.or_else(|| {
+        cached
+            .as_ref()
+            .filter(|prev| prev.name == target.name)
+            .and_then(|prev| prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str))
+    });
+
     let mut checksums: Vec<(String, String)> = files
         .iter()
         .map(|f| (f.path.clone(), f.checksum.clone()))
@@ -143,18 +155,23 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
     if let Some(env_checksum) = &persisted_env_checksum {
         checksums.push((ENV_STATE_CHECKSUM_KEY.to_string(), env_checksum.clone()));
     }
+    if let Some(v) = persisted_visibility {
+        checksums.push((VISIBILITY_STATE_KEY.to_string(), v.to_string()));
+    }
+
+    let meta_keys = [ENV_STATE_CHECKSUM_KEY, VISIBILITY_STATE_KEY];
 
     if let Some(ref prev) = cached {
         if prev.name == target.name {
             let filtered_checksums: Vec<(&str, &str)> = checksums
                 .iter()
-                .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
+                .filter(|(path, _)| !meta_keys.contains(&path.as_str()))
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
             let prev_map: HashMap<&str, &str> = prev
                 .checksums
                 .iter()
-                .filter(|(path, _)| path.as_str() != ENV_STATE_CHECKSUM_KEY)
+                .filter(|(path, _)| !meta_keys.contains(&path.as_str()))
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
             let files_changed = filtered_checksums.len() != prev_map.len()
@@ -167,8 +184,14 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                     .map(String::as_str)
                     != Some(env_checksum.as_str())
             });
+            let visibility_changed = visibility_value.is_some_and(|v| {
+                prev.checksums
+                    .get(VISIBILITY_STATE_KEY)
+                    .map(String::as_str)
+                    != Some(v)
+            });
 
-            if !files_changed && !env_changed {
+            if !files_changed && !env_changed && !visibility_changed {
                 eprintln!("No changes detected, skipping deploy.");
                 return Ok(());
             }
