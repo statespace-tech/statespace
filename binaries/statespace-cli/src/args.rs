@@ -180,13 +180,13 @@ pub(crate) struct AppDeployArgs {
     #[arg(default_value = ".")]
     pub path: PathBuf,
 
-    /// Application visibility (default: public on free-tier, otherwise private).
-    #[arg(long, value_enum)]
-    pub visibility: Option<Visibility>,
-
     /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]
     pub name: Option<String>,
+
+    /// Application visibility.
+    #[arg(long, value_enum)]
+    pub visibility: Option<Visibility>,
 
     /// Environment variables for deployed app secrets (KEY=VALUE)
     #[arg(long = "env", short = 'e', value_name = "KEY=VALUE")]
