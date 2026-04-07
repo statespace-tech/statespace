@@ -129,70 +129,27 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         eprintln!("No files found in {}", dir.display());
         return Ok(());
     }
-    let env_checksum = deploy_env.as_ref().map(checksum_env_map);
-    let persisted_env_checksum = env_checksum.clone().or_else(|| {
-        cached
-            .as_ref()
-            .filter(|prev| prev.name == target.name)
-            .and_then(|prev| prev.checksums.get(ENV_STATE_CHECKSUM_KEY).cloned())
-    });
-
     let visibility_value = visibility.map(|v| match v {
         Visibility::Public => "public",
         Visibility::Private => "private",
     });
-    let persisted_visibility = visibility_value.or_else(|| {
-        cached
-            .as_ref()
-            .filter(|prev| prev.name == target.name)
-            .and_then(|prev| prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str))
-    });
+    let checksums = build_checksums(
+        &files,
+        deploy_env.as_ref(),
+        visibility_value,
+        &cached,
+        &target.name,
+    );
 
-    let mut checksums: Vec<(String, String)> = files
-        .iter()
-        .map(|f| (f.path.clone(), f.checksum.clone()))
-        .collect();
-    if let Some(env_checksum) = &persisted_env_checksum {
-        checksums.push((ENV_STATE_CHECKSUM_KEY.to_string(), env_checksum.clone()));
-    }
-    if let Some(v) = persisted_visibility {
-        checksums.push((VISIBILITY_STATE_KEY.to_string(), v.to_string()));
-    }
-
-    let meta_keys = [ENV_STATE_CHECKSUM_KEY, VISIBILITY_STATE_KEY];
-
-    if let Some(ref prev) = cached {
-        if prev.name == target.name {
-            let filtered_checksums: Vec<(&str, &str)> = checksums
-                .iter()
-                .filter(|(path, _)| !meta_keys.contains(&path.as_str()))
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            let prev_map: HashMap<&str, &str> = prev
-                .checksums
-                .iter()
-                .filter(|(path, _)| !meta_keys.contains(&path.as_str()))
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect();
-            let files_changed = filtered_checksums.len() != prev_map.len()
-                || filtered_checksums
-                    .iter()
-                    .any(|(p, c)| prev_map.get(p) != Some(c));
-            let env_changed = env_checksum.as_ref().is_some_and(|env_checksum| {
-                prev.checksums
-                    .get(ENV_STATE_CHECKSUM_KEY)
-                    .map(String::as_str)
-                    != Some(env_checksum.as_str())
-            });
-            let visibility_changed = visibility_value.is_some_and(|v| {
-                prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str) != Some(v)
-            });
-
-            if !files_changed && !env_changed && !visibility_changed {
-                eprintln!("No changes detected, skipping deploy.");
-                return Ok(());
-            }
-        }
+    if !has_changes(
+        &checksums,
+        deploy_env.as_ref(),
+        visibility_value,
+        &cached,
+        &target.name,
+    ) {
+        eprintln!("No changes detected, skipping deploy.");
+        return Ok(());
     }
 
     eprintln!(
@@ -229,6 +186,79 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
     save_state(&dir, &state)?;
 
     Ok(())
+}
+
+fn build_checksums(
+    files: &[ApplicationFile],
+    deploy_env: Option<&HashMap<String, String>>,
+    visibility_value: Option<&str>,
+    cached: &Option<DeployState>,
+    target_name: &str,
+) -> Vec<(String, String)> {
+    let env_checksum = deploy_env.map(checksum_env_map);
+    let persisted_env_checksum = env_checksum.clone().or_else(|| {
+        cached
+            .as_ref()
+            .filter(|prev| prev.name == target_name)
+            .and_then(|prev| prev.checksums.get(ENV_STATE_CHECKSUM_KEY).cloned())
+    });
+    let persisted_visibility = visibility_value.or_else(|| {
+        cached
+            .as_ref()
+            .filter(|prev| prev.name == target_name)
+            .and_then(|prev| prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str))
+    });
+
+    let mut checksums: Vec<(String, String)> = files
+        .iter()
+        .map(|f| (f.path.clone(), f.checksum.clone()))
+        .collect();
+    if let Some(c) = &persisted_env_checksum {
+        checksums.push((ENV_STATE_CHECKSUM_KEY.to_string(), c.clone()));
+    }
+    if let Some(v) = persisted_visibility {
+        checksums.push((VISIBILITY_STATE_KEY.to_string(), v.to_string()));
+    }
+    checksums
+}
+
+fn has_changes(
+    checksums: &[(String, String)],
+    deploy_env: Option<&HashMap<String, String>>,
+    visibility_value: Option<&str>,
+    cached: &Option<DeployState>,
+    target_name: &str,
+) -> bool {
+    let Some(prev) = cached.as_ref() else {
+        return true;
+    };
+    if prev.name != target_name {
+        return true;
+    }
+    let meta_keys = [ENV_STATE_CHECKSUM_KEY, VISIBILITY_STATE_KEY];
+    let current: Vec<(&str, &str)> = checksums
+        .iter()
+        .filter(|(k, _)| !meta_keys.contains(&k.as_str()))
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let prev_map: HashMap<&str, &str> = prev
+        .checksums
+        .iter()
+        .filter(|(k, _)| !meta_keys.contains(&k.as_str()))
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let files_changed =
+        current.len() != prev_map.len() || current.iter().any(|(p, c)| prev_map.get(p) != Some(c));
+    let env_checksum = deploy_env.map(checksum_env_map);
+    let env_changed = env_checksum.as_ref().is_some_and(|ec| {
+        prev.checksums
+            .get(ENV_STATE_CHECKSUM_KEY)
+            .map(String::as_str)
+            != Some(ec.as_str())
+    });
+    let visibility_changed = visibility_value
+        .is_some_and(|v| prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str) != Some(v));
+    files_changed || env_changed || visibility_changed
 }
 
 async fn sync_application_secrets(
