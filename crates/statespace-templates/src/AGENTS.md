@@ -2,7 +2,7 @@
 
 - This file guides coding agents working on a Statespace application.
 - Your job is to help the user create, iterate on, and deploy the app.
-- For the HTTP API contract, read `API.md`.
+- For the HTTP API contract, read `llms.txt`.
 
 ## Set up
 
@@ -102,7 +102,7 @@ Apps aren't limited to Markdown — create scripts and data files as needed alon
 
 ```text
 my-app/
-├── API.md
+├── llms.txt
 ├── README.md
 ├── schema/
 │   ├── users.md

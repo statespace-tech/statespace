@@ -10,7 +10,7 @@ pub const AGENTS_MD: &str = include_str!("AGENTS.md");
 pub const GITIGNORE: &str = include_str!(".gitignore");
 
 /// App API documentation served at the root of deployed apps.
-pub const API_MD: &str = include_str!("API.md");
+pub const LLMS_TXT: &str = include_str!("llms.txt");
 
 /// A bundled app starter (README.md + optional Dockerfile).
 #[derive(Debug)]

@@ -1,7 +1,7 @@
 use crate::args::InitArgs;
 use crate::error::{Error, Result};
 use inquire::Confirm;
-use statespace_templates::{AGENTS_MD, API_MD, GITIGNORE, README_MD};
+use statespace_templates::{AGENTS_MD, GITIGNORE, LLMS_TXT, README_MD};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -94,8 +94,8 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<()> {
         created.push("CLAUDE.md");
     }
 
-    if write_if_confirmed(&output.join("API.md"), API_MD, args.yes)? {
-        created.push("API.md");
+    if write_if_confirmed(&output.join("llms.txt"), LLMS_TXT, args.yes)? {
+        created.push("llms.txt");
     }
 
     if merge_gitignore(&output.join(".gitignore"), GITIGNORE)? {
@@ -133,7 +133,7 @@ mod tests {
         assert!(dir.path().join("README.md").exists());
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(dir.path().join("CLAUDE.md").exists());
-        assert!(dir.path().join("API.md").exists());
+        assert!(dir.path().join("llms.txt").exists());
         assert!(dir.path().join(".gitignore").exists());
         assert!(!dir.path().join("Dockerfile").exists());
     }
@@ -167,7 +167,7 @@ mod tests {
         assert!(dir.path().join("README.md").exists());
         assert!(dir.path().join("AGENTS.md").exists());
         assert!(dir.path().join("CLAUDE.md").exists());
-        assert!(dir.path().join("API.md").exists());
+        assert!(dir.path().join("llms.txt").exists());
         assert!(dir.path().join(".gitignore").exists());
         assert!(dir.path().join("Dockerfile").exists());
 

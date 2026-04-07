@@ -19,7 +19,7 @@ This creates the following files:
 - **`README.md`** — the main page of your app. Add general tools, instructions, and links here.
 - **`AGENTS.md`** — instructions that teach coding agents how to build and serve on the app.
 - **`CLAUDE.md`** — same content as `AGENTS.md`, picked up automatically by Claude Code.
-- **`API.md`** — HTTP contract instructions for the agent. Served at the root URL (`/`).
+- **`llms.txt`** — HTTP contract instructions for the agent. Served at the root URL (`/`).
 - **`.gitignore`** — pre-configured to exclude secrets and build artifacts.
 
 Agents can read any file with a plain `GET`:

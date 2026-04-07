@@ -15,7 +15,7 @@ This Statespace application exposes content and commands over HTTP.
 
 | Path             | Resolves to                                    |
 |------------------|------------------------------------------------|
-| `/`              | `API.md`                                       |
+| `/`              | `llms.txt`                                       |
 | `/page`          | `page`, then `page/README.md`, then `page.md`  |
 | `/dir/`          | `dir/README.md`                                |
 | `/page.md`       | `page.md`                                      |
