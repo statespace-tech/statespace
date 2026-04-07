@@ -1,7 +1,7 @@
 use crate::args::InitArgs;
 use crate::error::{Error, Result};
 use inquire::Confirm;
-use statespace_templates::{AGENTS_MD, API_MD, GITIGNORE};
+use statespace_templates::{AGENTS_MD, API_MD, GITIGNORE, README_MD};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -77,7 +77,7 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<()> {
                 .ok_or_else(|| Error::cli(format!("unknown template: {template}")))?;
             (t.readme.to_string(), t.dockerfile.map(str::to_string))
         }
-        None => (String::new(), None),
+        None => (README_MD.to_string(), None),
     };
 
     let mut created: Vec<&str> = Vec::new();
@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn readme_is_blank_by_default() {
+    fn readme_uses_default_template() {
         let dir = TempDir::new().unwrap();
         let args = InitArgs {
             path: dir.path().to_path_buf(),
@@ -150,7 +150,7 @@ mod tests {
         run_init(&args).unwrap();
 
         let content = fs::read_to_string(dir.path().join("README.md")).unwrap();
-        assert!(content.is_empty());
+        assert!(content.contains("grep"));
     }
 
     #[test]
