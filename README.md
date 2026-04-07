@@ -29,7 +29,9 @@
 
 ---
 
-Statespace lets you deploy and share filesystems and CLI tools HTTP, so any agent can `curl` them directly.
+
+Agents were trained on Unix and filesystems, not APIs and schemas. Statespace lets you serve your filesystem and CLI tools over HTTP, so any agent can directly `curl` them.
+
 
 ## Installation
 
@@ -37,89 +39,82 @@ Statespace lets you deploy and share filesystems and CLI tools HTTP, so any agen
 curl -fsSL https://statespace.com/install.sh | bash
 ```
 
-## Example
+## Quickstart
 
 ### 1. Create it
 
-Initialize a project from a template in the current directory:
+Run `statespace init` in the current directory:
 
 ```bash
-statespace init --template postgresql
+$ statespace init
 ```
 
-Each Markdown page in your app can expose CLI tools over HTTP.
+Creates the following files:
+
+```
+.
+├── README.md     # CLI tools go here
+├── AGENTS.md     # coding agent instructions
+├── API.md        # HTTP contract
+└── ...
+```
+
+### 2. Build it
+
+Add a `tools` block to `README.md` or any other Markdown file:
 
 ```yaml
 ---
 tools:
-  - [psql, -d, $DATABASE_URL, -c, { regex: "^(SELECT|SHOW|EXPLAIN)\\b.*" }, ;]
+  - [grep]
+  - [python, scripts/summarize.py]
+  - [sqlite3, data/app.db, { regex: "^(SELECT|EXPLAIN)\\b.*" }]
 ---
 
-# Orders
-- `order_id` — primary key
-- `customer_id` — foreign key to customers
-- `status` — one of `pending`, `fulfilled`, `cancelled`
-- Revenue is `quantity * unit_price`, excluding cancelled orders
+# Instructions
+- Only run read-only queries against the database
+- Use `summarize.py` for aggregations and report generation
+- Use `grep` to search across local files and logs
 ```
 
-Any CLI tool works — `psql`, `curl`, `grep`, `python`, `gh`. The regex constraint means agents can only run what you allow.
-
-### 2. Run it
-
-Start the app locally:
+Alternatively, let your coding agent build it out for you:
 
 ```bash
-statespace run my-app/ --port 8000
+claude "Document my database schema and add tools to query it"
 ```
 
-Any agent (or HTTP client) can now read pages and execute tools directly:
+### 3. Run it
+
+Run your app locally:
+
+```bash
+$ statespace run --port 8000
+```
+
+Agents and HTTP clients can now read pages and execute tools:
 
 ```bash
 # Read a page
-curl http://localhost:8000/schema/orders.md
+curl http://localhost:8000/README.md
 
 # Execute a CLI tool
-curl -X POST http://localhost:8000/schema/orders.md \
+curl -X POST http://localhost:8000/README.md \
   -H "Content-Type: application/json" \
-  -d '{"command": ["psql", "-d", "$DATABASE_URL", "-c", "SELECT * FROM orders LIMIT 5"]}'
-```
-
-### 3. Build it
-
-Tell your coding agent what you want to share:
-
-```bash
-claude "Help me document my database's schema, business rules, and context"
-```
-
-Your agent will build out the filesystem and tools based on what tell it:
-
-```text
-my-app/
-├── README.md
-├── schema/
-│   ├── orders.md
-│   ├── customers.md
-│   └── products.md
-├── reports/
-│   ├── monthly.md
-│   └── churn.md
-└── queries/
-    └── funnel.sql
+  -d '{"command": ["grep", "-r", "revenue", "."]}'
 ```
 
 ### 4. Deploy it
 
-Deploy to the cloud with a free [Statespace account](https://statespace.com/auth/login):
+Deploy your app to the cloud:
 
 ```bash
-statespace deploy my-app/
+statespace deploy --name first-app
 ```
 
 Your filesystem and CLI tools are now live at a public URL:
 
 ```bash
-curl https://my-app.statespace.app/schema/orders.md
+curl https://first-app.statespace.app/README.md
 ```
 
 ### 5. Share it
@@ -127,7 +122,7 @@ curl https://my-app.statespace.app/schema/orders.md
 Point any agent at the URL directly:
 
 ```bash
-claude "Use the API at https://my-app.statespace.app to break down revenue by region"
+claude "Use the API at https://first-app.statespace.app to break down revenue by region"
 ```
 
 Or wire it up as an MCP server:
@@ -136,18 +131,18 @@ Or wire it up as an MCP server:
 "mcpServers": {
   "statespace": {
     "command": "npx",
-    "args": ["-y", "statespace-mcp", "https://my-app.statespace.app"]
+    "args": ["-y", "statespace-mcp", "https://first-app.statespace.app"]
   }
 }
 ```
 
 ## Features
 
-- 🔌 **Pluggable** — works with virtually any CLI or SDK, including databases, search backends, and observability tools
-- 🔒 **Safe** — tool constraints like regex mean agents can never run destructive queries
-- 🧠 **Self-describing** — APIs are both the documentation and the interface for your databases
-- 📖 **Composable** — split your app across pages so agents load only what they need and save tokens
-- 🚀 **Shareable** — publish your API to a URL, wire it up as an MCP server, or share with teammates
+- 🔌 **Any CLI tool** — `psql`, `sqlite3`, `grep`, `python` — if it runs in a shell, it works
+- 🔒 **Safe by default** — regex constraints mean agents can only run what you explicitly allow
+- 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
+- 📖 **Composable** — split across pages so agents load only what they need and save tokens
+- 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
 
 ## Community & Contributing
 
