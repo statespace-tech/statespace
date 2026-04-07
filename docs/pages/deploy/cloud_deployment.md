@@ -16,7 +16,7 @@ Deploy apps to get a shareable URL.
 Run `statespace deploy` to deploy your app:
 
 ```bash
-statespace deploy ./myapp
+$ statespace deploy ./myapp
 Creating 'myapp'...
 
   ID:  myapp
@@ -29,22 +29,22 @@ Creating 'myapp'...
 Apps can be **public** (anyone can access) or **private** (requires an [access token](security.md#access-tokens)):
 
 ```bash
-statespace deploy ./myapp --visibility public
-statespace deploy ./myapp --visibility private
+$ statespace deploy ./myapp --visibility public
+$ statespace deploy ./myapp --visibility private
 ```
 
 To access **private** apps, include the token in the `Authorization` header:
 
 ```bash
-curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
+$ curl -H "Authorization: Bearer <TOKEN>" https://myapp.statespace.app
 ```
 
-You can manage deployed apps from the [CLI](../reference/cli.md#app-management):
+You can manage deployed apps from the [CLI](../reference/cli.md#application-commands):
 
 ```bash
-statespace app list
-statespace app get <APP>
-statespace app delete <APP>
+$ statespace app list
+$ statespace app get <APP>
+$ statespace app delete <APP>
 ```
 
 ## Naming
@@ -52,7 +52,7 @@ statespace app delete <APP>
 Use `--name` (or `-n`) to give your app a specific name:
 
 ```bash
-statespace deploy ./myapp --name my-cool-project
+$ statespace deploy ./myapp --name my-cool-project
 Deploying 7 files to 'my-cool-project'...
 Created application 'my-cool-project'
 URL: https://my-cool-project.statespace.app

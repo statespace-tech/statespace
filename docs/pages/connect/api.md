@@ -4,11 +4,7 @@ icon: lucide/plug
 
 # API
 
-Agents interact with Statespace apps over plain HTTP — `GET` to read a page, `POST` to run a tool.
-
-!!! warning "Warning"
-
-    Always sandbox agents when connecting to public apps. Agents may have access to sensitive local data (e.g. environment variables, credentials, files), and a malicious app could use prompt injection to exfiltrate it.
+Agents can interact with Statespace apps over plain HTTP.
 
 ## Coding agents
 

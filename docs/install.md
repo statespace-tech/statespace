@@ -13,13 +13,13 @@ Use the install script or install via Cargo:
 === ":octicons-terminal-16: Shell"
 
     ```bash
-    curl -fsSL https://statespace.com/install.sh | bash
+    $ curl -fsSL https://statespace.com/install.sh | bash
     ```
 
 === ":simple-rust: Cargo"
 
     ```bash
-    cargo install statespace
+    $ cargo install statespace
     ```
 
 ## Verify installation
@@ -27,5 +27,5 @@ Use the install script or install via Cargo:
 Check that Statespace is installed correctly:
 
 ```bash
-statespace --version
+$ statespace --version
 ```

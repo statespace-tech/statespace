@@ -30,7 +30,7 @@ $ curl -X POST http://localhost:8000/README.md \
   -d '{"command": ["grep", "-r", "revenue", "."]}'
 ```
 
-By default, CLI tools accept additional arguments::
+By default, CLI tools accept additional arguments:
 
 ```bash
 Tool:    [ls]
