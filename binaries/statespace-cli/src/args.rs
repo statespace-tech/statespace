@@ -4,6 +4,8 @@ use clap::{
 };
 use std::path::PathBuf;
 
+use crate::gateway::applications::Visibility;
+
 fn init_template_values() -> PossibleValuesParser {
     PossibleValuesParser::new(
         statespace_templates::NAMES
@@ -177,6 +179,10 @@ pub(crate) struct AppDeployArgs {
     /// exclusions can be defined in .gitignore.
     #[arg(default_value = ".")]
     pub path: PathBuf,
+
+    /// Application visibility (default: public on free-tier, otherwise private).
+    #[arg(long, value_enum)]
+    pub visibility: Option<Visibility>,
 
     /// Application name. Creates a new app with a random name if omitted.
     #[arg(long, short)]

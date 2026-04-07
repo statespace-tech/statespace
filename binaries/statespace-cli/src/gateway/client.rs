@@ -121,10 +121,13 @@ impl GatewayClient {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
+        visibility: Option<crate::gateway::applications::Visibility>,
     ) -> Result<UpsertResult> {
         #[derive(Serialize)]
         struct Payload {
             files: Vec<ApplicationFile>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            visibility: Option<crate::gateway::applications::Visibility>,
         }
 
         let url = format!(
@@ -134,7 +137,7 @@ impl GatewayClient {
         );
         let resp = self
             .with_headers(self.http.put(&url))
-            .json(&Payload { files })
+            .json(&Payload { files, visibility })
             .send()
             .await?;
 

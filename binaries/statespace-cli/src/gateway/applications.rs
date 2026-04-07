@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -18,6 +19,13 @@ pub(crate) struct UpsertResult {
     pub name: String,
     pub url: Option<String>,
     pub auth_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Visibility {
+    Public,
+    Private,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

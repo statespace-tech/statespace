@@ -2,7 +2,7 @@ use crate::args::AppDeployArgs;
 use crate::commands::env::resolve_env_overrides;
 use crate::error::{Error, Result};
 use crate::gateway::GatewayClient;
-use crate::gateway::applications::{ApplicationFile, UpsertResult};
+use crate::gateway::applications::{ApplicationFile, UpsertResult, Visibility};
 use crate::names::generate_name;
 use crate::state::{DeployState, load_state, save_state};
 use sha2::{Digest, Sha256};
@@ -15,6 +15,7 @@ pub(crate) trait DeployGateway {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
+        visibility: Option<Visibility>,
     ) -> impl std::future::Future<Output = Result<UpsertResult>> + Send;
 
     fn list_secret_keys(
@@ -41,8 +42,9 @@ impl DeployGateway for GatewayClient {
         &self,
         name: &str,
         files: Vec<ApplicationFile>,
+        visibility: Option<Visibility>,
     ) -> Result<UpsertResult> {
-        self.upsert_application(name, files).await
+        self.upsert_application(name, files, visibility).await
     }
 
     async fn list_secret_keys(&self, application_id: &str) -> Result<Vec<String>> {
@@ -94,6 +96,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
     let AppDeployArgs {
         path,
         name,
+        visibility,
         env_vars,
         env_file,
         cloud: _,
@@ -179,7 +182,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         target.name
     );
 
-    let upsert_result = gateway.upsert_application(&target.name, files).await?;
+    let upsert_result = gateway.upsert_application(&target.name, files, visibility).await?;
     let result = DeployOutcome::from_upsert(upsert_result);
 
     let sync = match deploy_env.as_ref() {
@@ -312,6 +315,7 @@ mod tests {
             &self,
             name: &str,
             files: Vec<ApplicationFile>,
+            _visibility: Option<Visibility>,
         ) -> Result<UpsertResult> {
             self.upsert_calls
                 .lock()
@@ -356,6 +360,7 @@ mod tests {
         AppDeployArgs {
             path,
             name: name.map(ToOwned::to_owned),
+            visibility: None,
             env_vars: Vec::new(),
             env_file: None,
             cloud: crate::args::CloudArgs {
