@@ -77,7 +77,7 @@ $ claude "Document my database schema and add tools to query it"
 Run your app locally:
 
 ```bash
-$ statespace serve --port 8000
+$ statespace run --port 8000
 ```
 
 Agents and HTTP clients can now read pages and execute tools:

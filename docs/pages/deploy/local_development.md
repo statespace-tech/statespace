@@ -11,14 +11,14 @@ Run apps on your own machine for development or self-hosting.
 Run your app locally:
 
 ```bash
-$ statespace serve <PATH>
+$ statespace run <PATH>
 Serving 'myapp' at http://127.0.0.1:8000
 ```
 
 Optionally, bind the app to a specific host and port:
 
 ```bash
-$ statespace serve <PATH> --host 0.0.0.0 --port 8080
+$ statespace run <PATH> --host 0.0.0.0 --port 8080
 ```
 
 ## Docker
@@ -39,7 +39,7 @@ WORKDIR /app
 COPY . .
 
 EXPOSE 8000
-CMD ["statespace", "serve", ".", "--host", "0.0.0.0"]
+CMD ["statespace", "run", ".", "--host", "0.0.0.0"]
 ```
 
 Build and run:
