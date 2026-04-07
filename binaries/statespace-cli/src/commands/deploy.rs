@@ -185,10 +185,7 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
                     != Some(env_checksum.as_str())
             });
             let visibility_changed = visibility_value.is_some_and(|v| {
-                prev.checksums
-                    .get(VISIBILITY_STATE_KEY)
-                    .map(String::as_str)
-                    != Some(v)
+                prev.checksums.get(VISIBILITY_STATE_KEY).map(String::as_str) != Some(v)
             });
 
             if !files_changed && !env_changed && !visibility_changed {
@@ -205,7 +202,9 @@ pub(crate) async fn run_deploy(args: AppDeployArgs, gateway: impl DeployGateway)
         target.name
     );
 
-    let upsert_result = gateway.upsert_application(&target.name, files, visibility).await?;
+    let upsert_result = gateway
+        .upsert_application(&target.name, files, visibility)
+        .await?;
     let result = DeployOutcome::from_upsert(upsert_result);
 
     let sync = match deploy_env.as_ref() {
