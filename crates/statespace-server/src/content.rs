@@ -114,7 +114,7 @@ mod tests {
 
     fn setup_test_dir() -> TempDir {
         let dir = TempDir::new().unwrap();
-        write(dir.path().join("API.md"), "# Root API").unwrap();
+        write(dir.path().join("llms.txt"), "# Root API").unwrap();
         write(dir.path().join("README.md"), "# Root README").unwrap();
         write(dir.path().join("file.md"), "# File").unwrap();
         write(dir.path().join("no_readme.md"), "# No Readme File").unwrap();

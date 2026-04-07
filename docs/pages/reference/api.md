@@ -10,7 +10,7 @@ REST API for interacting with Statespace applications.
 
 ## <span class="http-method http-get">GET</span> `/{path}`
 
-Read a file from the app's directory. Requesting `/` returns `API.md`.
+Read a file from the app's directory. Requesting `/` returns `llms.txt`.
 
 <div class="grid" markdown>
 
