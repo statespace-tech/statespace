@@ -30,7 +30,7 @@ title: Get started
 
 ---
 
-Agents need your tools and data, but were trained on Unix and filesystems, not APIs and schemas. Statespace serves your filesystems and CLI tools over HTTP, so any agent can `curl` them directly.
+Agents were trained on Unix and filesystems, not your APIs and schemas. Statespace serves your files and CLI tools over HTTP, so agents can discover and run them with nothing but `curl`.
 
 ## Installation
 
