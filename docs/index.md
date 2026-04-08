@@ -12,7 +12,7 @@ title: Get started
     <img src="assets/images/favicon.svg" alt="Statespace" style="width: 56px; height: 56px;" />
     <span style="font-family: Montserrat, sans-serif; letter-spacing: 0.25em; font-weight: 600; font-size: 2.2em;">STATESPACE</span>
   </div>
-  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);"><code>curl</code> your filesystem and CLI tools</p>
+  <p style="font-style: italic; font-size: 1.1em; margin-top: 0.75rem; color: var(--md-default-fg-color--light);">Shareable data apps for AI agents
   <div style="margin-top: 1rem; display: flex; gap: 0.2rem; justify-content: center; flex-wrap: wrap;">
     <a href="https://github.com/statespace-tech/statespace/actions/workflows/test.yml"><img src="https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg" alt="Test Suite" /></a>
     <a href="https://github.com/statespace-tech/statespace/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-007ec6?style=flat-square" alt="License" /></a>
@@ -30,7 +30,7 @@ title: Get started
 
 ---
 
-Agents were trained on Unix and filesystems, not your APIs and schemas. Statespace serves your files and CLI tools over HTTP, so agents can discover and run them with nothing but `curl`.
+AI doesn't know your data, but it knows Unix and filesystems. Statespace lets you transform your files and CLI tools into shareable data apps that any agent can discover and use. Build database explorers, share business rules, or document legacy APIs. Once you’ve created an app, deploy and monitor it with our [cloud platform](https://statespace.com/).
 
 ## Installation
 
@@ -50,7 +50,7 @@ $ statespace init
 
 ### 2. Build it
 
-Add a `tools` block to `README.md` or any other Markdown file:
+Add constrained CLI tools to `README.md` or any other Markdown file:
 
 ```yaml title="README.md"
 ---
