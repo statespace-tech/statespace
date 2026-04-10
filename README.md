@@ -99,7 +99,7 @@ Deploy your app to the cloud:
 $ statespace deploy --name demo
 ```
 
-Your filesystem and CLI tools are now live at a public URL:
+Your app is now live at a public URL:
 
 ```bash
 $ curl https://demo.statespace.app/README.md
