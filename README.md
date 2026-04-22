@@ -1,143 +1,89 @@
-<br>
+# statespace
 
-<div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_light.png" />
-    <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_dark.png" alt="Statespace" width="375" />
-  </picture>
-</div>
-
-<div align="center">
-
-<br>
-
-*Shareable data apps for AI agents*
-
-[![Test Suite](https://github.com/statespace-tech/statespace/actions/workflows/test.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/test.yml)
-[![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
-[![crates.io](https://img.shields.io/crates/v/statespace?style=flat-square)](https://crates.io/crates/statespace)
+[![npm](https://img.shields.io/npm/v/statespace?style=flat-square)](https://www.npmjs.com/package/statespace)
+[![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/rRyM7zkZTf)
 [![X](https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white)](https://x.com/statespace_tech)
 
-</div>
+Search documentation indexed from [llms.txt](https://llmstxt.org/) sites — from the terminal or your AI assistant.
 
----
-
-**Website: [https://statespace.com](https://statespace.com/)**
-
-**Documentation: [https://docs.statespace.com](https://docs.statespace.com/)**
-
----
-
-AI doesn't know your data, but it knows Unix and filesystems. Statespace lets you transform your files and CLI tools into shareable data apps that any agent can discover and use. Build database explorers, share business rules, or document legacy APIs. Once you’ve created an app, deploy and monitor it with our [cloud platform](https://statespace.com/).
-
-## Installation
+## CLI
 
 ```bash
-$ curl -fsSL https://statespace.com/install.sh | bash
+npx statespace search "redis connection pooling"
+npx statespace search "supabase: edge functions"
+npx statespace search "rate limiting" --limit 20
 ```
 
-## Quickstart
+**Query syntax**
 
-### 1. Create it
+| Syntax | Description |
+|--------|-------------|
+| `<query>` | Search all indexed pages across all sites |
+| `<site>: <query>` | Match site by name, search within it (e.g. `supabase: auth`) |
 
-Run `statespace init` in the current directory:
+**Options**
 
-```bash
-$ statespace init
-```
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--limit <n>` | `-l` | 10 | Max results |
+| `--url <url>` | `-u` | `http://localhost:3000` | Backend API base URL |
 
-### 2. Build it
+## MCP
 
-Add constrained CLI tools to `README.md` or any other Markdown file:
-
-```yaml
----
-tools:
-  - [grep]
-  - [python, scripts/summarize.py]
-  - [sqlite3, data/app.db, { regex: "^(SELECT|EXPLAIN)\\b.*" }]
----
-
-# Instructions
-- Only run read-only queries against the database
-- Use `summarize.py` for aggregations and report generation
-- Use `grep` to search across local files and logs
-```
-
-Alternatively, let your coding agent build it out for you:
-
-```bash
-$ claude "Document my database schema and add tools to query it"
-```
-
-### 3. Run it
-
-Run your app locally:
-
-```bash
-$ statespace run --port 8000
-```
-
-Agents and HTTP clients can now read pages and execute tools:
-
-```bash
-# Read a page
-$ curl http://localhost:8000/README.md
-
-# Execute a CLI tool
-$ curl -X POST http://localhost:8000/README.md \
-  -H "Content-Type: application/json" \
-  -d '{"command": ["grep", "-r", "revenue", "."]}'
-```
-
-### 4. Deploy it
-
-Deploy your app to the cloud:
-
-```bash
-$ statespace deploy --name demo
-```
-
-Your filesystem and CLI tools are now live at a public URL:
-
-```bash
-$ curl https://demo.statespace.app/README.md
-```
-
-### 5. Share it
-
-Point any agent at the URL directly:
-
-```bash
-$ claude "Use the API at https://demo.statespace.app to break down revenue by region"
-```
-
-Or wire it up as an MCP server:
+Add to your MCP client config (Claude Desktop, Cursor, etc.):
 
 ```json
-"mcpServers": {
-  "statespace": {
-    "command": "npx",
-    "args": ["-y", "statespace-mcp", "https://demo.statespace.app"]
+{
+  "mcpServers": {
+    "statespace": {
+      "command": "npx",
+      "args": ["statespace", "mcp"]
+    }
   }
 }
 ```
 
-## Features
+For a remote backend:
 
-- 🔌 **Any CLI tool** — `psql`, `sqlite3`, `grep`, `python` — if it runs in a shell, it works
-- 🔒 **Safe by default** — regex constraints mean agents can only run what you explicitly allow
-- 🧠 **Self-describing** — Markdown pages are both the documentation and the interface
-- 📖 **Composable** — split across pages so agents load only what they need and save tokens
-- 🚀 **Shareable** — deploy to a URL, wire up as an MCP server, or share with teammates
+```json
+{
+  "mcpServers": {
+    "statespace": {
+      "command": "npx",
+      "args": ["statespace", "mcp", "--url", "https://api.statespace.com"]
+    }
+  }
+}
+```
 
-## Community & Contributing
+To run as an SSE server (multi-client or remote deployments):
 
-- **Discord**: Join our [community server](https://discord.gg/rRyM7zkZTf) for real-time help and discussions
-- **X**: Follow us [@statespace_tech](https://x.com/statespace_tech) for updates and news
-- **Issues**: Report bugs or request features on [GitHub Issues](https://github.com/statespace-tech/statespace/issues)
+```bash
+npx statespace mcp --transport sse --port 4000
+```
+
+**Tool: `search`**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `q` | string | yes | — | Search query. Use `site: query` syntax to target a specific site. |
+| `limit` | integer | no | 10 | Max results |
+
+## Requirements
+
+Node.js 18+
+
+## Self-hosting
+
+This package connects to a `statespace-backend` instance. See [statespace-tech/statespace-backend](https://github.com/statespace-tech/statespace-backend) to run your own.
+
+## Community
+
+- **Discord**: [discord.gg/rRyM7zkZTf](https://discord.gg/rRyM7zkZTf)
+- **X**: [@statespace_tech](https://x.com/statespace_tech)
+- **Issues**: [GitHub Issues](https://github.com/statespace-tech/statespace/issues)
 
 ## License
 
-This project is licensed under the terms of the MIT license.
+MIT
