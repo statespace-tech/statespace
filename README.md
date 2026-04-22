@@ -7,30 +7,25 @@
 
 Search documentation indexed from [llms.txt](https://llmstxt.org/) sites — from the terminal or your AI assistant.
 
+## Query syntax
+
+```
+redis connection pooling
+supabase: auth
+```
+
+Plain queries search across all sites. Prefix with a site name and `:` to search within it.
+
 ## CLI
 
 ```bash
 npx statespace search "redis connection pooling"
-npx statespace search "supabase: edge functions"
-npx statespace search "rate limiting" --limit 20
+npx statespace search "supabase: auth"
 ```
 
-**Query syntax**
-
-| Syntax | Description |
-|--------|-------------|
-| `<query>` | Search all indexed pages across all sites |
-| `<site>: <query>` | Match site by name, search within it (e.g. `supabase: auth`) |
-
-**Options**
-
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--limit <n>` | `-l` | 10 | Max results |
+> **Note** `--limit <n>` / `-l` sets the number of results (default: 10).
 
 ## MCP
-
-Add to your MCP client config (Claude Desktop, Cursor, etc.):
 
 ```json
 {
@@ -43,12 +38,7 @@ Add to your MCP client config (Claude Desktop, Cursor, etc.):
 }
 ```
 
-**Tool: `search`**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `q` | string | yes | — | Search query. Use `site: query` syntax to target a specific site. |
-| `limit` | integer | no | 10 | Max results |
+> **Note** The `search` tool accepts `q` (required) and `limit` (default: 10).
 
 ## Requirements
 
