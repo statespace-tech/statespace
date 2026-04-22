@@ -1,29 +1,41 @@
-# statespace
+# Statespace
 
 [![npm](https://img.shields.io/npm/v/statespace?style=flat-square)](https://www.npmjs.com/package/statespace)
 [![License](https://img.shields.io/badge/license-MIT-007ec6?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/rRyM7zkZTf)
 [![X](https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white)](https://x.com/statespace_tech)
 
-Search documentation indexed from [llms.txt](https://llmstxt.org/) sites — from the terminal or your AI assistant.
+Search Markdown documentation indexed from [llms.txt](https://llmstxt.org/) sites.
 
 ## Query syntax
 
+Plain queries:
 ```
-redis connection pooling
-supabase: auth
+> redis connection pooling
+> vector database embedding
+> rate limiting middleware
+
 ```
 
-Plain queries search across all sites. Prefix with a site name and `:` to search within it.
+Queries within a site:
+
+```
+> aws: ec2 setup
+> vercel: edge middleware
+> supabase: security login auth
+```
+
 
 ## CLI
 
 ```bash
 npx statespace search "redis connection pooling"
-npx statespace search "supabase: auth"
+npx statespace search "aws: ec2 setup" --limit 5
 ```
 
-> **Note** `--limit <n>` / `-l` sets the number of results (default: 10).
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--limit <n>` | `-l` | `10` | Max results |
 
 ## MCP
 
@@ -38,7 +50,10 @@ npx statespace search "supabase: auth"
 }
 ```
 
-> **Note** The `search` tool accepts `q` (required) and `limit` (default: 10).
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `q` | yes | — | Search query |
+| `limit` | no | `10` | Max results |
 
 ## Requirements
 
