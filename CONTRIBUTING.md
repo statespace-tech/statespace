@@ -1,18 +1,11 @@
 # Contributing to Statespace
 
-Thanks for your interest in contributing. This repo is 100% open-source Rust. This guide covers how to build, test, and submit changes in a way that keeps the codebase tight and reliable.
+Thanks for your interest in contributing. This guide covers how to build, test, and submit changes.
 
 ## Requirements
 
-- Rust **1.85+** (MSRV) with `rustfmt` and `clippy` components
-- Optional: `direnv` (for macOS linker env), `just` (release helper)
-
-To install MSRV explicitly:
-
-```bash
-rustup toolchain install 1.85.0
-rustup override set 1.85.0
-```
+- Node.js **18+**
+- npm or another package manager
 
 ## Getting started
 
@@ -21,40 +14,36 @@ rustup override set 1.85.0
    git clone https://github.com/<your-username>/statespace.git
    cd statespace
    ```
-2. Build:
+2. Install dependencies:
    ```bash
-   cargo build
+   npm install
    ```
-   The CLI binary lives in `binaries/statespace-cli`.
+3. Build:
+   ```bash
+   npm run build
+   ```
+   The compiled CLI lands in `dist/cli.js`.
 
 ## Development workflow
 
-Run these before opening a PR:
+Edit TypeScript source in `src/`, then rebuild:
 
 ```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+npm run build
+node dist/cli.js search "your query"
 ```
 
-Pre-commit hooks (format + clippy):
+To test against a local backend, pass `--url`:
 
 ```bash
-git config core.hooksPath .githooks
+node dist/cli.js search "redis" --url http://localhost:3000
 ```
-
-## Code standards
-
-- No `unwrap()`, `expect()`, or `panic!()` in library code (tests are fine).
-- Prefer explicit error handling with `Result` and typed enums.
-- Keep public APIs documented and test new behavior.
-- Follow existing module boundaries and naming conventions.
 
 ## Submitting changes
 
 1. Create a branch from `main`.
 2. Keep commits focused and scoped.
-3. Open a PR with a clear description, motivation, and test notes.
+3. Open a PR with a clear description and motivation.
 
 ## License
 
