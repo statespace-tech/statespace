@@ -1,0 +1,23 @@
+{
+  "name": "statespace",
+  "version": "0.1.0",
+  "description": "CLI and MCP server for searching llms.txt documentation sites",
+  "type": "module",
+  "bin": {
+    "statespace": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}
