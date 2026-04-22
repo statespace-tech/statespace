@@ -98,7 +98,6 @@ export async function runMcp(argv: string[]): Promise<void> {
       process.stdout.write(
         "Usage: statespace mcp [options]\n\n" +
         "Options:\n" +
-        "  --url <url>            Backend API base URL (default: http://localhost:3000)\n" +
         "  --transport <mode>     Transport mode: stdio or sse (default: stdio)\n" +
         "  --port <n>             Port for SSE transport (default: 4000)\n" +
         "  --help, -h             Show this help\n"

@@ -27,7 +27,6 @@ npx statespace search "rate limiting" --limit 20
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--limit <n>` | `-l` | 10 | Max results |
-| `--url <url>` | `-u` | `http://localhost:3000` | Backend API base URL |
 
 ## MCP
 
@@ -44,25 +43,6 @@ Add to your MCP client config (Claude Desktop, Cursor, etc.):
 }
 ```
 
-For a remote backend:
-
-```json
-{
-  "mcpServers": {
-    "statespace": {
-      "command": "npx",
-      "args": ["statespace", "mcp", "--url", "https://api.statespace.com"]
-    }
-  }
-}
-```
-
-To run as an SSE server (multi-client or remote deployments):
-
-```bash
-npx statespace mcp --transport sse --port 4000
-```
-
 **Tool: `search`**
 
 | Parameter | Type | Required | Default | Description |
@@ -73,10 +53,6 @@ npx statespace mcp --transport sse --port 4000
 ## Requirements
 
 Node.js 18+
-
-## Self-hosting
-
-This package connects to a `statespace-backend` instance. See [statespace-tech/statespace-backend](https://github.com/statespace-tech/statespace-backend) to run your own.
 
 ## Community
 

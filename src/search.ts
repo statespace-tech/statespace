@@ -22,14 +22,13 @@ export async function runSearch(argv: string[]): Promise<void> {
         "  <site>: <query>      Match site name in title, query in content\n\n" +
         "Options:\n" +
         "  --limit, -l <n>     Max results (default: 10)\n" +
-        "  --url,   -u <url>   API base URL (default: http://localhost:3000)\n" +
         "  --help,  -h         Show this help\n"
       );
       process.exit(0);
     } else if (arg === "--limit" || arg === "-l") {
       limit = parseInt(argv[++i] ?? "10", 10);
     } else if (arg === "--url" || arg === "-u") {
-      baseUrl = argv[++i] ?? "http://localhost:3000";
+      baseUrl = argv[++i] ?? baseUrl;
     } else if (!arg.startsWith("-")) {
       positional.push(arg);
     }
