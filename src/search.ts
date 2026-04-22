@@ -1,4 +1,3 @@
-import { getClientId } from './client_id.js';
 
 interface Result {
   url: string;
@@ -49,7 +48,6 @@ export async function runSearch(argv: string[]): Promise<void> {
     const res = await fetch(url.toString(), {
       headers: {
         'User-Agent': 'statespace-cli/0.1.0',
-        'X-Client-Id': getClientId(),
       },
     });
     if (!res.ok) {

@@ -6,7 +6,6 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "http";
-import { getClientId } from './client_id.js';
 
 function buildServer(baseUrl: string): Server {
   const server = new Server(
@@ -68,7 +67,6 @@ function buildServer(baseUrl: string): Server {
       const response = await fetch(url.toString(), {
         headers: {
           'User-Agent': 'statespace-mcp/0.1.0',
-          'X-Client-Id': getClientId(),
         },
       });
       if (!response.ok) {
