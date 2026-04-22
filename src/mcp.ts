@@ -1,3 +1,4 @@
+import { version } from './version.js';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
@@ -66,7 +67,7 @@ function buildServer(baseUrl: string): Server {
     try {
       const response = await fetch(url.toString(), {
         headers: {
-          'User-Agent': 'statespace-mcp/0.1.0',
+          'User-Agent': `statespace-mcp/${version}`,
         },
       });
       if (!response.ok) {

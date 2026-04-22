@@ -1,3 +1,5 @@
+import { version } from './version.js';
+
 const DEFAULT_BASE_URL = "https://api.statespace.com";
 
 export interface SearchResult {
@@ -26,7 +28,7 @@ export async function search(query: string, options: SearchOptions = {}): Promis
   url.searchParams.set("limit", String(limit));
 
   const response = await fetch(url.toString(), {
-    headers: { "User-Agent": "statespace-sdk/0.1.0" },
+    headers: { "User-Agent": `statespace-sdk/${version}` },
   });
 
   if (!response.ok) {

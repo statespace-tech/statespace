@@ -1,3 +1,4 @@
+import { version } from './version.js';
 
 interface Result {
   url: string;
@@ -47,7 +48,7 @@ export async function runSearch(argv: string[]): Promise<void> {
   try {
     const res = await fetch(url.toString(), {
       headers: {
-        'User-Agent': 'statespace-cli/0.1.0',
+        'User-Agent': `statespace-cli/${version}`,
       },
     });
     if (!res.ok) {
