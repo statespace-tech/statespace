@@ -37,6 +37,17 @@ npx statespace search "aws: ec2 setup" --limit 5
 |------|-------|---------|-------------|
 | `--limit <n>` | `-l` | `10` | Max results |
 
+## SDK
+
+```typescript
+import { search } from 'statespace';
+
+const { results } = await search("redis connection pooling");
+const { results } = await search("aws: ec2 setup", { limit: 5 });
+```
+
+Each result has `url`, `site`, `title`, and `snippet`.
+
 ## MCP
 
 ```json

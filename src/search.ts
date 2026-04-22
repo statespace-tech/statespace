@@ -10,7 +10,7 @@ interface Result {
 export async function runSearch(argv: string[]): Promise<void> {
   const positional: string[] = [];
   let limit = 10;
-  let baseUrl = "http://localhost:3000";
+  let baseUrl = "https://api.statespace.com";
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];

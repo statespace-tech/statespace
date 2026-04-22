@@ -95,7 +95,7 @@ function buildServer(baseUrl: string): Server {
 }
 
 export async function runMcp(argv: string[]): Promise<void> {
-  let baseUrl = "http://localhost:3000";
+  let baseUrl = "https://api.statespace.com";
   let transport = "stdio";
   let port = 4000;
 

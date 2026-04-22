@@ -3,6 +3,12 @@
   "version": "0.1.0",
   "description": "CLI and MCP server for searching llms.txt documentation sites",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/sdk.js",
+      "types": "./dist/sdk.d.ts"
+    }
+  },
   "bin": {
     "statespace": "./dist/cli.js"
   },
