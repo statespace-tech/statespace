@@ -71,7 +71,14 @@ function buildServer(baseUrl: string): Server {
           'X-Client-Id': getClientId(),
         },
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null) as { error?: string } | null;
+        const msg = body?.error ?? `HTTP ${response.status}`;
+        return {
+          content: [{ type: "text" as const, text: `Error: ${msg}` }],
+          isError: true,
+        };
+      }
       const results = await response.json();
       return {
         content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],

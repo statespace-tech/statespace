@@ -52,7 +52,12 @@ export async function runSearch(argv: string[]): Promise<void> {
         'X-Client-Id': getClientId(),
       },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) {
+      const body = await res.json().catch(() => null) as { error?: string } | null;
+      const msg = body?.error ?? `HTTP ${res.status}`;
+      process.stderr.write(`Error: ${msg}\n`);
+      process.exit(1);
+    }
     data = await res.json() as { results: Result[]; total: number };
   } catch (e) {
     process.stderr.write(`Error: ${(e as Error).message}\n`);
