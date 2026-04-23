@@ -1,3 +1,7 @@
+---
+name: statespace
+---
+
 # Statespace CLI Skill
 
 Statespace searches Markdown documentation indexed from [llms.txt](https://llmstxt.org/) sites.

@@ -66,7 +66,9 @@ Each result has `url`, `site`, `title`, and `snippet`.
 | `q` | yes | — | Search query |
 | `limit` | no | `10` | Max results |
 
-No MCP? See [SKILL.md](SKILL.md) for using the CLI as an agent skill.
+## Skill
+
+See [SKILL.md](SKILL.md)
 
 ## Requirements
 
