@@ -32,9 +32,12 @@ npx statespace search "redis connection pooling"
 npx statespace search "aws: ec2 setup" --limit 5
 ```
 
+Outputs JSON by default. Use `--human` for readable output.
+
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--limit <n>` | `-l` | `10` | Max results |
+| `--human` | | | Human-readable output |
 
 ## SDK
 

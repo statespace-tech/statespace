@@ -11,32 +11,20 @@ Statespace searches Markdown documentation indexed from [llms.txt](https://llmst
 
 ```bash
 npx statespace search "<query>"
+npx statespace search "<site>: <query>"
+npx statespace search "<query>" --limit 5
 ```
 
 ## Examples
 
-Search across all sites:
-
 ```bash
 npx statespace search "redis connection pooling"
-```
-
-Search within a specific site:
-
-```bash
 npx statespace search "aws: ec2 setup"
-npx statespace search "supabase: row level security"
-```
-
-Limit results:
-
-```bash
-npx statespace search "rate limiting" --limit 5
 ```
 
 ## Output
 
-Results are returned as JSON:
+Results are returned as a JSON array:
 
 ```json
 [
@@ -49,4 +37,4 @@ Results are returned as JSON:
 ]
 ```
 
-Use `url` to fetch the full page, `snippet` for a preview.
+Use `snippet` to decide relevance. Use `url` to fetch the full page.
