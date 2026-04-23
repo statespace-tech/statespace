@@ -1,5 +1,6 @@
 ---
 name: statespace
+description: Search documentation indexed from llms.txt sites using the Statespace CLI.
 ---
 
 # Statespace CLI Skill

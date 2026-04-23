@@ -66,7 +66,7 @@ Each result has `url`, `site`, `title`, and `snippet`.
 | `q` | yes | — | Search query |
 | `limit` | no | `10` | Max results |
 
-## Skill
+## Agent Skills
 
 See [SKILL.md](SKILL.md)
 
