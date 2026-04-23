@@ -5,7 +5,7 @@
 [![Discord](https://img.shields.io/discord/1323415085011701870?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/rRyM7zkZTf)
 [![X](https://img.shields.io/badge/Statespace-black?style=flat-square&logo=x&logoColor=white)](https://x.com/statespace_tech)
 
-Search Markdown documentation indexed from [llms.txt](https://llmstxt.org/) sites.
+Search Markdown documentation indexed from [llms.txt](https://llmstxt.org/) sites. Available as a CLI, SDK, MCP server, and agent skill.
 
 ## Query syntax
 
@@ -14,7 +14,6 @@ Plain queries:
 > redis connection pooling
 > vector database embedding
 > rate limiting middleware
-
 ```
 
 Queries within a site:
@@ -66,7 +65,7 @@ Each result has `url`, `site`, `title`, and `snippet`.
 | `q` | yes | — | Search query |
 | `limit` | no | `10` | Max results |
 
-## Agent Skills
+## Agent skill
 
 See [SKILL.md](SKILL.md)
 
