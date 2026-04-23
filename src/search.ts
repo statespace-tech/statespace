@@ -10,6 +10,7 @@ interface Result {
 export async function runSearch(argv: string[]): Promise<void> {
   const positional: string[] = [];
   let limit = 10;
+  let human = false;
   let baseUrl = "https://api.statespace.com";
 
   for (let i = 0; i < argv.length; i++) {
@@ -22,11 +23,14 @@ export async function runSearch(argv: string[]): Promise<void> {
         "  <site>: <query>      Match site name in title, query in content\n\n" +
         "Options:\n" +
         "  --limit, -l <n>     Max results (default: 10)\n" +
+        "  --human             Human-readable output instead of JSON\n" +
         "  --help,  -h         Show this help\n"
       );
       process.exit(0);
     } else if (arg === "--limit" || arg === "-l") {
       limit = parseInt(argv[++i] ?? "10", 10);
+    } else if (arg === "--human") {
+      human = true;
     } else if (arg === "--url" || arg === "-u") {
       baseUrl = argv[++i] ?? baseUrl;
     } else if (!arg.startsWith("-")) {
@@ -64,16 +68,15 @@ export async function runSearch(argv: string[]): Promise<void> {
   }
 
   if (data.results.length === 0) {
-    process.stdout.write("no results\n");
+    process.stdout.write(human ? "no results\n" : JSON.stringify([]) + "\n");
     return;
   }
 
-  for (const r of data.results) {
-    const label = r.site && r.title
-      ? `[${r.site}] ${r.title} — ${r.url}`
-      : r.site
-      ? `[${r.site}] ${r.url}`
-      : r.url;
-    process.stdout.write(`${label}\n`);
+  if (human) {
+    for (const r of data.results) {
+      process.stdout.write(`[${r.site}] ${r.title} — ${r.url}${r.snippet ? ` — ${r.snippet}` : ""}\n`);
+    }
+  } else {
+    process.stdout.write(JSON.stringify(data.results, null, 2) + "\n");
   }
 }

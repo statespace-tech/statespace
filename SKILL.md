@@ -36,11 +36,17 @@ npx statespace search "rate limiting" --limit 5
 
 ## Output
 
-Each result is printed as `[Site] Title — URL`:
+Results are returned as JSON:
 
-```
-[Upstash] Redis Quickstart — https://upstash.com/docs/redis/quickstart
-[Supabase] Row Level Security — https://supabase.com/docs/guides/auth/row-level-security
+```json
+[
+  {
+    "url": "https://upstash.com/docs/redis/quickstart",
+    "site": "Upstash",
+    "title": "Redis Quickstart",
+    "snippet": "Connect to your Upstash Redis database using the REST API or a compatible client."
+  }
+]
 ```
 
-Use the URLs to fetch the full documentation page.
+Use `url` to fetch the full page, `snippet` for a preview.
