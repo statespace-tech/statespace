@@ -78,9 +78,9 @@ function buildServer(baseUrl: string): Server {
           isError: true,
         };
       }
-      const results = await response.json();
+      const data = await response.json() as { results: unknown[]; total: number };
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(data.results, null, 2) }],
       };
     } catch (e) {
       return {
@@ -94,7 +94,7 @@ function buildServer(baseUrl: string): Server {
 }
 
 export async function runMcp(argv: string[]): Promise<void> {
-  let baseUrl = "https://api.statespace.com";
+  let baseUrl = "https://search.statespace.com";
   let transport = "stdio";
   let port = 4000;
 

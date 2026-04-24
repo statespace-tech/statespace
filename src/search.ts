@@ -11,7 +11,7 @@ export async function runSearch(argv: string[]): Promise<void> {
   const positional: string[] = [];
   let limit = 10;
   let human = false;
-  let baseUrl = "https://api.statespace.com";
+  let baseUrl = "https://search.statespace.com";
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];

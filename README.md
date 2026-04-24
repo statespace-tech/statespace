@@ -44,8 +44,8 @@ Outputs JSON by default. Use `--human` for readable output.
 ```typescript
 import { search } from 'statespace';
 
-const { results } = await search("redis connection pooling");
-const { results } = await search("aws: ec2 setup", { limit: 5 });
+const results = await search("redis connection pooling");
+const results = await search("aws: ec2 setup", { limit: 5 });
 ```
 
 Each result has `url`, `site`, `title`, and `snippet`.
