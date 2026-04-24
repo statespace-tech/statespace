@@ -1,9 +1,13 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
-*.js.map
-*.d.ts
-.env
-.env.*
+
+# Lock files
+package-lock.json
+
+# Logs
 *.log
 
 # OS

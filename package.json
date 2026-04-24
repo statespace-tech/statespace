@@ -1,8 +1,14 @@
 {
   "name": "statespace",
   "version": "0.1.0",
-  "description": "CLI and MCP server for searching llms.txt documentation sites",
+  "description": "CLI, SDK, and MCP server for searching llms.txt documentation sites",
   "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "exports": {
     ".": {
       "import": "./dist/sdk.js",
@@ -18,6 +24,23 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "keywords": [
+    "llms.txt",
+    "search",
+    "documentation",
+    "mcp",
+    "ai",
+    "cli",
+    "rag"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/statespace-tech/statespace.git"
+  },
+  "homepage": "https://github.com/statespace-tech/statespace",
+  "bugs": {
+    "url": "https://github.com/statespace-tech/statespace/issues"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0"
