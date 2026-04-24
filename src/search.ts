@@ -61,7 +61,12 @@ export async function runSearch(argv: string[]): Promise<void> {
       process.stderr.write(`Error: ${msg}\n`);
       process.exit(1);
     }
-    data = await res.json() as { results: Result[]; total: number };
+    const raw = await res.json() as Record<string, unknown>;
+    if (!raw || !Array.isArray(raw.results)) {
+      process.stderr.write("Error: unexpected response format from server\n");
+      process.exit(1);
+    }
+    data = raw as { results: Result[]; total: number };
   } catch (e) {
     process.stderr.write(`Error: ${(e as Error).message}\n`);
     process.exit(1);

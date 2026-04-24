@@ -50,15 +50,17 @@ function buildServer(baseUrl: string): Server {
       };
     }
 
-    const q = args?.["q"] as string | undefined;
-    if (!q) {
+    const rawQ = args?.["q"];
+    if (typeof rawQ !== "string" || !rawQ.trim()) {
       return {
         content: [{ type: "text" as const, text: "Error: q is required" }],
         isError: true,
       };
     }
+    const q = rawQ.trim();
 
-    const limit = (args?.["limit"] as number | undefined) ?? 10;
+    const rawLimit = args?.["limit"];
+    const limit = Math.min(50, Math.max(1, Math.floor(Number(rawLimit) || 10)));
 
     const url = new URL(`${baseUrl}/search`);
     url.searchParams.set("q", q);
@@ -109,7 +111,16 @@ export async function runMcp(argv: string[]): Promise<void> {
         "  --help, -h             Show this help\n"
       );
       process.exit(0);
-    } else if (arg === "--url" && argv[i + 1]) {
+    } else if (arg === "--url") {
+      const next = argv[i + 1];
+      if (!next || next.startsWith("-")) {
+        process.stderr.write("Error: --url requires a valid URL\n");
+        process.exit(1);
+      }
+      try { new URL(next); } catch {
+        process.stderr.write(`Error: invalid URL for --url: ${next}\n`);
+        process.exit(1);
+      }
       baseUrl = argv[++i];
     } else if (arg === "--transport" && argv[i + 1]) {
       transport = argv[++i];
@@ -126,13 +137,24 @@ export async function runMcp(argv: string[]): Promise<void> {
         const t = new SSEServerTransport("/message", res);
         sessions.set(t.sessionId, t);
         res.on("close", () => sessions.delete(t.sessionId));
-        await buildServer(baseUrl).connect(t);
+        try {
+          await buildServer(baseUrl).connect(t);
+        } catch (e) {
+          process.stderr.write(`SSE connect error: ${(e as Error).message}\n`);
+          sessions.delete(t.sessionId);
+          if (!res.headersSent) res.writeHead(500).end("internal error");
+        }
       } else if (req.method === "POST" && req.url?.startsWith("/message")) {
         const sessionId =
           new URL(req.url, "http://x").searchParams.get("sessionId") ?? "";
         const t = sessions.get(sessionId);
         if (t) {
-          await t.handlePostMessage(req, res);
+          try {
+            await t.handlePostMessage(req, res);
+          } catch (e) {
+            process.stderr.write(`SSE message error: ${(e as Error).message}\n`);
+            if (!res.headersSent) res.writeHead(500).end("internal error");
+          }
         } else {
           res.writeHead(404).end("session not found");
         }
