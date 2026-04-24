@@ -1,11 +1,9 @@
-import { version } from './version.js';
+import { version } from "./version.js";
+import { DEFAULT_BASE_URL, DEFAULT_LIMIT } from "./constants.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { createServer } from "http";
 
 function buildServer(baseUrl: string): Server {
@@ -60,7 +58,7 @@ function buildServer(baseUrl: string): Server {
     const q = rawQ.trim();
 
     const rawLimit = args?.["limit"];
-    const limit = Math.min(50, Math.max(1, Math.floor(Number(rawLimit) || 10)));
+    const limit = Math.min(50, Math.max(1, Math.floor(Number(rawLimit) || DEFAULT_LIMIT)));
 
     const url = new URL(`${baseUrl}/search`);
     url.searchParams.set("q", q);
@@ -69,18 +67,18 @@ function buildServer(baseUrl: string): Server {
     try {
       const response = await fetch(url.toString(), {
         headers: {
-          'User-Agent': `statespace-mcp/${version}`,
+          "User-Agent": `statespace-mcp/${version}`,
         },
       });
       if (!response.ok) {
-        const body = await response.json().catch(() => null) as { error?: string } | null;
+        const body = (await response.json().catch(() => null)) as { error?: string } | null;
         const msg = body?.error ?? `HTTP ${response.status}`;
         return {
           content: [{ type: "text" as const, text: `Error: ${msg}` }],
           isError: true,
         };
       }
-      const data = await response.json() as { results: unknown[]; total: number };
+      const data = (await response.json()) as { results: unknown[]; total: number };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(data.results, null, 2) }],
       };
@@ -96,7 +94,7 @@ function buildServer(baseUrl: string): Server {
 }
 
 export async function runMcp(argv: string[]): Promise<void> {
-  let baseUrl = "https://search.statespace.com";
+  let baseUrl = DEFAULT_BASE_URL;
   let transport = "stdio";
   let port = 4000;
 
@@ -105,10 +103,10 @@ export async function runMcp(argv: string[]): Promise<void> {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         "Usage: statespace mcp [options]\n\n" +
-        "Options:\n" +
-        "  --transport <mode>     Transport mode: stdio or sse (default: stdio)\n" +
-        "  --port <n>             Port for SSE transport (default: 4000)\n" +
-        "  --help, -h             Show this help\n"
+          "Options:\n" +
+          "  --transport <mode>     Transport mode: stdio or sse (default: stdio)\n" +
+          "  --port <n>             Port for SSE transport (default: 4000)\n" +
+          "  --help, -h             Show this help\n"
       );
       process.exit(0);
     } else if (arg === "--url") {
@@ -117,7 +115,9 @@ export async function runMcp(argv: string[]): Promise<void> {
         process.stderr.write("Error: --url requires a valid URL\n");
         process.exit(1);
       }
-      try { new URL(next); } catch {
+      try {
+        new URL(next);
+      } catch {
         process.stderr.write(`Error: invalid URL for --url: ${next}\n`);
         process.exit(1);
       }
@@ -145,8 +145,7 @@ export async function runMcp(argv: string[]): Promise<void> {
           if (!res.headersSent) res.writeHead(500).end("internal error");
         }
       } else if (req.method === "POST" && req.url?.startsWith("/message")) {
-        const sessionId =
-          new URL(req.url, "http://x").searchParams.get("sessionId") ?? "";
+        const sessionId = new URL(req.url, "http://x").searchParams.get("sessionId") ?? "";
         const t = sessions.get(sessionId);
         if (t) {
           try {

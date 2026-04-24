@@ -20,6 +20,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "test": "npm run format:check && npm run build && node --test test/integration.js",
     "prepublishOnly": "npm run build"
   },
   "engines": {
@@ -47,6 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "prettier": "^3.8.3",
     "typescript": "^5.0.0"
   }
 }

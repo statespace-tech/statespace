@@ -1,6 +1,5 @@
-import { version } from './version.js';
-
-const DEFAULT_BASE_URL = "https://search.statespace.com";
+import { version } from "./version.js";
+import { DEFAULT_BASE_URL, DEFAULT_LIMIT } from "./constants.js";
 
 export interface SearchResult {
   url: string;
@@ -16,7 +15,7 @@ export interface SearchOptions {
 }
 
 export async function search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
-  const { limit = 10, baseUrl = DEFAULT_BASE_URL } = options;
+  const { limit = DEFAULT_LIMIT, baseUrl = DEFAULT_BASE_URL } = options;
 
   const url = new URL(`${baseUrl}/search`);
   url.searchParams.set("q", query);
@@ -27,10 +26,10 @@ export async function search(query: string, options: SearchOptions = {}): Promis
   });
 
   if (!response.ok) {
-    const body = await response.json().catch(() => null) as { error?: string } | null;
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
     throw new Error(body?.error ?? `HTTP ${response.status}`);
   }
 
-  const data = await response.json() as { results: SearchResult[]; total: number };
+  const data = (await response.json()) as { results: SearchResult[]; total: number };
   return data.results;
 }

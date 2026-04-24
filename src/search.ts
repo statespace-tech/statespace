@@ -1,4 +1,5 @@
-import { version } from './version.js';
+import { version } from "./version.js";
+import { DEFAULT_BASE_URL, DEFAULT_LIMIT } from "./constants.js";
 
 interface Result {
   url: string;
@@ -9,22 +10,22 @@ interface Result {
 
 export async function runSearch(argv: string[]): Promise<void> {
   const positional: string[] = [];
-  let limit = 10;
+  let limit = DEFAULT_LIMIT;
   let human = false;
-  let baseUrl = "https://search.statespace.com";
+  let baseUrl = DEFAULT_BASE_URL;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         "Usage: statespace search <query> [options]\n\n" +
-        "Query syntax:\n" +
-        "  <query>              Search all pages across all sites\n" +
-        "  <site>: <query>      Match site name in title, query in content\n\n" +
-        "Options:\n" +
-        "  --limit, -l <n>     Max results (default: 10)\n" +
-        "  --human             Human-readable output instead of JSON\n" +
-        "  --help,  -h         Show this help\n"
+          "Query syntax:\n" +
+          "  <query>              Search all pages across all sites\n" +
+          "  <site>: <query>      Match site name in title, query in content\n\n" +
+          "Options:\n" +
+          "  --limit, -l <n>     Max results (default: 10)\n" +
+          "  --human             Human-readable output instead of JSON\n" +
+          "  --help,  -h         Show this help\n"
       );
       process.exit(0);
     } else if (arg === "--limit" || arg === "-l") {
@@ -52,16 +53,16 @@ export async function runSearch(argv: string[]): Promise<void> {
   try {
     const res = await fetch(url.toString(), {
       headers: {
-        'User-Agent': `statespace-cli/${version}`,
+        "User-Agent": `statespace-cli/${version}`,
       },
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => null) as { error?: string } | null;
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
       const msg = body?.error ?? `HTTP ${res.status}`;
       process.stderr.write(`Error: ${msg}\n`);
       process.exit(1);
     }
-    const raw = await res.json() as Record<string, unknown>;
+    const raw = (await res.json()) as Record<string, unknown>;
     if (!raw || !Array.isArray(raw.results)) {
       process.stderr.write("Error: unexpected response format from server\n");
       process.exit(1);
@@ -79,7 +80,9 @@ export async function runSearch(argv: string[]): Promise<void> {
 
   if (human) {
     for (const r of data.results) {
-      process.stdout.write(`[${r.site}] ${r.title} — ${r.url}${r.snippet ? ` — ${r.snippet}` : ""}\n`);
+      process.stdout.write(
+        `[${r.site}] ${r.title} — ${r.url}${r.snippet ? ` — ${r.snippet}` : ""}\n`
+      );
     }
   } else {
     process.stdout.write(JSON.stringify(data.results, null, 2) + "\n");
