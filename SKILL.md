@@ -1,11 +1,11 @@
 ---
 name: statespace
-description: Search documentation indexed from llms.txt sites using the Statespace CLI.
+description: Search sites and technical docs indexed from llms.txt sites with the Statespace CLI.
 ---
 
 # Statespace CLI Skill
 
-Statespace searches Markdown documentation indexed from [llms.txt](https://llmstxt.org/) sites.
+Statespace searches Markdown pages indexed from [llms.txt](https://llmstxt.org/) sites.
 
 ## Usage
 
@@ -18,8 +18,11 @@ npx statespace search "<query>" --limit 5
 ## Examples
 
 ```bash
-npx statespace search "redis connection pooling"
-npx statespace search "aws: ec2 setup"
+npx statespace search "mcp server setup"
+npx statespace search "database connection pooling" 
+npx statespace search "rate limiting middleware setup" --limit 10
+npx statespace search "stripe: webhook verification"
+npx statespace search "supabase: edge functions auth" --limit 15
 ```
 
 ## Output
@@ -37,4 +40,4 @@ Results are returned as a JSON array:
 ]
 ```
 
-Use `snippet` to decide relevance. Use `url` to fetch the full page.
+Use `site`, `title`, and `snippet` to decide relevance. Use `url` to fetch the full page.
