@@ -31,6 +31,8 @@ anthropic: tool use function calling
 
 ## CLI
 
+Search indexed documentation from the command line: `npx statespace search <query> [options]`
+
 ```bash
 npx statespace search "mcp server setup"
 npx statespace search "stripe: webhook verification" --limit 5
@@ -46,6 +48,8 @@ npx statespace search "anthropic: tool use function calling" --limit 5 --human
 
 ## SDK
 
+Import and call `search()` directly from TypeScript or JavaScript.
+
 ```typescript
 import { search } from 'statespace';
 
@@ -57,6 +61,8 @@ const results = await search("redis connection pooling", { limit: 10, offset: 3 
 Each result has `url`, `site`, `title`, and `snippet`.
 
 ## MCP
+
+Add to your MCP config to expose a `search` tool to your agents:
 
 ```json
 {
