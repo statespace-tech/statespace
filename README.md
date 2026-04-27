@@ -58,8 +58,6 @@ const results = await search("stripe: webhook verification", { limit: 5 });
 const results = await search("redis connection pooling", { limit: 10, offset: 3 });
 ```
 
-Each result has `url`, `site`, `title`, and `snippet`.
-
 ## MCP
 
 Add to your MCP config to expose a `search` tool to your agents:
@@ -74,14 +72,6 @@ Add to your MCP config to expose a `search` tool to your agents:
   }
 }
 ```
-
-Exposes one tool: `search`
-
-| Parameter | Required | Default | Max  | Description                      |
-| --------- | -------- | ------- | ---- | -------------------------------- |
-| `q`       | yes      | —       | —    | Search query                     |
-| `limit`   | no       | `10`    | `50` | Max results to return            |
-| `offset`  | no       | `0`     | —    | Results to skip (for pagination) |
 
 ## Agent skill
 
