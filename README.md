@@ -2,8 +2,8 @@
 
 <div align="center">
   <picture>
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_light.png" />
-    <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/docs/assets/images/header_dark.png" alt="Statespace" width="375" />
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/images/header_light.png" />
+    <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/images/header_dark.png" alt="Statespace" width="375" />
   </picture>
 </div>
 
