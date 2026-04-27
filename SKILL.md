@@ -9,8 +9,6 @@ Statespace searches Markdown and .txt pages indexed from [llms.txt](https://llms
 
 ## Query syntax
 
-Statespace supports plain queries and site-scoped queries using the `site: query` syntax.
-
 Plain queries search across all indexed sites:
 
 ```
