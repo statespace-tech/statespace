@@ -11,6 +11,7 @@ interface Result {
 export async function runSearch(argv: string[]): Promise<void> {
   const positional: string[] = [];
   let limit = DEFAULT_LIMIT;
+  let offset = 0;
   let human = false;
   let baseUrl = DEFAULT_BASE_URL;
 
@@ -23,13 +24,16 @@ export async function runSearch(argv: string[]): Promise<void> {
           "  <query>              Search all pages across all sites\n" +
           "  <site>: <query>      Match site name in title, query in content\n\n" +
           "Options:\n" +
-          "  --limit, -l <n>     Max results (default: 10)\n" +
+          "  --limit,  -l <n>    Max results (default: 10)\n" +
+          "  --offset, -o <n>    Results to skip, for pagination (default: 0)\n" +
           "  --human             Human-readable output instead of JSON\n" +
           "  --help,  -h         Show this help\n"
       );
       process.exit(0);
     } else if (arg === "--limit" || arg === "-l") {
       limit = parseInt(argv[++i] ?? "10", 10);
+    } else if (arg === "--offset" || arg === "-o") {
+      offset = parseInt(argv[++i] ?? "0", 10);
     } else if (arg === "--human") {
       human = true;
     } else if (arg === "--url" || arg === "-u") {
@@ -48,6 +52,7 @@ export async function runSearch(argv: string[]): Promise<void> {
   const url = new URL(`${baseUrl}/search`);
   url.searchParams.set("q", query);
   url.searchParams.set("limit", String(limit));
+  if (offset > 0) url.searchParams.set("offset", String(offset));
 
   let data: { results: Result[]; total: number };
   try {

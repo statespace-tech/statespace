@@ -28,8 +28,13 @@ function buildServer(baseUrl: string): Server {
             },
             limit: {
               type: "integer",
-              description: "Max results to return (default: 10)",
+              description: "Max results to return (default: 10, max: 50)",
               default: 10,
+            },
+            offset: {
+              type: "integer",
+              description: "Number of results to skip for pagination (default: 0)",
+              default: 0,
             },
           },
           required: ["q"],
@@ -59,10 +64,13 @@ function buildServer(baseUrl: string): Server {
 
     const rawLimit = args?.["limit"];
     const limit = Math.min(50, Math.max(1, Math.floor(Number(rawLimit) || DEFAULT_LIMIT)));
+    const rawOffset = args?.["offset"];
+    const offset = Math.max(0, Math.floor(Number(rawOffset) || 0));
 
     const url = new URL(`${baseUrl}/search`);
     url.searchParams.set("q", q);
     url.searchParams.set("limit", String(limit));
+    if (offset > 0) url.searchParams.set("offset", String(offset));
 
     try {
       const response = await fetch(url.toString(), {
