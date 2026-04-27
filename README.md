@@ -9,43 +9,49 @@ Search Markdown documentation indexed from [llms.txt](https://llmstxt.org/) site
 
 ## Query syntax
 
-Plain queries:
-```
-> redis connection pooling
-> vector database embedding
-> rate limiting middleware
-```
-
-Queries within a site:
+Plain queries search across all indexed sites:
 
 ```
-> aws: ec2 setup
-> vercel: edge middleware
-> supabase: security login auth
+mcp server setup
+vector database embeddings
+rate limiting middleware
+oauth2 token refresh
+websocket reconnection strategy
 ```
 
+Scope a query to a specific site with `site: query`:
+
+```
+stripe: webhook verification
+supabase: edge functions auth
+aws: s3 presigned urls
+vercel: edge middleware caching
+anthropic: tool use function calling
+```
 
 ## CLI
 
 ```bash
-npx statespace search "redis connection pooling"
-npx statespace search "aws: ec2 setup" --limit 5
+npx statespace search "mcp server setup"
+npx statespace search "stripe: webhook verification" --limit 5
+npx statespace search "redis connection pooling" --limit 10 --offset 3
+npx statespace search "anthropic: tool use function calling" --limit 5 --human
 ```
 
-Outputs JSON by default. Use `--human` for readable output.
-
-| Flag | Short | Default | Description |
-|------|-------|---------|-------------|
-| `--limit <n>` | `-l` | `10` | Max results |
-| `--human` | | | Human-readable output |
+| Flag           | Short | Default | Max  | Description                           |
+| -------------- | ----- | ------- | ---- | ------------------------------------- |
+| `--limit <n>`  | `-l`  | `10`    | `50` | Max results to return                 |
+| `--offset <n>` | `-o`  | `0`     | —    | Results to skip (for pagination)      |
+| `--human`      | —     | —       | —    | Human-readable output instead of JSON |
 
 ## SDK
 
 ```typescript
 import { search } from 'statespace';
 
-const results = await search("redis connection pooling");
-const results = await search("aws: ec2 setup", { limit: 5 });
+const results = await search("mcp server setup");
+const results = await search("stripe: webhook verification", { limit: 5 });
+const results = await search("redis connection pooling", { limit: 10, offset: 3 });
 ```
 
 Each result has `url`, `site`, `title`, and `snippet`.
@@ -63,10 +69,13 @@ Each result has `url`, `site`, `title`, and `snippet`.
 }
 ```
 
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `q` | yes | — | Search query |
-| `limit` | no | `10` | Max results |
+Exposes one tool: `search`
+
+| Parameter | Required | Default | Max  | Description                      |
+| --------- | -------- | ------- | ---- | -------------------------------- |
+| `q`       | yes      | —       | —    | Search query                     |
+| `limit`   | no       | `10`    | `50` | Max results to return            |
+| `offset`  | no       | `0`     | —    | Results to skip (for pagination) |
 
 ## Agent skill
 
