@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  main:
+    name: Require a commit on main that passed CI
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the tagged commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          git merge-base --is-ancestor "$COMMIT" origin/main || {
+            echo "::error::$GITHUB_REF_NAME is not on main."; exit 1;
+          }
+          # Wait for CI when the tag follows the push closely.
+          for _ in $(seq 60); do
+            read -r status conclusion < <(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow CI --branch main --event push --commit "$COMMIT" \
+              --json status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"' || true)
+            if [[ "$status" == completed ]]; then
+              [[ "$conclusion" == success ]] && exit 0
+              echo "::error::CI for $COMMIT concluded $conclusion."; exit 1
+            fi
+            sleep 20
+          done
+          echo "::error::No completed CI run on main for $COMMIT."
+          exit 1
+
+  check:
+    needs: main
+    uses: ./.github/workflows/ci.yml
+
+  cli:
+    name: CLI (${{ matrix.target }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tools
+        if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --locked --target "${{ matrix.target }}"
+      - run: scripts/package.sh "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ssp-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  bundle:
+    name: Release bundle
+    needs: cli
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ssp-*
+          path: dist
+          merge-multiple: true
+      - name: Add installer
+        run: cp install.sh dist/install.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-bundle
+          path: dist/*
+          if-no-files-found: error
+
+  image:
+    name: Container image
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ssp-*-linux-musl
+          path: dist
+          merge-multiple: true
+      - name: Unpack the Linux binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pair in amd64:x86_64 arm64:aarch64; do
+            mkdir -p "image/${pair%%:*}"
+            tar -xzf "dist/ssp-${pair##*:}-unknown-linux-musl.tar.gz" -C "image/${pair%%:*}" ssp
+          done
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push ghcr.io/statespace-tech/statespace
+        run: >-
+          docker buildx build --push
+          --platform linux/amd64,linux/arm64
+          --tag "ghcr.io/statespace-tech/statespace:${GITHUB_REF_NAME#v}"
+          --tag ghcr.io/statespace-tech/statespace:latest
+          .
+
+  crates-io:
+    name: Publish crate
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check crate version
+        id: crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')
+          if [[ "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match crate version ${version}" >&2
+            exit 1
+          fi
+          response=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --user-agent 'statespace-release-workflow (https://github.com/statespace-tech/statespace)' \
+            "https://crates.io/api/v1/crates/statespace/${version}")
+          case "$response" in
+            200) published=true ;;
+            404) published=false ;;
+            *) echo "crates.io returned HTTP ${response}" >&2; exit 1 ;;
+          esac
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.crate.outputs.published != 'true'
+        id: auth
+      - name: Publish crate
+        if: steps.crate.outputs.published != 'true'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-bundle
+          path: dist
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" dist/*
+          --repo "$GITHUB_REPOSITORY"
+          --generate-notes
+          --verify-tag
+      - name: Remove earlier releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        # Only the latest release is published. Tags stay, so history keeps its versions.
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' |
+            while read -r tag; do
+              [[ "$tag" == "$GITHUB_REF_NAME" ]] && continue
+              gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+            done
