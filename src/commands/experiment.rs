@@ -11,10 +11,10 @@ use anyhow::{Context, bail};
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
-use super::print;
 use crate::{
     api::{Api, segment},
     cli::{ExperimentCommand, Settings},
+    output::{emit, fields, note, share, table, text, time},
 };
 
 pub fn run(api: &Api, command: ExperimentCommand) -> anyhow::Result<()> {
@@ -34,7 +34,10 @@ pub fn run(api: &Api, command: ExperimentCommand) -> anyhow::Result<()> {
             if let Some(subject) = subject {
                 body.insert("subject".into(), json!(subject));
             }
-            show(api.send(Method::POST, "/v1/experiments", &Value::Object(body))?)
+            show(
+                api.send(Method::POST, "/v1/experiments", &Value::Object(body))?,
+                &format!("Created the draft of {name}."),
+            )
         }
         ExperimentCommand::Update {
             name,
@@ -52,33 +55,64 @@ pub fn run(api: &Api, command: ExperimentCommand) -> anyhow::Result<()> {
             if body.keys().all(|key| key == "note") {
                 bail!("pass a setting to change, such as --split or --eligibility");
             }
-            show(api.send(Method::PATCH, &path(&name), &Value::Object(body))?)
+            show(
+                api.send(Method::PATCH, &path(&name), &Value::Object(body))?,
+                &format!("Updated the draft of {name}."),
+            )
         }
         ExperimentCommand::List { app } => {
             let query = app.map_or_else(String::new, |app| format!("?app={}", segment(&app)));
             let experiments: Vec<Value> = api.get(&format!("/v1/experiments{query}"))?;
-            print(&experiments.into_iter().map(with_split).collect::<Vec<_>>())
+            let experiments: Vec<Value> = experiments.into_iter().map(with_split).collect();
+            emit(&experiments, || {
+                if experiments.is_empty() {
+                    return "No experiments. Create one with `ssp experiment create`.".into();
+                }
+                table(
+                    &["NAME", "APP", "STATUS", "VERSION", "SPLIT"],
+                    experiments
+                        .iter()
+                        .map(|experiment| {
+                            vec![
+                                text(&experiment["name"]),
+                                text(&experiment["app"]),
+                                status(experiment),
+                                text(&experiment["version"]),
+                                arms_text(experiment),
+                            ]
+                        })
+                        .collect(),
+                )
+            })
         }
-        ExperimentCommand::Show { name } => show(api.get(&path(&name))?),
+        ExperimentCommand::Show { name } => show(api.get(&path(&name))?, ""),
         ExperimentCommand::Start {
             name,
             version,
             note,
         } => {
             let body = json!({ "version": version, "note": note });
-            show(api.send(Method::POST, &format!("{}/start", path(&name)), &body)?)
+            let experiment: Value =
+                api.send(Method::POST, &format!("{}/start", path(&name)), &body)?;
+            let summary = format!("Started {name} version {}.", text(&experiment["version"]));
+            show(experiment, &summary)
         }
-        ExperimentCommand::Stop { name, note } => show(api.send(
-            Method::POST,
-            &format!("{}/stop", path(&name)),
-            &json!({ "note": note }),
-        )?),
+        ExperimentCommand::Stop { name, note } => show(
+            api.send(
+                Method::POST,
+                &format!("{}/stop", path(&name)),
+                &json!({ "note": note }),
+            )?,
+            &format!("Stopped {name}. Every subject gets the default."),
+        ),
         ExperimentCommand::Delete { name, yes } => {
             if !yes {
                 bail!("pass --yes to delete {name} with all of its versions and runs");
             }
             api.delete(&path(&name))?;
-            print(&json!({ "deleted": name }))
+            emit(&json!({ "deleted": name }), || {
+                format!("Deleted experiment {name}.")
+            })
         }
     }
 }
@@ -87,8 +121,74 @@ fn path(name: &str) -> String {
     format!("/v1/experiments/{}", segment(name))
 }
 
-fn show(experiment: Value) -> anyhow::Result<()> {
-    print(&with_split(experiment))
+/// Print the experiment, after a summary of what changed, and its warnings.
+fn show(experiment: Value, summary: &str) -> anyhow::Result<()> {
+    let experiment = with_split(experiment);
+    emit(&experiment, || {
+        let details = fields(&[
+            ("Name", text(&experiment["name"])),
+            ("App", text(&experiment["app"])),
+            ("Status", status(&experiment)),
+            ("Version", text(&experiment["version"])),
+            ("Split", arms_text(&experiment)),
+            ("Subject", text(&experiment["subject"])),
+            ("Eligibility", text(&experiment["eligibility"])),
+            ("Published", published(&experiment)),
+            ("Created", time(&experiment["created_at"])),
+        ]);
+        if summary.is_empty() {
+            details
+        } else {
+            format!("{summary}\n\n{details}")
+        }
+    })?;
+    if let Some(warnings) = experiment["warnings"].as_array() {
+        for warning in warnings {
+            note(&format!("warning: {}", text(warning)));
+        }
+    }
+    Ok(())
+}
+
+/// The status, and whether the draft differs from the published version.
+fn status(experiment: &Value) -> String {
+    let status = text(&experiment["status"]);
+    if experiment["pending"].as_bool() == Some(true) && status != "draft" {
+        format!("{status}, draft changed")
+    } else {
+        status
+    }
+}
+
+/// Each arm's share of all subjects, variants first, as in
+/// `fast 5%, control 5%`.
+fn arms_text(experiment: &Value) -> String {
+    let Some(split) = experiment["split"].as_object() else {
+        return "-".into();
+    };
+    let mut arms: Vec<(&String, &Value)> =
+        split.iter().filter(|(arm, _)| *arm != "control").collect();
+    arms.extend(split.get_key_value("control"));
+    arms.iter()
+        .map(|(arm, value)| format!("{arm} {}", share(value.as_f64().unwrap_or(0.0))))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The variant versions that the running version pinned, as `fast@3`.
+fn published(experiment: &Value) -> String {
+    let pinned: Vec<String> = experiment["published"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|variant| !variant["version"].is_null())
+        .map(|variant| format!("{}@{}", text(&variant["name"]), text(&variant["version"])))
+        .collect();
+    if pinned.is_empty() {
+        "-".into()
+    } else {
+        pinned.join(", ")
+    }
 }
 
 /// Add `split`: each arm's share of all the app's subjects.

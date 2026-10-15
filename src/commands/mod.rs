@@ -1,5 +1,5 @@
-//! Command handlers. Each prints one JSON document, except `ssp proxy` and
-//! `ssp controller`, which run until they are stopped.
+//! Command handlers. Each prints text, or one JSON document with `--json`,
+//! except `ssp proxy` and `ssp controller`, which run until they are stopped.
 
 mod app;
 mod auth;
@@ -7,14 +7,15 @@ mod experiment;
 mod token;
 mod variant;
 
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
     api::Api,
     cli::{Cli, Command},
     config::{DEFAULT_ENDPOINT, Settings},
-    controller, proxy, signing,
+    controller,
+    output::{bytes, emit, fields, list, note, text, time},
+    proxy, signing,
 };
 
 pub fn run(cli: Cli) -> anyhow::Result<()> {
@@ -27,10 +28,21 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
         Command::Login { no_open } => auth::login(&api, no_open),
         Command::Logout { all } => auth::logout(&api, all),
-        Command::Whoami => print(&api.get::<Value>("/v1/whoami")?),
+        Command::Whoami => whoami(&api.get("/v1/whoami")?),
         Command::Keygen => {
             let (private_key, public_key) = signing::generate();
-            print(&json!({ "private_key": private_key, "public_key": public_key }))
+            let keys = json!({ "private_key": private_key, "public_key": public_key });
+            emit(&keys, || {
+                fields(&[
+                    ("Private key", private_key.clone()),
+                    ("Public key", public_key.clone()),
+                ])
+            })?;
+            note(
+                "Store the private key as SSP_SIGNING_KEY in CI. \
+                 Give the public key to proxies and controllers as --trust-key.",
+            );
+            Ok(())
         }
         Command::Token(command) => token::run(&api, command),
         Command::App(command) => app::run(&api, command),
@@ -41,7 +53,52 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     }
 }
 
-pub fn print(value: &impl Serialize) -> anyhow::Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
-    Ok(())
+fn whoami(whoami: &Value) -> anyhow::Result<()> {
+    emit(whoami, || {
+        let account = &whoami["account"];
+        let credential = &whoami["credential"];
+        let mut rows = vec![
+            (
+                "Account",
+                format!(
+                    "{} ({})",
+                    text(&account["login"]),
+                    text(&account["provider"])
+                ),
+            ),
+            ("Account ID", text(&account["id"])),
+            ("Plan", text(&account["plan"])),
+            ("Workspace", text(&account["workspace"])),
+        ];
+        if let Some(host) = account["database_host"].as_str() {
+            rows.push((
+                "Database",
+                format!(
+                    "{host}:{}/{}",
+                    text(&account["database_port"]),
+                    text(&account["database_name"])
+                ),
+            ));
+        }
+        rows.extend([
+            (
+                "Credential",
+                format!(
+                    "{} ({}, {})",
+                    text(&credential["name"]),
+                    text(&credential["kind"]),
+                    text(&credential["id"])
+                ),
+            ),
+            ("Scopes", list(&credential["scopes"])),
+            ("App", text(&credential["app"])),
+            ("Expires", time(&credential["expires_at"])),
+        ]);
+        if let Some(storage) = whoami["storage"].as_object() {
+            let used = storage["bytes"].as_i64().unwrap_or(0);
+            let limit = storage["limit_bytes"].as_i64().unwrap_or(0);
+            rows.push(("Storage", format!("{} of {}", bytes(used), bytes(limit))));
+        }
+        fields(&rows)
+    })
 }

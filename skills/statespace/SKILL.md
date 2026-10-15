@@ -11,8 +11,8 @@ subjects to each variant and the same share to **control**, a copy of the deploy
 pinned when the experiment started. Everyone else gets the **default**, the deployed app.
 `ssp proxy` routes each subject; arms record every line they print.
 
-The CLI changes things; SQL reads data. Every `ssp` command except `ssp proxy` and `ssp
-controller` prints JSON. Errors print `{"error": "..."}` and exit with status 1.
+The CLI changes things. SQL reads data. Add `--json` to each `ssp` command to get one JSON
+document. With `--json`, errors are `{"error": "..."}` on standard error, with exit status 1.
 
 ## The loop
 

@@ -17,6 +17,9 @@ pub struct Cli {
     /// A token. Defaults to the saved `ssp login` session.
     #[arg(long, env = "SSP_TOKEN", global = true, hide_env_values = true)]
     pub token: Option<String>,
+    /// Print one JSON document instead of text.
+    #[arg(long, global = true)]
+    pub json: bool,
     #[command(subcommand)]
     pub command: Command,
 }

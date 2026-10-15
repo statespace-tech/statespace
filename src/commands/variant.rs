@@ -6,11 +6,13 @@ use anyhow::bail;
 use reqwest::Method;
 use serde_json::{Value, json};
 
-use super::{app, print};
+use super::app;
 use crate::{
     api::{Api, segment},
     cli::VariantCommand,
-    image, signing,
+    image,
+    output::{emit, fields, table, text, time},
+    signing,
 };
 
 pub fn run(api: &Api, command: VariantCommand) -> anyhow::Result<()> {
@@ -22,16 +24,40 @@ pub fn run(api: &Api, command: VariantCommand) -> anyhow::Result<()> {
             commit,
             signing_key,
         } => create(api, &app, &name, &image, commit, &signing_key),
-        VariantCommand::List { app } => print(&api.get::<Value>(&variants(&app))?),
+        VariantCommand::List { app } => {
+            let list: Vec<Value> = api.get(&variants(&app))?;
+            emit(&list, || {
+                if list.is_empty() {
+                    return format!("No variants in {app}. Publish one with `ssp variant create`.");
+                }
+                table(
+                    &["NAME", "VERSION", "COMMIT", "CREATED", "IMAGE"],
+                    list.iter()
+                        .map(|variant| {
+                            vec![
+                                text(&variant["name"]),
+                                text(&variant["version"]),
+                                short_commit(&variant["commit"]),
+                                time(&variant["created_at"]),
+                                text(&variant["image"]),
+                            ]
+                        })
+                        .collect(),
+                )
+            })
+        }
         VariantCommand::Show { name, app } => {
-            print(&api.get::<Value>(&format!("{}/{}", variants(&app), segment(&name)))?)
+            let variant: Value = api.get(&format!("{}/{}", variants(&app), segment(&name)))?;
+            emit(&variant, || details(&variant))
         }
         VariantCommand::Delete { name, app, yes } => {
             if !yes {
                 bail!("pass --yes to delete every version of {name}");
             }
             api.delete(&format!("{}/{}", variants(&app), segment(&name)))?;
-            print(&json!({ "deleted": name, "app": app }))
+            emit(&json!({ "deleted": name, "app": app }), || {
+                format!("Deleted variant {name} of app {app}.")
+            })
         }
     }
 }
@@ -63,7 +89,33 @@ fn create(
         "signature": signature,
         "public_key": public_key,
     });
-    print(&api.send::<Value>(Method::POST, &variants(app), &body)?)
+    let variant: Value = api.send(Method::POST, &variants(app), &body)?;
+    emit(&variant, || {
+        format!(
+            "Published {name} version {} in app {app}.\n\n{}",
+            text(&variant["version"]),
+            details(&variant)
+        )
+    })
+}
+
+fn details(variant: &Value) -> String {
+    fields(&[
+        ("App", text(&variant["app"])),
+        ("Name", text(&variant["name"])),
+        ("Version", text(&variant["version"])),
+        ("Image", text(&variant["image"])),
+        ("Commit", text(&variant["commit"])),
+        ("Signing key", text(&variant["public_key"])),
+        ("Created by", text(&variant["created_by"])),
+        ("Created", time(&variant["created_at"])),
+    ])
+}
+
+/// The first 12 characters of a commit.
+fn short_commit(commit: &Value) -> String {
+    let commit = text(commit);
+    commit.chars().take(12).collect()
 }
 
 /// The commit being built: from CI's environment, else the Git checkout

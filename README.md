@@ -268,9 +268,9 @@ ssp logout --all        # end every session
 
 ## Agents
 
-Every command except `proxy` and `controller` prints one JSON document, and every command
-except `login` is noninteractive. Errors print `{"error": "..."}` and exit with status 1.
-The CLI changes things; SQL reads data.
+Commands print text. Add `--json` to print one JSON document. Errors go to standard error
+and exit with status 1. With `--json`, an error is `{"error": "..."}`. All commands except
+`login` are noninteractive. The CLI changes things. SQL reads data.
 
 This repository includes an agent skill that teaches the full loop: build a branch,
 publish it as a variant, run an experiment, and read the result.

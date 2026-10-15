@@ -7,8 +7,9 @@ Kubernetes.
 
 ## Rules
 
-- Print exactly one JSON document per command, except `ssp proxy` and `ssp controller`.
-  Errors print `{"error": "..."}` and exit 1.
+- Print text by default and exactly one JSON document with `--json`, except `ssp proxy`
+  and `ssp controller`. Send notes and warnings to standard error. Errors exit 1, as
+  `{"error": "..."}` with `--json`.
 - Change things through the CLI; read data through SQL. Add no command that only reads
   recorded data.
 - Keep commands noninteractive, except `ssp login`.

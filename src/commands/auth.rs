@@ -7,10 +7,10 @@ use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::print;
 use crate::{
     api::{Api, decode},
     config::Settings,
+    output::{emit, text},
 };
 
 #[derive(Deserialize)]
@@ -40,7 +40,10 @@ pub fn login(api: &Api, no_open: bool) -> anyhow::Result<()> {
         token: Some(token),
     }
     .save()?;
-    print(&json!({ "status": "signed_in", "account": account }))
+    emit(
+        &json!({ "status": "signed_in", "account": account }),
+        || format!("Signed in as {}.", text(&account["login"])),
+    )
 }
 
 /// Sign this terminal out, or every session of the account with `all`. The
@@ -62,7 +65,17 @@ pub fn logout(api: &Api, all: bool) -> anyhow::Result<()> {
         token: None,
     }
     .save()?;
-    print(&json!({ "status": "signed_out", "sessions_ended": ended? }))
+    let ended = ended?;
+    emit(
+        &json!({ "status": "signed_out", "sessions_ended": ended }),
+        || {
+            if all {
+                format!("Signed out of {} sessions.", text(&ended))
+            } else {
+                "Signed out.".into()
+            }
+        },
+    )
 }
 
 fn wait_for_approval(api: &Api, login: &DeviceLogin) -> anyhow::Result<String> {

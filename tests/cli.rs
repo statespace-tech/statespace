@@ -23,6 +23,7 @@ fn ssp(arguments: &[&str]) -> (bool, Value, Value) {
         .env_remove("SSP_TRUST_KEY")
         .env_remove("STATESPACE_APP")
         .env("STATESPACE_URL", "http://127.0.0.1:9")
+        .arg("--json")
         .args(arguments)
         .output()
         .unwrap();
@@ -38,6 +39,33 @@ fn error(arguments: &[&str]) -> String {
     let (ok, _, error) = ssp(arguments);
     assert!(!ok, "{arguments:?} succeeded");
     error["error"].as_str().unwrap_or_default().to_owned()
+}
+
+#[test]
+fn reports_errors_as_text() {
+    let config = tempfile::tempdir().unwrap();
+    let output = Command::cargo_bin("ssp")
+        .unwrap()
+        .env("STATESPACE_CONFIG", config.path().join("config.toml"))
+        .env_remove("SSP_TOKEN")
+        .args(["app", "delete", "web"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.starts_with("error: pass --yes"), "{error}");
+}
+
+#[test]
+fn prints_keys_as_text() {
+    let output = Command::cargo_bin("ssp")
+        .unwrap()
+        .arg("keygen")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.starts_with("Private key: "), "{text}");
+    assert!(text.contains("\nPublic key:  "), "{text}");
 }
 
 #[test]
@@ -334,6 +362,7 @@ fn docker_proxies_run_the_default_and_each_arm() {
             .env("STATESPACE_CONFIG", config.path().join("config.toml"))
             .env("STATESPACE_URL", &api)
             .env("SSP_TOKEN", "test")
+            .arg("--json")
             .args(arguments)
             .output()
             .unwrap();

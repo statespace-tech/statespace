@@ -33,4 +33,5 @@ a signed image; each experiment compares it with a control arm of the deployed i
 - The `ghcr.io/statespace-tech/statespace` image, for the proxy sidecar and the controller.
 - `examples/fastapi`, a FastAPI shop with a CI workflow and a systemd unit, and
   `examples/kubernetes`, its manifests for Kubernetes.
+- Commands print text. `--json` prints one JSON document instead.
 - An agent skill in `skills/statespace`.
