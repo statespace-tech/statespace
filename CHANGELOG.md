@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-10-15
 
 The first release. Statespace compares whole versions of an app in production. A variant is
 a signed image; each experiment compares it with a control arm of the deployed image.

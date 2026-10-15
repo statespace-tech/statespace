@@ -40,9 +40,9 @@ STATESPACE_URL=http://localhost:8080 cargo run -- experiment list
 
 ## Releases
 
-Bump the version in `Cargo.toml`, update `CHANGELOG.md`, and push a `v` tag. The release
-workflow builds checksummed archives for each platform, publishes the GitHub release and
-the `ghcr.io/statespace-tech/statespace` image, and publishes the crate.
+Set the version in `Cargo.toml`. Update `CHANGELOG.md`. Then push a `v` tag. The release
+workflow builds an archive for each platform. It publishes the GitHub release and the
+`ghcr.io/statespace-tech/statespace` image.
 
 ```shell
 git tag v0.1.0 && git push origin v0.1.0
