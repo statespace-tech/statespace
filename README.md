@@ -35,6 +35,12 @@ Install the CLI on macOS or Linux.
 curl -fsSL https://statespace.com/install.sh | bash
 ```
 
+Give this prompt to your coding agent:
+
+```text
+Read https://statespace.com/skill.md and follow it.
+```
+
 ## How it works
 
 `ssp proxy` is a reverse proxy in front of your app. For each request it reads the
@@ -258,19 +264,6 @@ ssp token create --name agent --preset admin --expires-in-days 30
 ssp token list          # tokens and sign-in sessions
 ssp whoami              # the credential in use and what it may do
 ssp logout --all        # end every session
-```
-
-## Agents
-
-Commands print text. Add `--json` to print one JSON document. Errors go to standard error
-and exit with status 1. With `--json`, an error is `{"error": "..."}`. All commands except
-`login` are noninteractive. The CLI changes things. SQL reads data.
-
-This repository includes an agent skill that teaches the full loop: build a branch,
-publish it as a variant, run an experiment, and read the result.
-
-```shell
-cp -r skills/statespace ~/.claude/skills/
 ```
 
 ## License

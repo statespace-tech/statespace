@@ -89,8 +89,11 @@ jobs:
           pattern: ssp-*
           path: dist
           merge-multiple: true
-      - name: Add installer
-        run: cp install.sh dist/install.sh
+      # statespace.com serves these two files from the latest release.
+      - name: Add the installer and the agent skill
+        run: |
+          cp install.sh dist/install.sh
+          cp skills/statespace/SKILL.md dist/skill.md
       - uses: actions/upload-artifact@v7
         with:
           name: release-bundle
@@ -164,3 +167,19 @@ jobs:
               [[ "$tag" == "$GITHUB_REF_NAME" ]] && continue
               gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
             done
+
+  website:
+    name: Update statespace.com
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      # The website's CI copies install.sh and skill.md from the latest release, and its
+      # deploy workflow publishes the result.
+      - env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DEPLOY_TOKEN }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::warning::Set WEBSITE_DEPLOY_TOKEN to update statespace.com after a release."
+            exit 0
+          fi
+          gh workflow run ci.yml --repo statespace-tech/frontend --ref main

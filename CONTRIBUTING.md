@@ -42,7 +42,8 @@ STATESPACE_URL=http://localhost:8080 cargo run -- experiment list
 
 Set the version in `Cargo.toml`. Update `CHANGELOG.md`. Then push a `v` tag. The release
 workflow builds an archive for each platform. It publishes the GitHub release and the
-`ghcr.io/statespace-tech/statespace` image.
+`ghcr.io/statespace-tech/statespace` image. Then statespace.com serves the installer and
+the agent skill of the release.
 
 ```shell
 git tag v0.1.0 && git push origin v0.1.0
