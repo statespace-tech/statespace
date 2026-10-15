@@ -1,0 +1,40 @@
+# Publish every branch of the shop as a variant. Copy this file to
+# .github/workflows/variant.yml in the app's repository.
+#
+# Secrets:
+#   SSP_TOKEN        ssp token create --name ci --preset publisher
+#   SSP_SIGNING_KEY  the private key from `ssp keygen`; proxies and controllers
+#                    trust its public key with --trust-key
+name: Publish variant
+
+on:
+  push:
+    branches-ignore: [main]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  variant:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push the branch's image
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker build --tag "$image" .
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Install ssp
+        run: curl -fsSL https://statespace.com/install.sh | sh
+      - name: Sign and publish the variant
+        env:
+          SSP_TOKEN: ${{ secrets.SSP_TOKEN }}
+          SSP_SIGNING_KEY: ${{ secrets.SSP_SIGNING_KEY }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # Variant names use letters, numbers, dots, dashes, and underscores.
+          name=$(printf '%s' "$BRANCH" | tr -c 'A-Za-z0-9._-' '-' | cut -c 1-100)
+          ~/.local/bin/ssp variant create "$name" --app shop --image "$IMAGE"
