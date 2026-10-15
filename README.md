@@ -18,28 +18,22 @@
 
 </div>
 
-Statespace A/B tests whole versions of your app in production. Publish a branch's image,
-and `ssp proxy` serves it to a share of real users beside a control arm of the version you
-deployed. Then query what it did to the outcomes you care about.
+Statespace lets you A/B test multiple versions of your app in production.
 
 ---
 
-**Website:** [statespace.com](https://statespace.com) · **Documentation:** [docs.statespace.com](https://docs.statespace.com)
+**Website:** [statespace.com](https://statespace.com)<br>
+**Documentation:** [docs.statespace.com](https://docs.statespace.com)
 
 ---
 
 ## Install
 
-Install the Statespace CLI on macOS or Linux.
+Install the CLI on macOS or Linux.
 
 ```shell
 curl -fsSL https://statespace.com/install.sh | bash
 ```
-
-The installer downloads the latest release and verifies its SHA-256 checksum. Only the
-latest release is published. Pushing a `v*` tag publishes a release, the
-`ghcr.io/statespace-tech/statespace` image, and removes the previous release; pushes to `main`
-publish nothing.
 
 ## How it works
 
