@@ -41,8 +41,6 @@ use crate::{
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long in-flight requests may finish after a shutdown signal.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
-/// How many arms a proxy runs unless `--max-variants` says otherwise.
-const MAX_ARMS: u32 = 4;
 
 pub fn run(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -93,7 +91,7 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
     let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
     let redact = patterns(&shared_arguments.redact)?;
     let variant_env = pairs(&shared_arguments.variant_env, "--variant-env")?;
-    let max_arms = shared_arguments.max_variants.unwrap_or(MAX_ARMS);
+    let max_arms = shared_arguments.max_variants;
 
     let (upstreams, default_image) = match arguments.runtime {
         Runtime::Docker => {

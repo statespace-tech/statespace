@@ -64,6 +64,6 @@ answers, and then stops the old container.
 
 Behind a load balancer, run as many machines as before. Every proxy assigns a
 subject the same arm, so requests need no stickiness. Each proxy runs the
-default and up to `--max-variants` arms, 4 by default, control arms included.
+default and up to `--max-variants` arms, 5 by default, control arms included.
 Size machines for that many copies of the shop, or lower the limit; `ssp
 experiment start` warns when an experiment needs more arms than proxies run.

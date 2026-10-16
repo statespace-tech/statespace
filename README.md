@@ -194,7 +194,7 @@ ssp proxy --app web --runtime kubernetes --default http://localhost:8000
 | `--default` | Where the default listens, with `--runtime kubernetes` |
 | `--health` | A path that must answer 200 before a container gets traffic |
 | `--trust-key` | A public key whose signed variants may run. Repeat to rotate keys |
-| `--max-variants` | How many arms run at once, control arms included. Defaults to 4 |
+| `--max-variants` | How many arms run at once, control arms included. Defaults to 5 |
 | `--variant-env` | An environment variable every arm gets and the default does not |
 | `--redact` | A regular expression replaced in recorded lines before they leave the machine |
 | `--port`, `--volume`, `--memory`, `--cpus` | Container settings, with `--runtime docker`. The port defaults to the image's `EXPOSE` |

@@ -31,9 +31,6 @@ use crate::{
     signing,
 };
 
-/// How many arms the controller runs unless `--max-variants` says otherwise.
-const MAX_ARMS: u32 = 10;
-
 pub fn run(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -101,7 +98,7 @@ async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
         container: arguments.container.clone(),
         trusted,
         variant_env: proxy::pairs(&shared.variant_env, "--variant-env")?,
-        max_arms: shared.max_variants.unwrap_or(MAX_ARMS),
+        max_arms: shared.max_variants,
         id: id.clone(),
         owner,
         state,

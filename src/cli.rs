@@ -298,8 +298,8 @@ pub struct Shared {
     #[arg(long, env = "STATESPACE_HEALTH")]
     pub health: Option<String>,
     /// How many arms run at once, control arms included, 1 to 64.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..=64))]
-    pub max_variants: Option<u32>,
+    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=64))]
+    pub max_variants: u32,
     /// Seconds to keep routing with the last configuration while Statespace
     /// is unreachable. After that, every subject gets the default.
     #[arg(long, default_value_t = 300)]
