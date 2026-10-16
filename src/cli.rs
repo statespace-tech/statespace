@@ -5,9 +5,10 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 #[derive(Parser)]
 #[command(
     name = "ssp",
+    display_name = "statespace",
     version,
-    about = "A/B test whole versions of your app in production",
-    after_help = "Every command except `ssp proxy` and `ssp controller` prints JSON. \
+    about = "A/B test multiple versions of your app in production",
+    after_help = "Add --json to print one JSON document. \
                   Documentation: https://docs.statespace.com"
 )]
 pub struct Cli {
