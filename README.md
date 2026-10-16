@@ -13,6 +13,7 @@
 <br>
 
 [![CI](https://github.com/statespace-tech/statespace/actions/workflows/ci.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/statespace?style=flat-square)](https://crates.io/crates/statespace)
 [![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
 [![Discord](https://img.shields.io/discord/1541944682727084143?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/qKEFpqG9mr)
 
@@ -43,13 +44,13 @@ Read https://statespace.com/skill.md and follow it.
 
 ## How it works
 
-`ssp proxy` is a reverse proxy in front of your app. For each request it reads the
-subject, assigns it, and forwards the request to one of:
+`ssp proxy` is a reverse proxy in front of your app. For each request, it finds the
+subject and assigns the subject to an arm. Then it sends the request to one of these:
 
-- **default**: the version you deployed, for every subject outside an experiment;
-- **control**: an experiment's baseline arm, a copy of the default's image pinned when the
-  experiment started;
-- **a variant**: a signed image of a branch.
+- **The default:** the version that you deployed. All subjects outside experiments get it.
+- **Control:** the baseline arm of an experiment. It is a copy of the default's image.
+  Statespace pins it when the experiment starts.
+- **A variant:** a signed image of a branch.
 
 ```text
 load balancer → ssp proxy :8080 → default            (your deployed image)
@@ -57,13 +58,13 @@ load balancer → ssp proxy :8080 → default            (your deployed image)
                                 → lower-price@3      (a signed image of a branch)
 ```
 
-On a machine with Docker, the proxy runs the default and every arm as containers. On
-Kubernetes, it runs beside the default in each pod, and `ssp controller` runs the arms as
-copies of the default's Deployment.
+On a machine with Docker, the proxy runs the default and each arm as containers. On
+Kubernetes, the proxy runs beside the default in each pod. `ssp controller` runs the arms
+as copies of the default's Deployment.
 
-Your app reads the `x-statespace-subject` header when it needs the subject, and prints
-what it does to standard output or standard error, as it already does. Every line the arms
-print is recorded; a JSON line with a `subject` field is tied to that subject's arm.
+The proxy sends the subject to your app in the `x-statespace-subject` header. Your app
+prints to standard output and standard error as usual. Statespace records each line that
+an arm prints. A JSON line with a `subject` field belongs to the arm of that subject.
 
 ## Quickstart
 
@@ -75,36 +76,37 @@ ssp app create web
 ssp keygen
 ```
 
-Build the branch's image the way you build production, push it, then sign and publish it.
+Build the image of the branch as you build production. Push the image. Then sign and
+publish it.
 
 ```shell
 docker build -t ghcr.io/acme/web:feature-x . && docker push ghcr.io/acme/web:feature-x
 ssp variant create feature-x --app web --image ghcr.io/acme/web:feature-x
 ```
 
-Create an experiment that gives the variant 5% of the subjects and control another 5%,
-and start it.
+Create an experiment that gives 5% of the subjects to the variant and 5% to control. Then
+start it.
 
 ```shell
 ssp experiment create checkout --app web --split feature-x=0.05 \
-  --note "A one-page checkout should convert better."
+  --note "A one-page checkout can increase purchases."
 ssp experiment start checkout
 ```
 
-Create a runtime token, and run your app behind `ssp proxy`.
+Create a runtime token. Then run your app behind `ssp proxy`.
 
 ```shell
 ssp token create --name production --preset runtime   # store it as SSP_TOKEN
 ssp proxy --app web --runtime docker --image ghcr.io/acme/web:main --trust-key "$PUBLIC_KEY"
 ```
 
-Print a line wherever something happens that you want to measure.
+Print a line where the outcome occurs.
 
 ```python
 print(json.dumps({"event": "purchase", "subject": user_id, "amount": 42}))
 ```
 
-Compare the arms in SQL with a token that may read the app.
+Create a token that can read the app. Then compare the arms in SQL.
 
 ```shell
 ssp token create --name analysis --preset analyst --app web
@@ -114,22 +116,24 @@ psql "$DATABASE_URL" -c "
   FROM web.logs WHERE experiment = 'checkout' GROUP BY variant"
 ```
 
+Commands print text. Add `--json` to print one JSON document.
+
 ## Variants
 
-A variant is a signed image of your app, usually built from a branch. `--image` takes a tag
-or a digest; a tag is resolved to its digest with `docker`, so the signature covers exact
-bytes.
+A variant is a signed image of your app. Usually, you build it from a branch. `--image`
+takes a tag or a digest. The CLI uses `docker` to change a tag to its digest. Thus, the
+signature covers the exact image.
 
 ```shell
 ssp variant create feature-x --app web --image ghcr.io/acme/web:feature-x
 ```
 
-Proxies and controllers run only variants signed by a key they trust, so a leaked
-Statespace token cannot put code in production. The signature covers the image digest, the
-variant's name and app, and its commit, which defaults to CI's commit, such as
-`GITHUB_SHA`, or the current directory's Git `HEAD`.
+Proxies and controllers run only variants with a signature from a key that they trust.
+Thus, a stolen Statespace token cannot put code in production. The signature covers the
+image digest, the name and app of the variant, and its commit. The commit comes from CI,
+such as `GITHUB_SHA`, or from Git `HEAD` in the current directory.
 
-Publishing a new digest creates the variant's next version. The same digest does not.
+Each new digest makes a new version of the variant. The same digest does not.
 
 ```shell
 ssp variant show feature-x --app web
@@ -137,9 +141,10 @@ ssp variant show feature-x --app web
 
 ## Experiments
 
-`--split` gives each arm its share of all the app's subjects. Control gets the largest
-variant's share unless `control=SHARE` sets it. Running experiments of an app never share a
-subject; subjects outside every experiment get the default.
+`--split` gives each arm its share of all subjects of the app. Control gets the share of
+the largest variant. To set a different share, use `control=SHARE`. Two running
+experiments of an app never share a subject. Subjects outside all experiments get the
+default.
 
 ```shell
 ssp experiment create checkout --app web --split feature-x=0.05 --split feature-y=0.02 \
@@ -147,20 +152,22 @@ ssp experiment create checkout --app web --split feature-x=0.05 --split feature-
   --eligibility 'request.headers["cf-ipcountry"] == "US"'
 ```
 
-`--subject` and `--eligibility` are CEL expressions over the request's `method`, `path`,
-`query`, `headers`, and `cookies`. The subject defaults to `request.cookies.ssp_sid`, a
-cookie the proxy sets for every new visitor. It cannot change once the experiment starts.
+`--subject` and `--eligibility` are CEL expressions. They can use the `method`, `path`,
+`query`, `headers`, and `cookies` of the request. The default subject is
+`request.cookies.ssp_sid`. The proxy sets this cookie for each new visitor. You cannot
+change the subject after the experiment starts.
 
-Edits change a draft. The running version changes only when you start the draft, which
-pins each variant's newest version and gives the version a fresh control arm.
+Changes go to a draft. The running version changes only when you start the draft. Then
+Statespace pins the newest version of each variant and gives the experiment a new control
+arm.
 
 ```shell
-ssp experiment update checkout --split feature-x=0.05 --note "feature-y regressed latency"
-ssp experiment start checkout --note "drop feature-y"
+ssp experiment update checkout --split feature-x=0.05 --note "feature-y made latency worse"
+ssp experiment start checkout --note "remove feature-y"
 ```
 
-Stop an experiment to send every subject back to the default, and ship a winner by merging
-its branch and deploying it as usual. Restart a published version to roll back.
+To send all subjects back to the default, stop the experiment. To ship a variant, merge its
+branch and deploy it as usual. To roll back, start an earlier version.
 
 ```shell
 ssp experiment stop checkout --note "feature-x won; merging it"
@@ -189,59 +196,60 @@ ssp proxy --app web --runtime kubernetes --default http://localhost:8000
 
 | Flag | Meaning |
 | --- | --- |
-| `--runtime` | `docker` runs the default and the arms; `kubernetes` only routes |
-| `--image`, `--image-file` | The default's image. On SIGHUP, the proxy reads `--image-file` again and swaps the default once the new container is ready |
-| `--default` | Where the default listens, with `--runtime kubernetes` |
-| `--health` | A path that must answer 200 before a container gets traffic |
-| `--trust-key` | A public key whose signed variants may run. Repeat to rotate keys |
-| `--max-variants` | How many arms run at once, control arms included. Defaults to 5 |
-| `--variant-env` | An environment variable every arm gets and the default does not |
-| `--redact` | A regular expression replaced in recorded lines before they leave the machine |
-| `--port`, `--volume`, `--memory`, `--cpus` | Container settings, with `--runtime docker`. The port defaults to the image's `EXPOSE` |
-| `--stale-after` | Seconds to keep routing while Statespace is unreachable. Defaults to 300 |
+| `--runtime` | `docker` runs the default and the arms. `kubernetes` only sends requests |
+| `--image`, `--image-file` | The image of the default. On SIGHUP, the proxy reads `--image-file` again. It replaces the default when the new container is ready |
+| `--default` | The address of the default, with `--runtime kubernetes` |
+| `--health` | A path that must answer 200 before a container gets requests |
+| `--trust-key` | A public key. Proxies run variants that this key signed. Repeat it to replace keys |
+| `--max-variants` | The maximum number of arms that run at the same time, control arms included. The default is 5 |
+| `--variant-env` | An environment variable for the arms. The default does not get it |
+| `--redact` | A regular expression. The proxy replaces its matches in recorded lines before they leave the machine |
+| `--port`, `--volume`, `--memory`, `--cpus` | Container settings, with `--runtime docker`. The default port is the `EXPOSE` port of the image |
+| `--stale-after` | How many seconds the proxy uses its last configuration when it cannot reach Statespace. Then all subjects get the default. The default is 300 |
 
-On Docker, containers inherit the proxy's environment, without its own settings and what
-describes the machine, and get `PORT`, `STATESPACE_APP`, `STATESPACE_VARIANT`,
-`STATESPACE_EXPERIMENT`, and `STATESPACE_VARIANT_VERSION`. Requests carry
-`x-statespace-subject`, `x-statespace-variant`, and `x-statespace-experiment`; clients
-cannot set them.
+On Docker, containers get the environment of the proxy. They do not get the settings of
+the proxy or the variables that describe the machine. They also get `PORT`,
+`STATESPACE_APP`, `STATESPACE_VARIANT`, `STATESPACE_EXPERIMENT`, and
+`STATESPACE_VARIANT_VERSION`. Requests have the headers `x-statespace-subject`,
+`x-statespace-variant`, and `x-statespace-experiment`. Clients cannot set these headers.
 
-An arm that is starting or failing sends its subjects to the default. A control arm runs
-only an image the proxy ran as its default, so Statespace cannot choose what runs. Arms
-record every line they print, every request, lifecycle events, CPU and memory, and
-per-minute HTTP summaries. The default is never recorded.
+When an arm starts or fails, its subjects get the default. A control arm runs only an image
+that the proxy ran as its default. Thus, Statespace cannot choose what runs. Arms record
+each line that they print, each request, lifecycle events, CPU and memory, and HTTP
+summaries for each minute. Statespace does not record the default.
 
-Arms share your database, cache, and queues with the default. Give them a database user
-without schema permissions with `--variant-env`, and turn off schedulers and workers that
-run inside your web process, so nothing runs twice.
+Arms use the same database, cache, and queues as the default. Use `--variant-env` to give
+them a database user without schema permissions. Turn off schedulers and workers that run
+in your web process. Then nothing runs two times.
 
 ## Kubernetes
 
-`ssp controller` runs the arms of an app's experiments as copies of the default's
-Deployment, with the arm's image. It reports where each arm runs, so the proxies beside the
-default reach it, and records every line the arms print.
+`ssp controller` runs the arms of the app's experiments. Each arm is a copy of the
+default's Deployment with the image of the arm. The controller reports the address of each
+arm, so the proxies can send requests to it. It also records each line that the arms
+print.
 
 ```shell
 ssp controller --app web --deployment web --trust-key "$PUBLIC_KEY"
 ```
 
 [`examples/kubernetes`](examples/kubernetes) has the manifests: the sidecar, the
-controller, and what the controller may do. [`examples/fastapi`](examples/fastapi) is a
-complete app: a FastAPI shop with a GitHub Actions workflow that publishes each branch's
-image as a variant, and a systemd unit for a machine with Docker.
+controller, and its permissions. [`examples/fastapi`](examples/fastapi) is a full app: a
+FastAPI shop with a GitHub Actions workflow and a systemd unit. The workflow publishes the
+image of each branch as a variant. The unit runs the proxy on a machine with Docker.
 
 ## Data
 
-Every app has a PostgreSQL schema of views: `logs`, `runs`, `output`, `requests`,
-`metrics`, `lifecycle`, `notes`, `hosts`, `arms`, and `sample_ratio`. Tokens that may read
-every app also read `account.audit`.
+Each app has a PostgreSQL schema of views: `logs`, `runs`, `output`, `requests`,
+`metrics`, `lifecycle`, `notes`, `hosts`, `arms`, and `sample_ratio`. Tokens that can read
+all apps can also read `account.audit`.
 
 ```shell
 ssp token create --name analysis --preset analyst --app web
 psql "$DATABASE_URL" -c "SELECT * FROM web.sample_ratio WHERE mismatch"
 ```
 
-Erase one subject's data from an app.
+To erase the data of one subject from an app:
 
 ```shell
 ssp app erase-subject web user-42
@@ -249,21 +257,22 @@ ssp app erase-subject web user-42
 
 ## Tokens
 
-One token opens the API and, with `query:read`, PostgreSQL. Presets cover the usual jobs.
+A token opens the API. With `query:read`, it also opens PostgreSQL. Presets give the usual
+scopes.
 
 | Preset | For |
 | --- | --- |
-| `runtime` | `ssp proxy`: read the app's configuration and send events |
-| `controller` | `ssp controller`: runtime, and report where arms run |
+| `runtime` | `ssp proxy`: read the configuration of the app and send events |
+| `controller` | `ssp controller`: the `runtime` scopes, and report the addresses of arms |
 | `publisher` | CI: publish variants and run experiments |
 | `analyst` | SQL: read runs, output, and requests |
-| `admin` | Everything, for agents that run the whole loop |
+| `admin` | All scopes, for agents that do all of the work |
 
 ```shell
 ssp token create --name agent --preset admin --expires-in-days 30
 ssp token list          # tokens and sign-in sessions
-ssp whoami              # the credential in use and what it may do
-ssp logout --all        # end every session
+ssp whoami              # the credential in use and its scopes
+ssp logout --all        # end all sessions
 ```
 
 ## License
