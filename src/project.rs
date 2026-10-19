@@ -1,5 +1,5 @@
-//! `statespace.toml`: the app a repository's builds belong to, and the
-//! settings of the arm an experiment branch is.
+//! `statespace.toml`: an app's settings, read from the default branch, and
+//! the settings of the arm an experiment branch is.
 
 use std::path::Path;
 
@@ -18,6 +18,11 @@ pub fn default_subject() -> String {
 pub struct Project {
     /// The app: lowercase letters, digits, and underscores, starting with a letter.
     pub app: String,
+    /// The share of the app's subjects that arms and controls may hold
+    /// together. Read from the default branch.
+    pub max_traffic: Option<f64>,
+    /// Days to keep the lines arms print. Read from the default branch.
+    pub output_retention_days: Option<i32>,
     /// The arm's share of all the app's subjects. Experiment branches only.
     pub share: Option<f64>,
     /// CEL over `request` that yields the subject ID.
@@ -30,7 +35,7 @@ impl Project {
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let text = std::fs::read_to_string(path).with_context(|| {
             format!(
-                "could not read {}; run `ssp init github` to write one",
+                "could not read {}; see https://docs.statespace.com/quickstart",
                 path.display()
             )
         })?;
@@ -40,14 +45,6 @@ impl Project {
             .validate()
             .with_context(|| format!("{} is invalid", path.display()))?;
         Ok(project)
-    }
-
-    /// The app of `statespace.toml` in the current directory, if there is one.
-    pub fn current_app() -> Option<String> {
-        let text = std::fs::read_to_string(crate::cli::PROJECT_FILE).ok()?;
-        toml::from_str::<Self>(&text)
-            .ok()
-            .map(|project| project.app)
     }
 
     pub fn subject(&self) -> String {
@@ -71,6 +68,16 @@ impl Project {
             && (!share.is_finite() || share <= 0.0 || share > 1.0)
         {
             bail!("share must be greater than 0 and at most 1, such as 0.05 for 5%");
+        }
+        if let Some(limit) = self.max_traffic
+            && (!limit.is_finite() || limit <= 0.0 || limit > 1.0)
+        {
+            bail!("max_traffic must be greater than 0 and at most 1, such as 0.2 for 20%");
+        }
+        if let Some(days) = self.output_retention_days
+            && !(1..=365).contains(&days)
+        {
+            bail!("output_retention_days must be 1 to 365");
         }
         check_rule(&self.subject()).context("invalid subject rule")?;
         if let Some(eligibility) = &self.eligibility {

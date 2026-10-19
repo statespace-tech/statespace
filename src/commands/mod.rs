@@ -1,19 +1,17 @@
 //! Command handlers. Each prints text, or one JSON document with `--json`,
 //! except `ssp proxy` and `ssp controller`, which run until they are stopped.
 
-mod app;
 mod auth;
 mod ci;
 mod experiment;
-mod init;
-mod repo;
+mod target;
 mod token;
 
 use serde_json::Value;
 
 use crate::{
     api::Api,
-    cli::{Cli, Command, ControllerCommand, InitCommand},
+    cli::{Cli, Command, ControllerCommand},
     config::{DEFAULT_ENDPOINT, Settings},
     controller,
     output::{bytes, emit, fields, list, text, time},
@@ -31,18 +29,15 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Login { no_open } => auth::login(&api, no_open),
         Command::Logout { all } => auth::logout(&api, all),
         Command::Whoami => whoami(&api.get("/v1/whoami")?),
-        Command::Init(InitCommand::Github { app, image, force }) => init::github(app, image, force),
-        Command::Check(arguments) => ci::check(&arguments),
         Command::Apply {
             image,
             file,
             dry_run,
         } => ci::apply(&api, &image, &file, dry_run),
-        Command::Status { experiment, app } => experiment::status(&api, experiment, app),
-        Command::Stop { target, app } => experiment::stop(&api, &target, app),
-        Command::Repo(command) => repo::run(&api, command),
+        Command::Status { targets } => experiment::status(&api, &targets),
+        Command::Stop { targets } => experiment::stop(&api, &targets),
+        Command::Resume { targets } => experiment::resume(&api, &targets),
         Command::Token(command) => token::run(&api, command),
-        Command::App(command) => app::run(&api, command),
         Command::Proxy(arguments) => proxy::run(api, *arguments),
         Command::Controller(ControllerCommand::Kubernetes(arguments)) => {
             controller::run(api, *arguments)

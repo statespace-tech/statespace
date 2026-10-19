@@ -269,24 +269,6 @@ pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&Key) -> bool) 
     }
 }
 
-/// What an arm's rules say about a request: the subject its subject rule
-/// yields, if any, and whether its eligibility rule lets it in.
-pub fn test_rules(
-    subject: &str,
-    eligibility: Option<&str>,
-    request: &Value,
-) -> anyhow::Result<(Option<String>, bool)> {
-    let subject = subject_of(&compile(subject).context("invalid subject rule")?, request);
-    let eligible = match eligibility {
-        None => true,
-        Some(rule) => {
-            let program = compile(rule).context("invalid eligibility rule")?;
-            evaluate(&program, request).context("the eligibility rule failed")? == Cel::Bool(true)
-        }
-    };
-    Ok((subject, eligible))
-}
-
 /// Whether a CEL rule compiles.
 pub fn check_rule(expression: &str) -> anyhow::Result<()> {
     compile(expression).map(drop)

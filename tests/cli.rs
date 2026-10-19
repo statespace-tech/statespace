@@ -46,26 +46,31 @@ fn reports_errors_as_text() {
         .unwrap()
         .env("STATESPACE_CONFIG", config.path().join("config.toml"))
         .env_remove("SSP_TOKEN")
-        .args(["app", "delete", "web"])
+        .args(["token", "revoke", "--all"])
         .output()
         .unwrap();
     assert!(!output.status.success());
     let error = String::from_utf8_lossy(&output.stderr);
-    assert!(error.starts_with("error: pass --yes"), "{error}");
+    assert!(
+        error.starts_with("error: ") && error.contains("--yes"),
+        "{error}"
+    );
 }
 
 #[test]
 fn reports_errors_as_json() {
-    assert!(error(&["status", "--app", "web"]).contains("ssp login"));
-    assert!(error(&["stop", "checkout", "--app", "web"]).contains("ssp login"));
-    assert!(error(&["app", "delete", "web"]).contains("--yes"));
-    assert!(error(&["app", "set", "web"]).contains("--max-traffic"));
+    let pull = "https://github.com/acme/web/pull/418";
+    assert!(error(&["status", pull]).contains("ssp login"));
+    assert!(error(&["stop", pull]).contains("ssp login"));
+    assert!(error(&["resume", "https://github.com/acme/web"]).contains("ssp login"));
+    assert!(error(&["stop", "https://gitlab.com/acme/web"]).contains("not a GitHub URL"));
+    assert!(error(&["stop", "no/such/folder"]).contains("not a directory"));
     assert!(error(&["token", "revoke", "--all"]).contains("--yes"));
 }
 
-/// `ssp init github` writes files that `ssp check` and `ssp apply --dry-run` read.
+/// `ssp apply --dry-run` reads statespace.toml and the branch checked out.
 #[test]
-fn sets_up_a_repository() {
+fn plans_from_the_repository() {
     let directory = tempfile::tempdir().unwrap();
     let git = |arguments: &[&str]| {
         assert!(
@@ -101,40 +106,13 @@ fn sets_up_a_repository() {
             parse(&output.stderr),
         )
     };
-    let (ok, written, _) = run(&["init", "github", "--app", "web"]);
-    assert!(ok);
-    assert_eq!(written["image"], "ghcr.io/acme/web");
-    let workflow =
-        std::fs::read_to_string(directory.path().join(".github/workflows/statespace.yml")).unwrap();
-    assert!(workflow.contains("image: ghcr.io/acme/web@${{ steps.build.outputs.digest }}"));
-    assert!(workflow.contains("id-token: write"));
-    let (ok, _, error) = run(&["init", "github", "--app", "web"]);
-    assert!(!ok && error["error"].as_str().unwrap().contains("--force"));
-
-    let (ok, checked, _) = run(&["check"]);
-    assert!(ok);
-    assert_eq!(
-        (checked["app"].clone(), checked["share"].clone()),
-        (json!("web"), json!(0.05))
-    );
-    let toml =
-        "app = \"web\"\nshare = 0.1\neligibility = 'request.headers[\"cf-ipcountry\"] == \"US\"'\n";
-    std::fs::write(directory.path().join("statespace.toml"), toml).unwrap();
-    let (ok, checked, _) = run(&[
-        "check",
-        "--path",
-        "/",
-        "--cookie",
-        "ssp_sid=u_1",
-        "--header",
-        "CF-IPCountry=FR",
-    ]);
-    assert!(ok);
-    assert_eq!(
-        checked["request"],
-        json!({"subject": "u_1", "eligible": false})
-    );
-
+    let file = directory.path().join("statespace.toml");
+    std::fs::write(
+        &file,
+        "app = \"web\"\nmax_traffic = 0.2\nshare = 0.1\n\
+         eligibility = 'request.headers[\"cf-ipcountry\"] == \"US\"'\n",
+    )
+    .unwrap();
     let (ok, plan, _) = run(&["apply", "--image", "web:1", "--dry-run"]);
     assert!(ok);
     assert_eq!(
@@ -143,6 +121,13 @@ fn sets_up_a_repository() {
     );
     let (ok, _, error) = run(&["apply", "--image", "web:1"]);
     assert!(!ok && error["error"].as_str().unwrap().contains("GitHub Actions"));
+
+    std::fs::write(&file, "app = \"web\"\nmax_traffic = 2\n").unwrap();
+    let (ok, _, error) = run(&["apply", "--image", "web:1", "--dry-run"]);
+    assert!(
+        !ok && error["error"].as_str().unwrap().contains("invalid"),
+        "{error}"
+    );
 }
 
 #[test]

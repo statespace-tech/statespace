@@ -1,187 +1,260 @@
-//! Experiments run from pull requests. These commands show them, and stop
-//! their arms in an emergency.
+//! Experiments run from pull requests. `ssp status` shows what runs and why;
+//! `ssp stop` holds arms in an emergency, and `ssp resume` lifts the hold.
 
-use anyhow::Context;
+use std::collections::BTreeMap;
+
 use reqwest::Method;
 use serde_json::{Value, json};
 
+use super::target::{self, Target};
 use crate::{
-    api::{Api, segment},
-    output::{emit, fields, share, table, text, time},
-    project::{Project, experiment_branch},
+    api::Api,
+    output::{emit, share, table, text},
 };
 
-/// The app of a command: `--app`, else the `app` of statespace.toml.
-pub fn app_of(app: Option<String>) -> anyhow::Result<String> {
-    app.or_else(Project::current_app)
-        .context("pass --app, or run this in a directory with statespace.toml")
+/// An arm or a control of an experiment, as `ssp status` shows it.
+struct Row {
+    repo: String,
+    app: String,
+    experiment: String,
+    arm: String,
+    /// The pull request's URL; controls have none.
+    url: Option<String>,
+    number: Option<i64>,
+    commit: String,
+    base: String,
+    share: Option<f64>,
+    status: String,
 }
 
-/// An experiment and maybe one arm, from `checkout`, `checkout/one-page`,
-/// or `exp/checkout/one-page`.
-fn target(value: &str) -> anyhow::Result<(String, Option<String>)> {
-    if let Some(names) = experiment_branch(value) {
-        let (experiment, arm) = names?;
-        return Ok((experiment, Some(arm)));
+impl Row {
+    fn json(&self) -> Value {
+        json!({
+            "repo": self.repo,
+            "app": self.app,
+            "experiment": self.experiment,
+            "arm": self.arm,
+            "pull_request": self.url,
+            "commit": self.commit,
+            "base_commit": self.base,
+            "share": self.share,
+            "status": self.status,
+        })
     }
-    Ok(match value.split_once('/') {
-        Some((experiment, arm)) => (experiment.to_owned(), Some(arm.to_owned())),
-        None => (value.to_owned(), None),
-    })
-}
 
-fn path(app: &str, experiment: &str) -> String {
-    format!(
-        "/v1/apps/{}/experiments/{}",
-        segment(app),
-        segment(experiment)
-    )
-}
-
-pub fn status(api: &Api, experiment: Option<String>, app: Option<String>) -> anyhow::Result<()> {
-    let app = app_of(app)?;
-    let Some(experiment) = experiment else {
-        let experiments: Vec<Value> = api.get(&format!("/v1/experiments?app={}", segment(&app)))?;
-        return emit(&experiments, || {
-            if experiments.is_empty() {
-                return format!(
-                    "No experiments in {app}. Push a branch named exp/<experiment>/<arm> and \
-                     open a pull request."
-                );
+    fn matches(&self, target: &Target) -> bool {
+        match target {
+            Target::PullRequest { repo, number } => {
+                self.repo.eq_ignore_ascii_case(repo) && self.number == Some(*number)
             }
-            table(
-                &[
-                    "EXPERIMENT",
-                    "STATUS",
-                    "VERSION",
-                    "ARMS",
-                    "SUBJECTS",
-                    "PULL REQUESTS",
-                ],
-                experiments
-                    .iter()
-                    .map(|experiment| {
-                        let arms = experiment["arms"].as_array().cloned().unwrap_or_default();
-                        let variants = arms.iter().filter(|arm| arm["kind"] == "variant").count();
-                        let held: f64 = arms.iter().filter_map(|arm| arm["share"].as_f64()).sum();
-                        vec![
-                            text(&experiment["name"]),
-                            text(&experiment["status"]),
-                            text(&experiment["version"]),
-                            variants.to_string(),
-                            share(held),
-                            experiment["pull_requests"]
-                                .as_array()
-                                .map_or(0, Vec::len)
-                                .to_string(),
-                        ]
-                    })
-                    .collect(),
-            )
-        });
-    };
-    let (experiment, _) = target(&experiment)?;
-    let shown: Value = api.get(&path(&app, &experiment))?;
-    emit(&shown, || show(&shown))
+            Target::Repo(repo) => self.repo.eq_ignore_ascii_case(repo),
+            Target::App(app) => &self.app == app,
+            Target::Arm {
+                app,
+                experiment,
+                arm,
+            } => {
+                &self.app == app
+                    && &self.experiment == experiment
+                    && (&self.arm == arm || self.url.is_none())
+            }
+        }
+    }
 }
 
-pub fn stop(api: &Api, value: &str, app: Option<String>) -> anyhow::Result<()> {
-    let app = app_of(app)?;
-    let (experiment, arm) = target(value)?;
-    let stopped: Value = api.send(
-        Method::POST,
-        &format!("{}/stop", path(&app, &experiment)),
-        &json!({ "arm": arm }),
-    )?;
-    emit(&stopped, || {
-        format!(
-            "Stopped {}. To run an arm again, push a commit, or mark its pull request as a \
-             draft and then ready.\n\n{}",
-            arm.map_or(experiment.clone(), |arm| format!("{experiment}/{arm}")),
-            show(&stopped)
-        )
+pub fn status(api: &Api, values: &[String]) -> anyhow::Result<()> {
+    let targets = if values.is_empty() {
+        target::here()?.into_iter().collect()
+    } else {
+        values
+            .iter()
+            .map(|value| target::resolve(value))
+            .collect::<anyhow::Result<Vec<_>>>()?
+    };
+    let experiments: Vec<Value> = api.get("/v1/experiments")?;
+    let apps: Vec<Value> = api.get("/v1/apps")?;
+    let repos: BTreeMap<String, String> = apps
+        .iter()
+        .map(|app| (text(&app["name"]), text(&app["repo"])))
+        .collect();
+    let rows: Vec<Row> = experiments
+        .iter()
+        .flat_map(|experiment| rows(experiment, &repos))
+        .filter(|row| targets.is_empty() || targets.iter().any(|target| row.matches(target)))
+        .collect();
+    let document: Vec<Value> = rows.iter().map(Row::json).collect();
+    emit(&document, || {
+        if rows.is_empty() {
+            return "No experiments run here. Push a branch named exp/<name> and open a pull \
+                    request."
+                .into();
+        }
+        let mut groups: BTreeMap<(String, String), Vec<&Row>> = BTreeMap::new();
+        for row in &rows {
+            groups
+                .entry((row.repo.clone(), row.app.clone()))
+                .or_default()
+                .push(row);
+        }
+        groups
+            .iter()
+            .map(|((repo, app), rows)| {
+                format!(
+                    "{repo} › {app}\n{}",
+                    table(
+                        &[
+                            "EXPERIMENT",
+                            "ARM",
+                            "PULL REQUEST",
+                            "COMMIT",
+                            "SHARE",
+                            "STATUS"
+                        ],
+                        rows.iter()
+                            .map(|row| {
+                                vec![
+                                    row.experiment.clone(),
+                                    row.arm.clone(),
+                                    row.url.clone().unwrap_or_else(|| "-".into()),
+                                    if row.url.is_some() {
+                                        format!("{} on {}", row.commit, row.base)
+                                    } else {
+                                        row.commit.clone()
+                                    },
+                                    row.share.map_or_else(|| "-".into(), share),
+                                    row.status.clone(),
+                                ]
+                            })
+                            .collect(),
+                    )
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
     })
 }
 
-fn show(experiment: &Value) -> String {
-    let mut out = fields(&[
-        ("Experiment", text(&experiment["name"])),
-        ("App", text(&experiment["app"])),
-        ("Status", text(&experiment["status"])),
-        ("Version", text(&experiment["version"])),
-        ("Subject", text(&experiment["subject"])),
-        ("Eligibility", text(&experiment["eligibility"])),
-        ("Decided", time(&experiment["decided_at"])),
-    ]);
+/// The arms and controls of an experiment that runs or has open pull requests.
+fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
+    let app = text(&experiment["app"]);
+    let name = text(&experiment["name"]);
+    let running = experiment["status"] == "running";
     let arms = experiment["arms"].as_array().cloned().unwrap_or_default();
-    if !arms.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&table(
-            &["ARM", "COMMIT", "BASE", "SHARE"],
-            arms.iter()
-                .map(|arm| {
-                    vec![
-                        text(&arm["name"]),
-                        short(&arm["commit"]),
-                        short(&arm["base_commit"]),
-                        share(arm["share"].as_f64().unwrap_or(0.0)),
-                    ]
-                })
-                .collect(),
-        ));
-    }
     let pulls = experiment["pull_requests"]
         .as_array()
         .cloned()
         .unwrap_or_default();
-    if !pulls.is_empty() {
-        out.push_str("\n\n");
-        out.push_str(&table(
-            &["PULL REQUEST", "ARM", "STATE", "RUNS", "WAITING"],
-            pulls
-                .iter()
-                .map(|pull| {
-                    let state = if pull["held"] == true {
-                        "stopped".into()
-                    } else if pull["draft"] == true {
-                        "draft".into()
-                    } else {
-                        text(&pull["state"])
-                    };
-                    vec![
-                        format!("{}#{}", text(&pull["repo"]), text(&pull["number"])),
-                        text(&pull["arm"]),
-                        state,
-                        short(&pull["running_commit"]),
-                        text(&pull["waiting"]),
-                    ]
-                })
-                .collect(),
-        ));
+    if !running && pulls.iter().all(|pull| pull["state"] != "open") {
+        return Vec::new();
     }
-    out
+    let repo = repos.get(&app).cloned().unwrap_or_else(|| "-".into());
+    let mut rows: Vec<Row> = pulls
+        .iter()
+        .filter(|pull| pull["state"] == "open")
+        .map(|pull| {
+            let arm = arms
+                .iter()
+                .find(|arm| arm["kind"] == "variant" && arm["name"] == pull["arm"]);
+            let status = if let Some(who) = pull["held_by"].as_str() {
+                format!("stopped by {who}")
+            } else {
+                match (pull["running_commit"].as_str(), pull["waiting"].as_str()) {
+                    (Some(_), Some(waiting)) if running => {
+                        format!("running; {} waits: {waiting}", short(&pull["head_commit"]))
+                    }
+                    (Some(_), None) if running => "running".into(),
+                    (_, Some(waiting)) => format!("waiting: {waiting}"),
+                    _ => "waiting".into(),
+                }
+            };
+            let number = pull["number"].as_i64();
+            Row {
+                repo: text(&pull["repo"]),
+                app: app.clone(),
+                experiment: name.clone(),
+                arm: text(&pull["arm"]),
+                url: number.map(|number| {
+                    format!("https://github.com/{}/pull/{number}", text(&pull["repo"]))
+                }),
+                number,
+                commit: short(arm.map_or(&pull["head_commit"], |arm| &arm["commit"])),
+                base: arm.map_or_else(|| "-".into(), |arm| short(&arm["base_commit"])),
+                share: arm.and_then(|arm| arm["share"].as_f64()),
+                status,
+            }
+        })
+        .collect();
+    if running {
+        rows.extend(
+            arms.iter()
+                .filter(|arm| arm["kind"] == "control")
+                .map(|arm| Row {
+                    repo: repo.clone(),
+                    app: app.clone(),
+                    experiment: name.clone(),
+                    arm: "control".into(),
+                    url: None,
+                    number: None,
+                    commit: short(&arm["commit"]),
+                    base: "-".into(),
+                    share: arm["share"].as_f64(),
+                    status: "running".into(),
+                }),
+        );
+    }
+    rows
+}
+
+pub fn stop(api: &Api, values: &[String]) -> anyhow::Result<()> {
+    let changed = change(api, "/v1/stop", values)?;
+    emit(&changed, || {
+        format!(
+            "{}\nTheir subjects get the default. To run them again: ssp resume {}, a new \
+             commit, or a draft marked ready again.",
+            arms(&changed, "Stopped"),
+            values.join(" ")
+        )
+    })
+}
+
+pub fn resume(api: &Api, values: &[String]) -> anyhow::Result<()> {
+    let changed = change(api, "/v1/resume", values)?;
+    emit(&changed, || {
+        format!(
+            "{}\nThey run while their pull requests can merge.",
+            arms(&changed, "Resumed")
+        )
+    })
+}
+
+fn change(api: &Api, path: &str, values: &[String]) -> anyhow::Result<Value> {
+    let targets = values
+        .iter()
+        .map(|value| target::resolve(value)?.json())
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    api.send(Method::POST, path, &json!({ "targets": targets }))
+}
+
+fn arms(changed: &Value, verb: &str) -> String {
+    changed["arms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|arm| {
+            format!(
+                "{verb} {} › {} › {} ({}).",
+                text(&arm["app"]),
+                text(&arm["experiment"]),
+                text(&arm["arm"]),
+                text(&arm["url"])
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn short(commit: &Value) -> String {
     commit
         .as_str()
         .map_or_else(|| text(commit), |commit| commit.chars().take(7).collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::target;
-
-    #[test]
-    fn names_experiments_and_arms() {
-        assert_eq!(target("checkout").unwrap(), ("checkout".into(), None));
-        assert_eq!(
-            target("checkout/one-page").unwrap(),
-            ("checkout".into(), Some("one-page".into()))
-        );
-        assert_eq!(
-            target("exp/checkout/one-page").unwrap(),
-            ("checkout".into(), Some("one-page".into()))
-        );
-    }
 }

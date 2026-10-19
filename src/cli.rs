@@ -43,13 +43,8 @@ pub enum Command {
     },
     /// Show the account, the credential in use, what it may do, and storage use.
     Whoami,
-    /// Set up a repository: write statespace.toml and its CI workflow.
-    #[command(subcommand)]
-    Init(InitCommand),
-    /// Check statespace.toml, and test a request against its rules.
-    Check(Box<CheckArgs>),
-    /// Record the image this CI job built. On an exp/ branch, it becomes the
-    /// arm's version for the job's commit.
+    /// Record the image this CI job built. On the default branch, it becomes
+    /// the app's default build; on an exp/ branch, a version of the arm.
     Apply {
         /// The image, by tag or digest. A tag is resolved to its digest with `docker`.
         #[arg(long, env = "STATESPACE_IMAGE")]
@@ -60,31 +55,26 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Show the experiments of an app, or one experiment with its arms and
-    /// pull requests.
+    /// Show what runs, and why. Without a target: the arm of the exp/ branch
+    /// checked out, else the app or repository you are in, else everything.
     Status {
-        /// An experiment, such as `checkout` or `exp/checkout/one-page`.
-        experiment: Option<String>,
-        /// The app. Defaults to the `app` of statespace.toml.
-        #[arg(long, env = "STATESPACE_APP")]
-        app: Option<String>,
+        /// A GitHub pull request or repository URL, or a path.
+        targets: Vec<String>,
     },
-    /// Stop the arms of an experiment at once. A new commit, or marking the
-    /// pull request as a draft and then ready, runs an arm again.
+    /// Stop arms at once. Their subjects get the default until a resume, a new
+    /// commit, or a draft marked ready again.
     Stop {
-        /// An experiment, or one arm: `checkout`, `checkout/one-page`, or
-        /// `exp/checkout/one-page`.
-        target: String,
-        /// The app. Defaults to the `app` of statespace.toml.
-        #[arg(long, env = "STATESPACE_APP")]
-        app: Option<String>,
+        /// A GitHub pull request URL (its arms), a repository URL (every arm
+        /// of its apps), or a path such as `.` (the app of its statespace.toml).
+        #[arg(required = true)]
+        targets: Vec<String>,
     },
-    /// Connect repositories through the Statespace GitHub App.
-    #[command(subcommand)]
-    Repo(RepoCommand),
-    /// Show and change apps. A build of the repository creates its app.
-    #[command(subcommand)]
-    App(AppCommand),
+    /// Lift a stop. Arms run again while their pull requests can merge.
+    Resume {
+        /// A GitHub pull request or repository URL, or a path.
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
     /// Manage tokens: credentials for proxies, controllers, agents, and SQL.
     #[command(subcommand)]
     Token(TokenCommand),
@@ -96,56 +86,8 @@ pub enum Command {
     Controller(ControllerCommand),
 }
 
-/// The file that names a repository's app and an arm's settings.
+/// The file with an app's settings and an arm's settings.
 pub const PROJECT_FILE: &str = "statespace.toml";
-
-#[derive(Subcommand)]
-pub enum InitCommand {
-    /// Write statespace.toml and .github/workflows/statespace.yml.
-    Github {
-        /// The app's name. Defaults to the repository's directory name.
-        #[arg(long)]
-        app: Option<String>,
-        /// The image repository CI pushes to, such as `ghcr.io/acme/web`.
-        #[arg(long)]
-        image: Option<String>,
-        /// Replace files that exist.
-        #[arg(long)]
-        force: bool,
-    },
-}
-
-#[derive(Args)]
-pub struct CheckArgs {
-    #[arg(long, default_value = PROJECT_FILE)]
-    pub file: PathBuf,
-    /// The request's path, to test the rules against a request.
-    #[arg(long)]
-    pub path: Option<String>,
-    #[arg(long, default_value = "GET")]
-    pub method: String,
-    /// The query string, such as `plan=pro&ref=ad`.
-    #[arg(long)]
-    pub query: Option<String>,
-    /// A header. Repeat for each.
-    #[arg(long = "header", value_name = "NAME=VALUE")]
-    pub headers: Vec<String>,
-    /// A cookie. Repeat for each.
-    #[arg(long = "cookie", value_name = "NAME=VALUE")]
-    pub cookies: Vec<String>,
-}
-
-#[derive(Subcommand)]
-pub enum RepoCommand {
-    /// Open the page that installs the GitHub App on repositories.
-    Connect {
-        /// Print the URL instead of opening a browser.
-        #[arg(long)]
-        no_open: bool,
-    },
-    /// List the repositories the GitHub App can see.
-    List,
-}
 
 #[derive(Subcommand)]
 pub enum ControllerCommand {
@@ -217,34 +159,6 @@ impl Preset {
             Self::Admin => SCOPES.to_vec(),
         }
     }
-}
-
-#[derive(Subcommand)]
-pub enum AppCommand {
-    /// List apps and the share of subjects their experiments hold.
-    List,
-    /// Show an app.
-    Show { name: String },
-    /// Change an app's settings.
-    Set {
-        name: String,
-        /// The share of the app's subjects that experiments may hold, arms
-        /// and controls together, such as `0.2`. Arms that do not fit wait.
-        #[arg(long)]
-        max_traffic: Option<f64>,
-        /// Days to keep the lines arms print.
-        #[arg(long = "output-retention-days")]
-        output_retention: Option<u32>,
-    },
-    /// Erase one subject's runs, requests, and lines in an app.
-    EraseSubject { name: String, subject: String },
-    /// Delete an app with its builds, experiments, and events.
-    Delete {
-        name: String,
-        /// Confirm permanent deletion.
-        #[arg(long)]
-        yes: bool,
-    },
 }
 
 /// What `ssp proxy` and `ssp controller` share.
@@ -343,8 +257,6 @@ mod tests {
         for arguments in [
             vec!["ssp", "whoami"],
             vec!["ssp", "logout", "--all"],
-            vec!["ssp", "init", "github", "--app", "web"],
-            vec!["ssp", "check", "--path", "/", "--header", "cf-ipcountry=US"],
             vec![
                 "ssp",
                 "apply",
@@ -353,10 +265,9 @@ mod tests {
                 "--dry-run",
             ],
             vec!["ssp", "status"],
-            vec!["ssp", "status", "exp/checkout/one-page", "--app", "web"],
-            vec!["ssp", "stop", "checkout/one-page", "--app", "web"],
-            vec!["ssp", "repo", "connect", "--no-open"],
-            vec!["ssp", "app", "set", "web", "--max-traffic", "0.2"],
+            vec!["ssp", "status", "https://github.com/acme/web/pull/418"],
+            vec!["ssp", "stop", "https://github.com/acme/web/pull/418", "."],
+            vec!["ssp", "resume", "https://github.com/acme/web"],
             vec![
                 "ssp",
                 "proxy",
@@ -429,6 +340,8 @@ mod tests {
                 "publisher",
             ],
             vec!["ssp", "proxy", "--app", "web"],
+            vec!["ssp", "stop"],
+            vec!["ssp", "resume"],
             vec![
                 "ssp",
                 "proxy",
