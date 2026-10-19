@@ -44,7 +44,7 @@ struct Controller {
     app: String,
     deployment: String,
     container: Option<String>,
-    variant_env: Vec<(String, String)>,
+    arm_env: Vec<(String, String)>,
     max_arms: u32,
     id: String,
     /// The controller's own Deployment, which owns every arm.
@@ -89,7 +89,7 @@ async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
         app: shared.app.clone(),
         deployment: arguments.deployment.clone(),
         container: arguments.container.clone(),
-        variant_env: proxy::pairs(&shared.variant_env, "--variant-env")?,
+        arm_env: proxy::pairs(&shared.arm_env, "--arm-env")?,
         max_arms: shared.max_arms,
         id: id.clone(),
         owner,
@@ -203,7 +203,7 @@ impl Controller {
             }
             let name = spec::arm_name(&self.deployment, &key);
             let replicas = spec::replicas(default_replicas, assign::share(arm));
-            let mut environment = self.variant_env.clone();
+            let mut environment = self.arm_env.clone();
             environment.extend(environment_of(&self.app, &key));
             let deployment = spec::arm_deployment(
                 &default,

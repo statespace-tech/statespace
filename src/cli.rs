@@ -266,8 +266,8 @@ pub struct Shared {
     pub stale_after: u64,
     /// An environment variable every arm gets and the default does not, such
     /// as a database URL without schema permissions. Repeat for each.
-    #[arg(long = "variant-env", value_name = "NAME=VALUE")]
-    pub variant_env: Vec<String>,
+    #[arg(long = "arm-env", value_name = "NAME=VALUE")]
+    pub arm_env: Vec<String>,
     /// A regular expression whose matches are replaced in recorded lines
     /// before they leave this machine. Repeat for each.
     #[arg(long = "redact", value_name = "REGEX")]
@@ -364,7 +364,7 @@ mod tests {
                 "web",
                 "--image",
                 "ghcr.io/acme/web:main",
-                "--variant-env",
+                "--arm-env",
                 "A=b",
                 "--memory",
                 "1g",

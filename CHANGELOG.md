@@ -27,7 +27,7 @@ terminal flow of 0.1.0.
 - `ssp proxy` runs containers with `--image` or `--image-file`, and only routes with
   `--default`. It reports the digest of its default.
 - `ssp controller` is `ssp controller kubernetes`.
-- `--max-variants` is `--max-arms`.
+- `--max-variants` is `--max-arms`, and `--variant-env` is `--arm-env`.
 - Events, views, headers, and container variables name an `arm` and its `commit`:
   `x-statespace-arm`, `STATESPACE_ARM`, and `STATESPACE_COMMIT`.
 - `ssp login` signs in with GitHub only.

@@ -460,7 +460,7 @@ fn docker_proxies_run_the_default_and_each_arm() {
                     "--health",
                     "/health",
                 ])
-                .args(["--variant-env", "GREETING=variant"])
+                .args(["--arm-env", "GREETING=variant"])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -488,7 +488,7 @@ fn docker_proxies_run_the_default_and_each_arm() {
         !served.contains_key("spoofed"),
         "clients cannot pick an arm"
     );
-    // Every container inherits the proxy's environment; arms also get --variant-env.
+    // Every container inherits the proxy's environment; arms also get --arm-env.
     assert_eq!(served["control"]["shared"], "from-the-proxy");
     assert_eq!(served["control"]["greeting"], "variant");
     assert_eq!(served["lower-price"]["greeting"], "variant");

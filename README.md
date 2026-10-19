@@ -207,7 +207,7 @@ ssp proxy --app web \
   --listen 0.0.0.0:8080 \
   --image-file /etc/web/image \
   --health /health \
-  --variant-env DATABASE_URL="$VARIANT_DATABASE_URL" \
+  --arm-env DATABASE_URL="$ARM_DATABASE_URL" \
   --redact 'sk_live_\w+'
 ```
 
@@ -224,7 +224,7 @@ ssp proxy --app web --default http://localhost:8000
 | `--default` | The address of the default. The proxy only routes; a controller runs the arms |
 | `--health` | A path that must answer 200 before a container gets requests |
 | `--max-arms` | The maximum number of arms that run at the same time, controls included. The default is 5 |
-| `--variant-env` | An environment variable for the arms. The default does not get it |
+| `--arm-env` | An environment variable for the arms. The default does not get it |
 | `--redact` | A regular expression. The proxy replaces its matches in recorded lines before they leave the machine |
 | `--port`, `--volume`, `--memory`, `--cpus` | Container settings, with `--image`. The default port is the `EXPOSE` port of the image |
 | `--stale-after` | How many seconds the proxy uses its last configuration when it cannot reach Statespace. Then all subjects get the default. The default is 300 |
@@ -240,7 +240,7 @@ When an arm starts or fails, its subjects get the default. Arms record each line
 that they print, each request, lifecycle events, CPU and memory, and HTTP
 summaries for each minute. Statespace does not record the default.
 
-Arms use the same database, cache, and queues as the default. Use `--variant-env`
+Arms use the same database, cache, and queues as the default. Use `--arm-env`
 to give them a database user without schema permissions. Turn off schedulers and
 workers that run in your web process. Then nothing runs two times.
 

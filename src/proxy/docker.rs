@@ -57,7 +57,7 @@ pub struct Options {
     /// The proxy's own environment, which every container inherits.
     pub environment: Vec<(String, String)>,
     /// What every arm gets on top, and the default does not.
-    pub variant_env: Vec<(String, String)>,
+    pub arm_env: Vec<(String, String)>,
     pub redact: Vec<Regex>,
 }
 
@@ -543,7 +543,7 @@ impl Supervisor {
         }
         let mut environment: Vec<(String, String)> = self.options.environment.clone();
         if let Target::Arm(_) = target {
-            environment.extend(self.options.variant_env.iter().cloned());
+            environment.extend(self.options.arm_env.iter().cloned());
         }
         environment.extend(statespace_environment(&self.options.app, target, port));
         let mut passed = HashSet::new();

@@ -43,7 +43,7 @@ pub fn run(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
         .block_on(proxy(api, arguments))
 }
 
-/// `NAME=VALUE` pairs, as `--variant-env` takes them.
+/// `NAME=VALUE` pairs, as `--arm-env` takes them.
 pub fn pairs(values: &[String], flag: &str) -> anyhow::Result<Vec<(String, String)>> {
     values
         .iter()
@@ -84,7 +84,7 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
     let id = instance_id();
     let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
     let redact = patterns(&shared_arguments.redact)?;
-    let variant_env = pairs(&shared_arguments.variant_env, "--variant-env")?;
+    let arm_env = pairs(&shared_arguments.arm_env, "--arm-env")?;
     let max_arms = shared_arguments.max_arms;
 
     let (upstreams, default_image) = match default_image(&arguments)? {
@@ -100,7 +100,7 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
                     memory: arguments.memory.clone(),
                     cpus: arguments.cpus.clone(),
                     environment: docker::inherited_environment(),
-                    variant_env,
+                    arm_env,
                     redact,
                 },
             )
@@ -461,13 +461,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_variant_environment() {
-        let parsed = pairs(&["A=b".into(), "C=d=e".into()], "--variant-env").unwrap();
+    fn parses_arm_environment() {
+        let parsed = pairs(&["A=b".into(), "C=d=e".into()], "--arm-env").unwrap();
         assert_eq!(
             parsed,
             vec![("A".into(), "b".into()), ("C".into(), "d=e".into())]
         );
-        assert!(pairs(&["=x".into()], "--variant-env").is_err());
-        assert!(pairs(&["NOVALUE".into()], "--variant-env").is_err());
+        assert!(pairs(&["=x".into()], "--arm-env").is_err());
+        assert!(pairs(&["NOVALUE".into()], "--arm-env").is_err());
     }
 }
