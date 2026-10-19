@@ -33,6 +33,10 @@ impl Api {
         &self.endpoint
     }
 
+    pub fn client(&self) -> &Client {
+        &self.client
+    }
+
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }

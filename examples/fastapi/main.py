@@ -2,7 +2,7 @@
 
 Run it behind `ssp proxy`. It reads the subject from the `x-statespace-subject`
 header and prints a JSON line for each signup and purchase; Statespace records
-every line the arms print. A variant is a branch of this file, built into an
+every line the arms print. An arm is an exp/ branch of this file, built into an
 image and signed in CI.
 """
 
@@ -13,7 +13,7 @@ import os
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-# The change a variant tests. A branch might lower the price or rewrite checkout.
+# The change an arm tests. A branch might lower the price or rewrite checkout.
 PRICE = 40
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -41,7 +41,7 @@ def health() -> dict[str, str]:
 
 @app.get("/")
 def home() -> dict[str, object]:
-    return {"variant": os.environ.get("STATESPACE_VARIANT", "default"), "price": PRICE}
+    return {"arm": os.environ.get("STATESPACE_ARM", "default"), "price": PRICE}
 
 
 @app.post("/signup")

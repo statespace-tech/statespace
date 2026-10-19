@@ -2,6 +2,41 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+Experiments run from pull requests. A branch named `exp/<experiment>/<arm>` is an arm,
+and it runs while GitHub says that its pull request can merge. This release removes the
+terminal flow of 0.1.0.
+
+### Added
+
+- `ssp init github` writes `statespace.toml` and a workflow that publishes each commit of
+  an `exp/` branch.
+- `statespace.toml` gives the app, and an arm's share, subject rule, and eligibility rule.
+  `ssp check` tests it and a request.
+- `ssp apply` records a CI job's image with the job's GitHub OIDC token. On the default
+  branch, the image becomes a default build; on an `exp/` branch, a version of the arm.
+- `ssp status` shows experiments, their arms and controls, and their pull requests.
+- `ssp stop` stops arms at once and makes their pull requests drafts.
+- `ssp repo connect` and `ssp repo list` install the Statespace GitHub App.
+- `ssp app set --max-traffic` limits the share of an app's subjects in experiments.
+- Each base commit of an experiment's arms has its own control.
+
+### Changed
+
+- `ssp proxy` runs containers with `--image` or `--image-file`, and only routes with
+  `--default`. It reports the digest of its default.
+- `ssp controller` is `ssp controller kubernetes`.
+- `--max-variants` is `--max-arms`.
+- Events, views, headers, and container variables name an `arm` and its `commit`:
+  `x-statespace-arm`, `STATESPACE_ARM`, and `STATESPACE_COMMIT`.
+- `ssp login` signs in with GitHub only.
+
+### Removed
+
+- `ssp variant`, `ssp experiment`, `ssp keygen`, `ssp app create`, `--runtime`,
+  `--trust-key`, signing keys, and the `publisher` token preset.
+
 ## 0.1.0 - 2026-10-15
 
 The first release. Statespace compares whole versions of an app in production. A variant is

@@ -107,8 +107,8 @@ impl Telemetry {
                 "experiment": assignment.experiment,
                 "version": assignment.version,
                 "subject_id": assignment.subject,
-                "variant": assignment.assigned.as_ref().map(|key| &key.arm),
-                "variant_version": assignment.assigned.as_ref().and_then(|key| key.version),
+                "arm": assignment.assigned.as_ref().map(|key| &key.arm),
+                "commit": assignment.assigned.as_ref().map(|key| &key.commit),
                 "reason": assignment.reason.as_str(),
                 "context": {"method": method, "path": path},
             }),
@@ -119,8 +119,8 @@ impl Telemetry {
     fn arm(key: &Key, mut event: Value) -> Value {
         event["experiment"] = json!(key.experiment);
         event["experiment_version"] = json!(key.experiment_version);
-        event["variant"] = json!(key.arm);
-        event["variant_version"] = json!(key.version);
+        event["arm"] = json!(key.arm);
+        event["commit"] = json!(key.commit);
         event
     }
 
@@ -279,7 +279,7 @@ mod tests {
             experiment: "checkout".into(),
             experiment_version: 1,
             arm: "control".into(),
-            version: None,
+            commit: "b".repeat(40),
         };
         let assignment = Assignment {
             experiment: "checkout".into(),
@@ -295,12 +295,13 @@ mod tests {
         telemetry.flush_http();
         let (table, run) = receiver.recv().await.unwrap();
         assert_eq!((table, run["reason"].as_str()), ("runs", Some("assigned")));
-        assert_eq!(run["variant"], "control");
+        assert_eq!(run["arm"], "control");
+        assert_eq!(run["commit"], "b".repeat(40));
         let (table, metric) = receiver.recv().await.unwrap();
         assert_eq!(table, "metrics");
         assert_eq!(metric["data"]["requests"], 2);
         assert_eq!(
-            (&metric["experiment"], &metric["variant"]),
+            (&metric["experiment"], &metric["arm"]),
             (&json!("checkout"), &json!("control"))
         );
         assert_eq!(metric["data"]["errors"], 1);

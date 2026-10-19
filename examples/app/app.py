@@ -12,8 +12,8 @@ class Handler(BaseHTTPRequestHandler):
         subject = self.headers.get("x-statespace-subject")
         body = json.dumps(
             {
-                # The proxy names what serves the request: default, control, or a variant.
-                "variant": self.headers.get("x-statespace-variant"),
+                # The proxy names what serves the request: default, control, or an arm.
+                "arm": self.headers.get("x-statespace-arm"),
                 "subject": subject,
                 "greeting": os.environ.get("GREETING", "hello"),
                 "shared": os.environ.get("SHARED"),

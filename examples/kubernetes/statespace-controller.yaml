@@ -54,7 +54,7 @@ spec:
       containers:
         - name: controller
           image: ghcr.io/statespace-tech/statespace:0.1.0
-          args: ["controller"]
+          args: ["controller", "kubernetes"]
           env:
             - name: STATESPACE_APP
               value: shop
@@ -68,8 +68,3 @@ spec:
                 secretKeyRef:
                   name: statespace
                   key: controller-token
-            - name: SSP_TRUST_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: statespace
-                  key: trust-key

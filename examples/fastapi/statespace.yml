@@ -1,0 +1,29 @@
+# Publish each commit of an exp/ branch as a version of its arm. Copy this
+# file to .github/workflows/statespace.yml in the shop's repository.
+name: Statespace
+on:
+  push:
+    branches: ["exp/**"]
+permissions:
+  contents: read
+  packages: write
+  # ssp apply proves the repository, workflow, and commit with an OIDC token.
+  id-token: write
+jobs:
+  arm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          push: true
+          tags: ghcr.io/acme/shop:${{ github.sha }}
+      - uses: statespace-tech/action@v1
+        with:
+          image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}

@@ -20,12 +20,13 @@ pub const KEY_ANNOTATION: &str = "statespace.com/key";
 const HASH_ANNOTATION: &str = "statespace.com/spec-hash";
 
 /// A name for an arm's Deployment and Service: lowercase, at most 63
-/// characters, and different for each version of the experiment and arm.
+/// characters, and different for each version of the experiment and each
+/// commit of the arm.
 pub fn arm_name(deployment: &str, key: &Key) -> String {
     let digest = Sha256::digest(
         format!(
-            "{}/{}/{}/{:?}",
-            key.experiment, key.experiment_version, key.arm, key.version
+            "{}/{}/{}/{}",
+            key.experiment, key.experiment_version, key.arm, key.commit
         )
         .as_bytes(),
     );
@@ -56,9 +57,7 @@ pub fn key_of(object: &Value) -> Option<Key> {
         experiment: key["experiment"].as_str()?.to_owned(),
         experiment_version: u32::try_from(key["experiment_version"].as_u64()?).ok()?,
         arm: key["arm"].as_str()?.to_owned(),
-        version: key["version"]
-            .as_u64()
-            .and_then(|version| u32::try_from(version).ok()),
+        commit: key["commit"].as_str()?.to_owned(),
     })
 }
 
@@ -214,7 +213,7 @@ fn key_json(key: &Key) -> String {
         "experiment": key.experiment,
         "experiment_version": key.experiment_version,
         "arm": key.arm,
-        "version": key.version,
+        "commit": key.commit,
     })
     .to_string()
 }
@@ -251,12 +250,12 @@ fn hashed(mut object: Value) -> Value {
 mod tests {
     use super::*;
 
-    fn key(arm: &str, version: Option<u32>) -> Key {
+    fn key(arm: &str, commit: char) -> Key {
         Key {
             experiment: "price".into(),
             experiment_version: 2,
             arm: arm.into(),
-            version,
+            commit: commit.to_string().repeat(40),
         }
     }
 
@@ -292,12 +291,12 @@ mod tests {
     }
 
     #[test]
-    fn names_fit_kubernetes_and_differ_by_version() {
-        let first = arm_name("shop", &key("lower-price", Some(1)));
-        let second = arm_name("shop", &key("lower-price", Some(2)));
+    fn names_fit_kubernetes_and_differ_by_commit() {
+        let first = arm_name("shop", &key("lower-price", 'a'));
+        let second = arm_name("shop", &key("lower-price", 'c'));
         assert!(first.starts_with("shop-price-lower-price-"));
         assert_ne!(first, second);
-        let long = arm_name(&"x".repeat(80), &key("control", None));
+        let long = arm_name(&"x".repeat(80), &key("control", 'b'));
         assert!(long.len() <= 63, "{long}");
         assert!(long.chars().all(|character| character.is_ascii_lowercase()
             || character.is_ascii_digit()
@@ -311,12 +310,12 @@ mod tests {
         let container = app_container(pod, None).unwrap();
         assert_eq!(container, 1);
         assert_eq!(container_port(&pod["containers"][1]), Some(8000));
-        let key = key("lower-price", Some(3));
+        let key = key("lower-price", 'a');
         let name = arm_name("shop", &key);
         let image = format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64));
         let environment = [
             ("CACHE_PREFIX".to_owned(), "variant".to_owned()),
-            ("STATESPACE_VARIANT".to_owned(), "lower-price".to_owned()),
+            ("STATESPACE_ARM".to_owned(), "lower-price".to_owned()),
         ];
         let arm = arm_deployment(
             &default,

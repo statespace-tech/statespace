@@ -11,26 +11,22 @@ other cluster). Each pod of the shop runs `ssp proxy` beside the shop, and one
 
 ## Set up
 
-Create the tokens and the signing key, and store them in a Secret.
+Create the tokens, and store them in a Secret.
 
 ```shell
-ssp app create shop
-ssp keygen                     # the private key goes to CI; the public key below
 ssp token create --name shop-proxies --preset runtime
 ssp token create --name shop-controller --preset controller
 kubectl create secret generic statespace \
   --from-literal=runtime-token=<runtime token> \
-  --from-literal=controller-token=<controller token> \
-  --from-literal=trust-key=<public key>
+  --from-literal=controller-token=<controller token>
 kubectl apply -f shop.yaml -f statespace-controller.yaml
 ```
 
-CI publishes each branch's image as a variant, as `../fastapi/variant.yml`
-does. Start an experiment, and the controller starts its arms:
+CI publishes each commit of an `exp/` branch, as `../fastapi/statespace.yml`
+does. When the branch's pull request can merge, the controller starts its arm
+and the arm's control:
 
 ```shell
-ssp experiment create price --app shop --split lower-price=0.05
-ssp experiment start price
 kubectl get deployments -l app.kubernetes.io/managed-by=ssp-controller
 ```
 
@@ -46,9 +42,10 @@ a Service named after the shop, the experiment, and the arm:
   sends them traffic. The proxies send them their subjects.
 - Each arm gets the shop's replicas times its share of the subjects, at least
   one.
-- The control arm runs the image the shop ran when the experiment started.
+- A control runs the default build of its arms' base commit, which the shop ran
+  as its default.
 
-When an experiment stops, its arms are deleted. Deleting the controller's
+When an arm stops, its Deployment and Service are deleted. Deleting the controller's
 Deployment deletes every arm it made.
 
 Arms record every line their pods print. Kubernetes merges a container's

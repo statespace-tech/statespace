@@ -24,11 +24,10 @@ use crate::{
     cli::ControllerArgs,
     proxy::{
         self,
-        assign::{self, Arm, Key, Routing},
+        assign::{self, Key, Routing},
         remote::Remote,
         telemetry::Telemetry,
     },
-    signing,
 };
 
 pub fn run(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
@@ -45,7 +44,6 @@ struct Controller {
     app: String,
     deployment: String,
     container: Option<String>,
-    trusted: Vec<ed25519_dalek::VerifyingKey>,
     variant_env: Vec<(String, String)>,
     max_arms: u32,
     id: String,
@@ -63,11 +61,6 @@ async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
         .context("ssp controller needs a token with the controller preset; set SSP_TOKEN")?;
     let remote = Remote::new(api.endpoint(), token.to_owned(), shared.app.clone())?;
     let kube = Kube::connect(arguments.namespace.clone())?;
-    let trusted = arguments
-        .trust_keys
-        .iter()
-        .map(|key| signing::public_key(key))
-        .collect::<anyhow::Result<Vec<_>>>()?;
     let id = proxy::instance_id();
     let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
     let owner = match std::env::var("STATESPACE_CONTROLLER") {
@@ -96,9 +89,8 @@ async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
         app: shared.app.clone(),
         deployment: arguments.deployment.clone(),
         container: arguments.container.clone(),
-        trusted,
         variant_env: proxy::pairs(&shared.variant_env, "--variant-env")?,
-        max_arms: shared.max_variants,
+        max_arms: shared.max_arms,
         id: id.clone(),
         owner,
         state,
@@ -178,10 +170,7 @@ impl Controller {
             )
         })?;
         let default_replicas = default["spec"]["replicas"].as_u64().unwrap_or(1);
-        if let Some(digest) = self.default_digest(&default, &container_name).await? {
-            self.state.defaults.insert(digest.clone());
-            self.state.current = Some(digest);
-        }
+        let default_digest = self.default_digest(&default, &container_name).await?;
 
         let selector = format!(
             "{}={},{}={}",
@@ -204,22 +193,16 @@ impl Controller {
             .collect();
         let mut desired: HashSet<String> = HashSet::new();
         let mut reports = Vec::new();
-        for (key, image) in self.arms(&routing).await {
+        for (key, arm) in routing.arms() {
             if desired.len() >= self.max_arms as usize {
                 self.note(format!(
-                    "{key} exceeds --max-variants {}; its subjects get the default",
+                    "{key} exceeds --max-arms {}; its subjects get the default",
                     self.max_arms
                 ));
                 continue;
             }
             let name = spec::arm_name(&self.deployment, &key);
-            let config = routing
-                .experiments
-                .iter()
-                .map(|experiment| &experiment.config)
-                .find(|config| config.name == key.experiment)
-                .context("the arm's experiment is missing")?;
-            let replicas = spec::replicas(default_replicas, assign::share(config, &key));
+            let replicas = spec::replicas(default_replicas, assign::share(arm));
             let mut environment = self.variant_env.clone();
             environment.extend(environment_of(&self.app, &key));
             let deployment = spec::arm_deployment(
@@ -228,7 +211,7 @@ impl Controller {
                 &self.app,
                 &name,
                 &key,
-                &image,
+                &arm.image,
                 replicas,
                 &environment,
                 self.owner.as_ref(),
@@ -268,8 +251,7 @@ impl Controller {
                 "experiment": key.experiment,
                 "version": key.experiment_version,
                 "name": key.arm,
-                "variant_version": key.version,
-                "image": image,
+                "commit": key.commit,
                 "address": format!("http://{name}.{}.svc:{port}", self.kube.namespace),
                 "ready": ready,
                 "replicas": replicas,
@@ -287,6 +269,7 @@ impl Controller {
                 &self.id,
                 "controller",
                 self.max_arms,
+                default_digest.as_deref(),
                 json!({"deployment": self.deployment, "arms": reports}),
             )
             .await?;
@@ -296,57 +279,6 @@ impl Controller {
             .await?;
         followers.follow(&pods, &container_name);
         Ok(config.poll_interval_seconds)
-    }
-
-    /// Each arm this controller may run, with its image. A control arm runs
-    /// the pinned default image, pinning the current default when the
-    /// version has none; a variant runs only when a trusted key signed it.
-    async fn arms(&mut self, routing: &Routing) -> Vec<(Key, String)> {
-        let mut arms = Vec::new();
-        for (key, arm) in routing.arms() {
-            match arm {
-                Arm::Control(control) => {
-                    let pinned = match (&control.image, &self.state.current) {
-                        (Some(image), _) => image.clone(),
-                        (None, Some(current)) => match self
-                            .remote
-                            .pin_control(&key.experiment, key.experiment_version, current)
-                            .await
-                        {
-                            Ok(pin) => pin.image,
-                            Err(error) => {
-                                self.note(format!("could not pin the control of {key}: {error:#}"));
-                                continue;
-                            }
-                        },
-                        (None, None) => continue,
-                    };
-                    if !self.state.defaults.contains(&pinned) {
-                        self.note(format!(
-                            "{key} runs {pinned}, which this controller never saw as the \
-                             default; its subjects get the default"
-                        ));
-                        continue;
-                    }
-                    arms.push((key, pinned));
-                }
-                Arm::Variant(variant) => {
-                    let message = signing::message(
-                        &self.app,
-                        &variant.name,
-                        &variant.image,
-                        variant.commit.as_deref(),
-                    );
-                    if let Err(error) = signing::verify(&self.trusted, &variant.signature, &message)
-                    {
-                        self.note(format!("{key} cannot run: {error:#}"));
-                        continue;
-                    }
-                    arms.push((key, variant.image.clone()));
-                }
-            }
-        }
-        arms
     }
 
     /// The digest the default's ready pods run, when they all run the
@@ -415,29 +347,22 @@ fn image_digest(image_id: &str) -> Option<String> {
 
 /// What every arm's container learns about itself.
 fn environment_of(app: &str, key: &Key) -> Vec<(String, String)> {
-    let mut environment = vec![
+    vec![
         ("STATESPACE_APP".to_owned(), app.to_owned()),
-        ("STATESPACE_VARIANT".to_owned(), key.arm.clone()),
+        ("STATESPACE_ARM".to_owned(), key.arm.clone()),
+        ("STATESPACE_COMMIT".to_owned(), key.commit.clone()),
         ("STATESPACE_EXPERIMENT".to_owned(), key.experiment.clone()),
-    ];
-    if let Some(version) = key.version {
-        environment.push(("STATESPACE_VARIANT_VERSION".to_owned(), version.to_string()));
-    }
-    environment
+    ]
 }
 
-/// What survives a restart of the controller, in a ConfigMap: the default
-/// images it saw, and how far it read each arm pod's log.
+/// What survives a restart of the controller, in a ConfigMap: how far it
+/// read each arm pod's log.
 struct State {
-    defaults: HashSet<String>,
-    current: Option<String>,
     logs: Arc<std::sync::Mutex<HashMap<String, String>>>,
     saved: Option<String>,
 }
 
 impl State {
-    const LIMIT: usize = 100;
-
     fn name(deployment: &str) -> String {
         format!("{deployment}-statespace")
     }
@@ -456,20 +381,11 @@ impl State {
                 Value::Null
             }
         };
-        let defaults = data["defaults"]
-            .as_str()
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| !line.is_empty())
-            .map(str::to_owned)
-            .collect();
         let logs = data["logs"]
             .as_str()
             .and_then(|logs| serde_json::from_str(logs).ok())
             .unwrap_or_default();
         Self {
-            defaults,
-            current: None,
             logs: Arc::new(std::sync::Mutex::new(logs)),
             saved: None,
         }
@@ -477,20 +393,13 @@ impl State {
 
     /// Save the state when it changed. Logs of pods that are gone are dropped.
     async fn save(&mut self, kube: &Kube, deployment: &str, followers: &Followers) {
-        let mut defaults: Vec<&String> = self.defaults.iter().collect();
-        defaults.sort();
-        let excess = defaults.len().saturating_sub(Self::LIMIT);
-        let defaults: Vec<&str> = defaults[excess..]
-            .iter()
-            .map(|digest| digest.as_str())
-            .collect();
         let logs = {
             let mut logs = self.logs.lock().expect("log positions are never poisoned");
             let live = followers.pods();
             logs.retain(|pod, _| live.contains(pod));
             serde_json::to_string(&*logs).unwrap_or_default()
         };
-        let data = json!({"defaults": defaults.join("\n"), "logs": logs});
+        let data = json!({"logs": logs});
         let serialized = data.to_string();
         if self.saved.as_deref() == Some(serialized.as_str()) {
             return;

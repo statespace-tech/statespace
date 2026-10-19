@@ -11,8 +11,8 @@ mod config;
 mod controller;
 mod image;
 mod output;
+mod project;
 mod proxy;
-mod signing;
 
 use clap::Parser;
 use serde_json::json;

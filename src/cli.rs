@@ -1,5 +1,7 @@
 //! Command-line arguments.
 
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -27,7 +29,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Sign in with GitHub or Google and save the session.
+    /// Sign in with GitHub and save the session.
     Login {
         /// Print the sign-in URL instead of opening a browser.
         #[arg(long)]
@@ -41,25 +43,114 @@ pub enum Command {
     },
     /// Show the account, the credential in use, what it may do, and storage use.
     Whoami,
-    /// Print a new key pair for signing variants. Nothing is stored.
-    Keygen,
-    /// Manage tokens: credentials for programs, agents, and SQL.
+    /// Set up a repository: write statespace.toml and its CI workflow.
     #[command(subcommand)]
-    Token(TokenCommand),
-    /// Define apps: one codebase and deployment each.
+    Init(InitCommand),
+    /// Check statespace.toml, and test a request against its rules.
+    Check(Box<CheckArgs>),
+    /// Record the image this CI job built. On an exp/ branch, it becomes the
+    /// arm's version for the job's commit.
+    Apply {
+        /// The image, by tag or digest. A tag is resolved to its digest with `docker`.
+        #[arg(long, env = "STATESPACE_IMAGE")]
+        image: String,
+        #[arg(long, default_value = PROJECT_FILE)]
+        file: PathBuf,
+        /// Check and print the plan, but record nothing. Works outside CI.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Show the experiments of an app, or one experiment with its arms and
+    /// pull requests.
+    Status {
+        /// An experiment, such as `checkout` or `exp/checkout/one-page`.
+        experiment: Option<String>,
+        /// The app. Defaults to the `app` of statespace.toml.
+        #[arg(long, env = "STATESPACE_APP")]
+        app: Option<String>,
+    },
+    /// Stop the arms of an experiment at once and make their pull requests
+    /// drafts. Mark a pull request ready for review to run its arm again.
+    Stop {
+        /// An experiment, or one arm: `checkout`, `checkout/one-page`, or
+        /// `exp/checkout/one-page`.
+        target: String,
+        /// The app. Defaults to the `app` of statespace.toml.
+        #[arg(long, env = "STATESPACE_APP")]
+        app: Option<String>,
+    },
+    /// Connect repositories through the Statespace GitHub App.
+    #[command(subcommand)]
+    Repo(RepoCommand),
+    /// Show and change apps. A build of the repository creates its app.
     #[command(subcommand)]
     App(AppCommand),
-    /// Publish signed images of an app as variants.
+    /// Manage tokens: credentials for proxies, controllers, agents, and SQL.
     #[command(subcommand)]
-    Variant(VariantCommand),
-    /// Compare variants against a control arm of the app's default.
-    #[command(subcommand)]
-    Experiment(ExperimentCommand),
+    Token(TokenCommand),
     /// Run a reverse proxy that assigns each request's subject and forwards
     /// it to the app's default or to an experiment's arm.
     Proxy(Box<ProxyArgs>),
-    /// Run the arms of an app's experiments on Kubernetes.
-    Controller(Box<ControllerArgs>),
+    /// Run the arms of an app's experiments on a platform.
+    #[command(subcommand)]
+    Controller(ControllerCommand),
+}
+
+/// The file that names a repository's app and an arm's settings.
+pub const PROJECT_FILE: &str = "statespace.toml";
+
+#[derive(Subcommand)]
+pub enum InitCommand {
+    /// Write statespace.toml and .github/workflows/statespace.yml.
+    Github {
+        /// The app's name. Defaults to the repository's directory name.
+        #[arg(long)]
+        app: Option<String>,
+        /// The image repository CI pushes to, such as `ghcr.io/acme/web`.
+        #[arg(long)]
+        image: Option<String>,
+        /// Replace files that exist.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Args)]
+pub struct CheckArgs {
+    #[arg(long, default_value = PROJECT_FILE)]
+    pub file: PathBuf,
+    /// The request's path, to test the rules against a request.
+    #[arg(long)]
+    pub path: Option<String>,
+    #[arg(long, default_value = "GET")]
+    pub method: String,
+    /// The query string, such as `plan=pro&ref=ad`.
+    #[arg(long)]
+    pub query: Option<String>,
+    /// A header. Repeat for each.
+    #[arg(long = "header", value_name = "NAME=VALUE")]
+    pub headers: Vec<String>,
+    /// A cookie. Repeat for each.
+    #[arg(long = "cookie", value_name = "NAME=VALUE")]
+    pub cookies: Vec<String>,
+}
+
+#[derive(Subcommand)]
+pub enum RepoCommand {
+    /// Open the page that installs the GitHub App on repositories.
+    Connect {
+        /// Print the URL instead of opening a browser.
+        #[arg(long)]
+        no_open: bool,
+    },
+    /// List the repositories the GitHub App can see.
+    List,
+}
+
+#[derive(Subcommand)]
+pub enum ControllerCommand {
+    /// Run each arm as a copy of the default's Deployment.
+    Kubernetes(Box<ControllerArgs>),
 }
 
 #[derive(Subcommand)]
@@ -111,8 +202,6 @@ pub enum Preset {
     Runtime,
     /// For `ssp controller`: runtime, and report where arms run.
     Controller,
-    /// For CI: publish variants and run experiments.
-    Publisher,
     /// For SQL: read runs, output, and requests.
     Analyst,
     /// Everything, for agents that run the whole loop.
@@ -124,7 +213,6 @@ impl Preset {
         match self {
             Self::Runtime => vec!["runtime:read", "events:write"],
             Self::Controller => vec!["runtime:read", "events:write", "variants:report"],
-            Self::Publisher => vec!["experiments:write"],
             Self::Analyst => vec!["query:read"],
             Self::Admin => SCOPES.to_vec(),
         }
@@ -133,159 +221,30 @@ impl Preset {
 
 #[derive(Subcommand)]
 pub enum AppCommand {
-    /// Create an app and its analysis schema.
-    Create {
-        /// Lowercase letters, digits, and underscores, starting with a letter.
-        name: String,
-        /// Days to keep the lines arms print. Defaults to 7.
-        #[arg(long = "output-retention-days")]
-        output_retention: Option<u32>,
-    },
+    /// List apps and the share of subjects their experiments hold.
+    List,
+    /// Show an app.
+    Show { name: String },
     /// Change an app's settings.
-    Update {
+    Set {
         name: String,
+        /// The share of the app's subjects that experiments may hold, arms
+        /// and controls together, such as `0.2`. Arms that do not fit wait.
+        #[arg(long)]
+        max_traffic: Option<f64>,
         /// Days to keep the lines arms print.
         #[arg(long = "output-retention-days")]
         output_retention: Option<u32>,
     },
-    /// List apps and the share of subjects their running experiments hold.
-    List,
-    /// Show an app.
-    Show { name: String },
     /// Erase one subject's runs, requests, and lines in an app.
     EraseSubject { name: String, subject: String },
-    /// Delete an app with its variants, experiments, and events.
+    /// Delete an app with its builds, experiments, and events.
     Delete {
         name: String,
         /// Confirm permanent deletion.
         #[arg(long)]
         yes: bool,
     },
-}
-
-#[derive(Subcommand)]
-pub enum VariantCommand {
-    /// Sign an image and publish it as the next version of a variant.
-    Create {
-        /// The variant's name, such as `lower-price`.
-        name: String,
-        #[arg(long, env = "STATESPACE_APP")]
-        app: String,
-        /// The image, by tag or digest. A tag is resolved to its digest with
-        /// `docker`, so the signature covers exact bytes.
-        #[arg(long)]
-        image: String,
-        /// The commit the image was built from. Defaults to CI's commit, such
-        /// as `GITHUB_SHA`, or the current directory's Git HEAD.
-        #[arg(long)]
-        commit: Option<String>,
-        /// The base64 private key from `ssp keygen`.
-        #[arg(long, env = "SSP_SIGNING_KEY", hide_env_values = true)]
-        signing_key: String,
-    },
-    /// List the newest version of each variant of an app.
-    List {
-        #[arg(long, env = "STATESPACE_APP")]
-        app: String,
-    },
-    /// Show every version of a variant.
-    Show {
-        name: String,
-        #[arg(long, env = "STATESPACE_APP")]
-        app: String,
-    },
-    /// Delete a variant that no experiment uses.
-    Delete {
-        name: String,
-        #[arg(long, env = "STATESPACE_APP")]
-        app: String,
-        #[arg(long)]
-        yes: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ExperimentCommand {
-    /// Create an experiment as a draft.
-    Create {
-        name: String,
-        #[arg(long, env = "STATESPACE_APP")]
-        app: String,
-        /// CEL over `request` that yields the subject ID. Defaults to
-        /// `request.cookies.ssp_sid`, a cookie the proxy sets. It cannot
-        /// change after the experiment starts.
-        #[arg(long)]
-        subject: Option<String>,
-        #[command(flatten)]
-        settings: Settings,
-    },
-    /// Change the draft. The running version changes only on `start`.
-    Update {
-        name: String,
-        /// CEL over `request` that yields the subject ID. Only before the first start.
-        #[arg(long)]
-        subject: Option<String>,
-        #[command(flatten)]
-        settings: Settings,
-        /// Remove the eligibility rule.
-        #[arg(long, conflicts_with = "eligibility")]
-        no_eligibility: bool,
-    },
-    /// List experiments.
-    List {
-        #[arg(long, env = "STATESPACE_APP")]
-        app: Option<String>,
-    },
-    /// Show an experiment's draft and its published version.
-    Show { name: String },
-    /// Publish the draft, pinning each variant's newest version, and run it.
-    Start {
-        name: String,
-        /// Restart this published version instead.
-        #[arg(long)]
-        version: Option<u32>,
-        #[arg(long)]
-        note: Option<String>,
-    },
-    /// Stop the running version. Its subjects get the default again.
-    Stop {
-        name: String,
-        #[arg(long)]
-        note: Option<String>,
-    },
-    /// Delete a stopped experiment with all of its versions and runs.
-    Delete {
-        name: String,
-        /// Confirm permanent deletion.
-        #[arg(long)]
-        yes: bool,
-    },
-}
-
-#[derive(Args)]
-pub struct Settings {
-    /// An arm and its share of all the app's subjects, such as
-    /// `lower-price=0.05`. Repeat for each variant. Control gets the share of
-    /// the largest variant unless `control=SHARE` sets it. Replaces the
-    /// draft's arms.
-    #[arg(long = "split", value_name = "ARM=SHARE")]
-    pub split: Vec<String>,
-    /// CEL over `request`, such as `request.headers["cf-ipcountry"] == "US"`.
-    #[arg(long)]
-    pub eligibility: Option<String>,
-    #[arg(long)]
-    pub description: Option<String>,
-    /// A note for the people and agents who read this experiment later.
-    #[arg(long)]
-    pub note: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum Runtime {
-    /// Run the default and every arm as containers on this machine.
-    Docker,
-    /// Route only: Kubernetes runs the default, and `ssp controller` the arms.
-    Kubernetes,
 }
 
 /// What `ssp proxy` and `ssp controller` share.
@@ -300,7 +259,7 @@ pub struct Shared {
     pub health: Option<String>,
     /// How many arms run at once, control arms included, 1 to 64.
     #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=64))]
-    pub max_variants: u32,
+    pub max_arms: u32,
     /// Seconds to keep routing with the last configuration while Statespace
     /// is unreachable. After that, every subject gets the default.
     #[arg(long, default_value_t = 300)]
@@ -315,50 +274,41 @@ pub struct Shared {
     pub redact: Vec<String>,
 }
 
+/// `ssp proxy` runs the default and the arms as Docker containers with
+/// `--image` or `--image-file`, or only routes with `--default`.
 #[derive(Args)]
+#[command(group(clap::ArgGroup::new("default_source").required(true).args(["image", "image_file", "default"])))]
 pub struct ProxyArgs {
     #[command(flatten)]
     pub shared: Shared,
-    /// How arms run.
-    #[arg(long, env = "STATESPACE_RUNTIME", value_enum)]
-    pub runtime: Runtime,
     /// The public address.
     #[arg(long, env = "STATESPACE_LISTEN", default_value = "0.0.0.0:8080")]
     pub listen: String,
-    /// The app's default image. With `--runtime docker`.
-    #[arg(long, env = "STATESPACE_IMAGE", conflicts_with = "image_file")]
+    /// The app's default image. The proxy runs it and every arm as Docker
+    /// containers on this machine.
+    #[arg(long, env = "STATESPACE_IMAGE")]
     pub image: Option<String>,
     /// A file holding the default image. On SIGHUP, the proxy reads it again
-    /// and swaps the default without dropping requests. With `--runtime docker`.
+    /// and swaps the default without dropping requests.
     #[arg(long, env = "STATESPACE_IMAGE_FILE")]
-    pub image_file: Option<std::path::PathBuf>,
-    /// The port the app listens on in its container. Defaults to the
-    /// image's `EXPOSE`. With `--runtime docker`.
-    #[arg(long, env = "STATESPACE_PORT")]
-    pub port: Option<u16>,
-    /// A volume, as `docker run --volume` takes it. Repeat for each. With
-    /// `--runtime docker`.
-    #[arg(long = "volume", value_name = "SOURCE:TARGET")]
-    pub volumes: Vec<String>,
-    /// A memory limit for each container, such as `1g`. With `--runtime docker`.
-    #[arg(long)]
-    pub memory: Option<String>,
-    /// A CPU limit for each container, such as `1.5`. With `--runtime docker`.
-    #[arg(long)]
-    pub cpus: Option<String>,
-    /// Where the default listens, such as `http://localhost:8000`. With
-    /// `--runtime kubernetes`.
+    pub image_file: Option<PathBuf>,
+    /// Where the default listens, such as `http://localhost:8000`. The proxy
+    /// only routes; a controller runs the arms.
     #[arg(long, env = "STATESPACE_DEFAULT")]
     pub default: Option<String>,
-    /// A base64 public key whose signed variants may run. Repeat to rotate
-    /// keys. With `--runtime docker`.
-    #[arg(
-        long = "trust-key",
-        value_name = "KEY",
-        env = "SSP_TRUST_KEY",
-        value_delimiter = ','
-    )]
-    pub trust_keys: Vec<String>,
+    /// The port the app listens on in its container. Defaults to the
+    /// image's `EXPOSE`. With `--image`.
+    #[arg(long, env = "STATESPACE_PORT")]
+    pub port: Option<u16>,
+    /// A volume, as `docker run --volume` takes it. Repeat for each. With `--image`.
+    #[arg(long = "volume", value_name = "SOURCE:TARGET")]
+    pub volumes: Vec<String>,
+    /// A memory limit for each container, such as `1g`. With `--image`.
+    #[arg(long)]
+    pub memory: Option<String>,
+    /// A CPU limit for each container, such as `1.5`. With `--image`.
+    #[arg(long)]
+    pub cpus: Option<String>,
 }
 
 #[derive(Args)]
@@ -375,15 +325,6 @@ pub struct ControllerArgs {
     /// The namespace of the Deployment. Defaults to the controller's own.
     #[arg(long, env = "STATESPACE_NAMESPACE")]
     pub namespace: Option<String>,
-    /// A base64 public key whose signed variants may run. Repeat to rotate keys.
-    #[arg(
-        long = "trust-key",
-        value_name = "KEY",
-        env = "SSP_TRUST_KEY",
-        value_delimiter = ',',
-        required = true
-    )]
-    pub trust_keys: Vec<String>,
 }
 
 #[cfg(test)]
@@ -398,56 +339,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_quickstart() {
+    fn parses_the_commands() {
         for arguments in [
-            vec!["ssp", "app", "create", "web"],
-            vec!["ssp", "keygen"],
             vec!["ssp", "whoami"],
             vec!["ssp", "logout", "--all"],
+            vec!["ssp", "init", "github", "--app", "web"],
+            vec!["ssp", "check", "--path", "/", "--header", "cf-ipcountry=US"],
             vec![
                 "ssp",
-                "variant",
-                "create",
-                "lower-price",
-                "--app",
-                "web",
+                "apply",
                 "--image",
                 "ghcr.io/acme/web:abc",
-                "--signing-key",
-                "k",
+                "--dry-run",
             ],
-            vec![
-                "ssp",
-                "experiment",
-                "create",
-                "checkout",
-                "--app",
-                "web",
-                "--split",
-                "lower-price=0.05",
-                "--note",
-                "why",
-            ],
-            vec![
-                "ssp",
-                "experiment",
-                "update",
-                "checkout",
-                "--no-eligibility",
-            ],
-            vec!["ssp", "experiment", "start", "checkout", "--note", "go"],
-            vec!["ssp", "experiment", "stop", "checkout"],
+            vec!["ssp", "status"],
+            vec!["ssp", "status", "exp/checkout/one-page", "--app", "web"],
+            vec!["ssp", "stop", "checkout/one-page", "--app", "web"],
+            vec!["ssp", "repo", "connect", "--no-open"],
+            vec!["ssp", "app", "set", "web", "--max-traffic", "0.2"],
             vec![
                 "ssp",
                 "proxy",
                 "--app",
                 "web",
-                "--runtime",
-                "docker",
                 "--image",
                 "ghcr.io/acme/web:main",
-                "--trust-key",
-                "k",
                 "--variant-env",
                 "A=b",
                 "--memory",
@@ -458,29 +374,20 @@ mod tests {
                 "proxy",
                 "--app",
                 "web",
-                "--runtime",
-                "kubernetes",
                 "--default",
                 "http://localhost:8000",
             ],
             vec![
                 "ssp",
                 "controller",
+                "kubernetes",
                 "--app",
                 "web",
                 "--deployment",
                 "web",
-                "--trust-key",
-                "k",
             ],
             vec![
-                "ssp",
-                "token",
-                "create",
-                "--name",
-                "ci",
-                "--preset",
-                "publisher",
+                "ssp", "token", "create", "--name", "edge", "--preset", "runtime",
             ],
             vec![
                 "ssp",
@@ -501,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_scopes_and_runtimes() {
+    fn rejects_unknown_scopes_and_ambiguous_proxies() {
         for arguments in [
             vec![
                 "ssp",
@@ -512,7 +419,26 @@ mod tests {
                 "--scope",
                 "keys:manage",
             ],
-            vec!["ssp", "proxy", "--app", "web", "--runtime", "local"],
+            vec![
+                "ssp",
+                "token",
+                "create",
+                "--name",
+                "a",
+                "--preset",
+                "publisher",
+            ],
+            vec!["ssp", "proxy", "--app", "web"],
+            vec![
+                "ssp",
+                "proxy",
+                "--app",
+                "web",
+                "--image",
+                "web:main",
+                "--default",
+                "http://localhost:8000",
+            ],
             vec!["ssp", "controller", "--app", "web", "--deployment", "web"],
             vec!["ssp", "token", "revoke"],
         ] {

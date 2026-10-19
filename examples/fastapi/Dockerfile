@@ -1,5 +1,5 @@
-# The shop's image. The default and every variant are images built from this
-# file: the default from main, each variant from a branch.
+# The shop's image. The default and every arm are images built from this
+# file: the default from main, each arm from an exp/ branch.
 FROM python:3.12-slim
 
 WORKDIR /app

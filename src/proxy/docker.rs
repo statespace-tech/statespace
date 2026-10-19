@@ -709,13 +709,11 @@ fn statespace_environment(app: &str, target: &Target, port: u16) -> Vec<(String,
         ("STATESPACE_APP".into(), app.to_owned()),
     ];
     match target {
-        Target::Default => environment.push(("STATESPACE_VARIANT".into(), "default".into())),
+        Target::Default => environment.push(("STATESPACE_ARM".into(), "default".into())),
         Target::Arm(key) => {
-            environment.push(("STATESPACE_VARIANT".into(), key.arm.clone()));
+            environment.push(("STATESPACE_ARM".into(), key.arm.clone()));
+            environment.push(("STATESPACE_COMMIT".into(), key.commit.clone()));
             environment.push(("STATESPACE_EXPERIMENT".into(), key.experiment.clone()));
-            if let Some(version) = key.version {
-                environment.push(("STATESPACE_VARIANT_VERSION".into(), version.to_string()));
-            }
         }
     }
     environment
@@ -905,11 +903,7 @@ fn target_label(target: &Target) -> String {
         Target::Default => "default".into(),
         Target::Arm(key) => format!(
             "{}/{}/{}/{}",
-            key.experiment,
-            key.experiment_version,
-            key.arm,
-            key.version
-                .map_or_else(|| "-".into(), |version| version.to_string())
+            key.experiment, key.experiment_version, key.arm, key.commit
         ),
     }
 }
@@ -964,11 +958,14 @@ mod tests {
             experiment: "price".into(),
             experiment_version: 2,
             arm: "lower-price".into(),
-            version: Some(3),
+            commit: "a".repeat(40),
         };
-        assert_eq!(target_label(&Target::Arm(key)), "price/2/lower-price/3");
+        assert_eq!(
+            target_label(&Target::Arm(key)),
+            format!("price/2/lower-price/{}", "a".repeat(40))
+        );
         assert_eq!(target_label(&Target::Default), "default");
-        assert_eq!(sanitize("price/2/control/-"), "price-2-control--");
+        assert_eq!(sanitize("price/2/control/b"), "price-2-control-b");
     }
 
     #[test]
@@ -986,11 +983,12 @@ mod tests {
             experiment: "price".into(),
             experiment_version: 1,
             arm: "control".into(),
-            version: None,
+            commit: "b".repeat(40),
         };
         let environment = statespace_environment("shop", &Target::Arm(key), 8000);
         assert!(environment.contains(&("PORT".into(), "8000".into())));
-        assert!(environment.contains(&("STATESPACE_VARIANT".into(), "control".into())));
+        assert!(environment.contains(&("STATESPACE_ARM".into(), "control".into())));
+        assert!(environment.contains(&("STATESPACE_COMMIT".into(), "b".repeat(40))));
         assert!(environment.contains(&("STATESPACE_EXPERIMENT".into(), "price".into())));
     }
 }

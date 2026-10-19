@@ -1,10 +1,9 @@
 //! `ssp proxy`: a reverse proxy that assigns each request's subject and
 //! forwards the request to the app's default or to an experiment's arm.
 //!
-//! With `--runtime docker`, the proxy also runs the default and every arm
-//! as containers on this machine. With `--runtime kubernetes`, it runs
-//! beside the default in its pod and forwards to arms that `ssp controller`
-//! runs.
+//! With `--image` or `--image-file`, the proxy also runs the default and
+//! every arm as Docker containers on this machine. With `--default`, it only
+//! routes: the default runs at that address, and a controller runs the arms.
 
 pub mod assign;
 mod docker;
@@ -15,7 +14,6 @@ pub mod telemetry;
 
 use std::{
     collections::{HashMap, HashSet},
-    path::PathBuf,
     sync::{Arc, RwLock, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -25,17 +23,13 @@ use regex::Regex;
 use serde_json::json;
 
 use self::{
-    assign::{Arm, Routing, Target},
+    assign::{Routing, Target},
     docker::Supervisor,
     remote::Remote,
     server::{Shared, Upstreams},
     telemetry::Telemetry,
 };
-use crate::{
-    api::Api,
-    cli::{ProxyArgs, Runtime},
-    signing,
-};
+use crate::{api::Api, cli::ProxyArgs};
 
 /// How long the proxy waits for the default before it listens anyway.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -91,18 +85,10 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
     let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
     let redact = patterns(&shared_arguments.redact)?;
     let variant_env = pairs(&shared_arguments.variant_env, "--variant-env")?;
-    let max_arms = shared_arguments.max_variants;
+    let max_arms = shared_arguments.max_arms;
 
-    let (upstreams, default_image) = match arguments.runtime {
-        Runtime::Docker => {
-            if arguments.default.is_some() {
-                bail!("--default is for --runtime kubernetes; with docker, pass --image");
-            }
-            if arguments.trust_keys.is_empty() {
-                bail!("pass --trust-key with the public key from `ssp keygen`");
-            }
-            let image = default_image(&arguments)?
-                .context("pass --image or --image-file with the app's default image")?;
+    let (upstreams, default_image) = match default_image(&arguments)? {
+        Some(image) => {
             let supervisor = Supervisor::new(
                 telemetry.clone(),
                 docker::Options {
@@ -123,23 +109,22 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
             supervisor.ensure(Target::Default, image.clone());
             (Upstreams::Docker(supervisor), Some(image))
         }
-        Runtime::Kubernetes => {
-            let default = arguments
-                .default
-                .clone()
-                .context("pass --default with where the app listens in its pod, such as http://localhost:8000")?;
-            if arguments.image.is_some()
-                || arguments.image_file.is_some()
-                || arguments.port.is_some()
+        None => {
+            let default = arguments.default.clone().context(
+                "pass --image or --image-file to run the default, or --default to route to it",
+            )?;
+            if arguments.port.is_some()
                 || !arguments.volumes.is_empty()
+                || arguments.memory.is_some()
+                || arguments.cpus.is_some()
             {
                 bail!(
-                    "on Kubernetes, the default's Deployment sets its image, port, and volumes; \
-                     pass only --default"
+                    "--port, --volume, --memory, and --cpus set the containers the proxy runs; \
+                     with --default, the platform runs them"
                 );
             }
             (
-                Upstreams::Kubernetes {
+                Upstreams::Forward {
                     default,
                     arms: RwLock::default(),
                     suspects: std::sync::Mutex::default(),
@@ -148,31 +133,24 @@ async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
             )
         }
     };
-    let trusted = arguments
-        .trust_keys
-        .iter()
-        .map(|key| signing::public_key(key))
-        .collect::<anyhow::Result<Vec<_>>>()?;
     let shared = Arc::new(Shared::new(
         upstreams,
         telemetry.clone(),
         Duration::from_secs(shared_arguments.stale_after),
     ));
-    let history = Arc::new(History::load(&app));
-
+    let defaults = Arc::new(DefaultDigest::default());
     tokio::spawn(poll(
         remote.clone(),
         shared.clone(),
-        trusted,
         max_arms,
-        history.clone(),
+        defaults.clone(),
     ));
     tokio::spawn(report(
         remote.clone(),
         shared.clone(),
         id.clone(),
         max_arms,
-        arguments.runtime,
+        defaults,
     ));
     tokio::spawn(measure(shared.clone()));
 
@@ -234,7 +212,7 @@ fn default_image(arguments: &ProxyArgs) -> anyhow::Result<Option<String>> {
 /// container is ready.
 async fn reload(arguments: &ProxyArgs, shared: &Shared, started_with: Option<&str>) {
     let Upstreams::Docker(supervisor) = &shared.upstreams else {
-        eprintln!("[ssp] nothing to reload: Kubernetes deploys the default");
+        eprintln!("[ssp] nothing to reload: the platform deploys the default");
         return;
     };
     if arguments.image_file.is_none() {
@@ -257,60 +235,25 @@ async fn reload(arguments: &ProxyArgs, shared: &Shared, started_with: Option<&st
     supervisor.ensure(Target::Default, image);
 }
 
-/// The default images this proxy ran, by digest. A control arm runs only an
-/// image this proxy ran as its default, so Statespace cannot choose what
-/// runs here.
-struct History {
-    path: Option<PathBuf>,
-    digests: std::sync::Mutex<Vec<String>>,
+/// The default this proxy runs, by digest, once it knows it. A new digest
+/// is reported at once: arms based on it may start.
+#[derive(Default)]
+struct DefaultDigest {
+    digest: std::sync::Mutex<Option<String>>,
+    changed: tokio::sync::Notify,
 }
 
-impl History {
-    const LIMIT: usize = 100;
-
-    fn load(app: &str) -> Self {
-        let path = std::env::var_os("STATESPACE_STATE")
-            .map(PathBuf::from)
-            .or_else(|| dirs::data_local_dir().map(|directory| directory.join("statespace")))
-            .map(|directory| directory.join(format!("{app}-defaults.json")));
-        let digests = path
-            .as_ref()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        Self {
-            path,
-            digests: std::sync::Mutex::new(digests),
+impl DefaultDigest {
+    fn set(&self, digest: Option<String>) {
+        let mut current = self.digest.lock().expect("never poisoned");
+        if *current != digest {
+            *current = digest;
+            self.changed.notify_one();
         }
     }
 
-    fn contains(&self, digest: &str) -> bool {
-        self.digests
-            .lock()
-            .expect("history is never poisoned")
-            .iter()
-            .any(|known| known == digest)
-    }
-
-    fn add(&self, digest: &str) {
-        let mut digests = self.digests.lock().expect("history is never poisoned");
-        if digests.iter().any(|known| known == digest) {
-            return;
-        }
-        digests.push(digest.to_owned());
-        let excess = digests.len().saturating_sub(Self::LIMIT);
-        digests.drain(..excess);
-        let Some(path) = &self.path else { return };
-        let saved = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(path, json!(*digests).to_string()));
-        if let Err(error) = saved {
-            eprintln!(
-                "[ssp] could not save the default's digest to {}: {error}",
-                path.display()
-            );
-        }
+    fn get(&self) -> Option<String> {
+        self.digest.lock().expect("never poisoned").clone()
     }
 }
 
@@ -318,9 +261,8 @@ impl History {
 async fn poll(
     remote: Remote,
     shared: Arc<Shared>,
-    trusted: Vec<ed25519_dalek::VerifyingKey>,
     max_arms: u32,
-    history: Arc<History>,
+    default_digest: Arc<DefaultDigest>,
 ) {
     let mut interval = Duration::from_secs(10);
     let mut failing = false;
@@ -346,12 +288,11 @@ async fn poll(
                 }
                 match &shared.upstreams {
                     Upstreams::Docker(supervisor) => {
-                        let default = match supervisor.default_image() {
-                            Some(image) => match digests.get(&image) {
+                        if let Some(image) = supervisor.default_image() {
+                            let digest = match digests.get(&image) {
                                 Some(digest) => Some(digest.clone()),
                                 None => match docker::digest(&image).await {
                                     Ok(digest) => {
-                                        history.add(&digest);
                                         digests.insert(image, digest.clone());
                                         Some(digest)
                                     }
@@ -362,37 +303,25 @@ async fn poll(
                                         None
                                     }
                                 },
-                            },
-                            None => None,
-                        };
-                        let desired = arms(
-                            &remote,
-                            &routing,
-                            supervisor,
-                            &trusted,
-                            max_arms,
-                            default.as_deref(),
-                            &history,
-                            &mut note,
-                        )
-                        .await;
+                            };
+                            default_digest.set(digest);
+                        }
+                        let desired = arms(&routing, supervisor, max_arms, &mut note);
                         supervisor.retain(&desired);
-                        if !strays_removed && default.is_some() {
+                        if !strays_removed && supervisor.default_image().is_some() {
                             supervisor.remove_strays().await;
                             strays_removed = true;
                         }
                     }
-                    Upstreams::Kubernetes { arms, .. } => {
-                        let mut ready = HashMap::new();
-                        for (key, arm) in routing.arms() {
-                            let (address, up) = match arm {
-                                Arm::Control(control) => (&control.address, control.ready),
-                                Arm::Variant(variant) => (&variant.address, variant.ready),
-                            };
-                            if let (Some(address), true) = (address, up) {
-                                ready.insert(key, address.clone());
-                            }
-                        }
+                    Upstreams::Forward { arms, .. } => {
+                        let ready = routing
+                            .arms()
+                            .into_iter()
+                            .filter_map(|(key, arm)| {
+                                let address = arm.address.clone().filter(|_| arm.ready)?;
+                                Some((key, address))
+                            })
+                            .collect();
                         *arms.write().expect("arms are never poisoned") = ready;
                     }
                 }
@@ -411,80 +340,37 @@ async fn poll(
     }
 }
 
-/// Start each arm this proxy may run, and return them. A control arm runs
-/// the pinned default image, pinning this proxy's default when the version
-/// has none; a variant runs only when a trusted key signed it.
-#[allow(clippy::too_many_arguments)]
-async fn arms(
-    remote: &Remote,
+/// Start each arm, up to `max_arms`, and return them. Statespace names each
+/// arm's image by digest: a variant's build, or the default build of a
+/// control's base commit that the app's proxies ran.
+fn arms(
     routing: &Routing,
     supervisor: &Supervisor,
-    trusted: &[ed25519_dalek::VerifyingKey],
     max_arms: u32,
-    default: Option<&str>,
-    history: &History,
     note: &mut impl FnMut(String),
 ) -> HashSet<assign::Key> {
     let mut desired = HashSet::new();
     for (key, arm) in routing.arms() {
-        let image = match arm {
-            Arm::Control(control) => {
-                let pinned = match (&control.image, default) {
-                    (Some(image), _) => image.clone(),
-                    (None, Some(default)) => {
-                        match remote
-                            .pin_control(&key.experiment, key.experiment_version, default)
-                            .await
-                        {
-                            Ok(pin) => pin.image,
-                            Err(error) => {
-                                note(format!("could not pin the control of {key}: {error:#}"));
-                                continue;
-                            }
-                        }
-                    }
-                    // Until the default is ready, its digest is unknown.
-                    (None, None) => continue,
-                };
-                if !history.contains(&pinned) {
-                    note(format!(
-                        "{key} runs {pinned}, which this proxy never ran as its default; \
-                         its subjects get the default"
-                    ));
-                    continue;
-                }
-                pinned
-            }
-            Arm::Variant(variant) => {
-                let message = signing::message(
-                    remote.app(),
-                    &variant.name,
-                    &variant.image,
-                    variant.commit.as_deref(),
-                );
-                if let Err(error) = signing::verify(trusted, &variant.signature, &message) {
-                    note(format!(
-                        "{key} cannot run: {error:#}; its subjects get the default"
-                    ));
-                    continue;
-                }
-                variant.image.clone()
-            }
-        };
         if desired.len() >= max_arms as usize {
             note(format!(
-                "{key} exceeds --max-variants {max_arms}; its subjects get the default"
+                "{key} exceeds --max-arms {max_arms}; its subjects get the default"
             ));
             continue;
         }
-        supervisor.ensure(Target::Arm(key.clone()), image);
+        supervisor.ensure(Target::Arm(key.clone()), arm.image.clone());
         desired.insert(key);
     }
     desired
 }
 
 /// Tell Statespace what this proxy runs and how much it can run.
-async fn report(remote: Remote, shared: Arc<Shared>, id: String, max_arms: u32, runtime: Runtime) {
+async fn report(
+    remote: Remote,
+    shared: Arc<Shared>,
+    id: String,
+    max_arms: u32,
+    default_digest: Arc<DefaultDigest>,
+) {
     loop {
         let age = shared
             .current
@@ -494,7 +380,7 @@ async fn report(remote: Remote, shared: Arc<Shared>, id: String, max_arms: u32, 
             .map(|fetched| fetched.elapsed().as_secs());
         let arms = match &shared.upstreams {
             Upstreams::Docker(supervisor) => json!(supervisor.snapshot()),
-            Upstreams::Kubernetes { arms, .. } => json!(
+            Upstreams::Forward { arms, .. } => json!(
                 arms.read()
                     .expect("arms are never poisoned")
                     .keys()
@@ -502,19 +388,27 @@ async fn report(remote: Remote, shared: Arc<Shared>, id: String, max_arms: u32, 
                     .collect::<Vec<_>>()
             ),
         };
+        let runs = match &shared.upstreams {
+            Upstreams::Docker(_) => "containers",
+            Upstreams::Forward { .. } => "routes",
+        };
         let report = json!({
-            "runtime": match runtime {
-                Runtime::Docker => "docker",
-                Runtime::Kubernetes => "kubernetes",
-            },
+            "runs": runs,
             "arms": arms,
             "dropped_events": shared.telemetry.dropped(),
             "config_age_seconds": age,
         });
-        if let Err(error) = remote.report(&id, "proxy", max_arms, report).await {
+        let default = default_digest.get();
+        if let Err(error) = remote
+            .report(&id, "proxy", max_arms, default.as_deref(), report)
+            .await
+        {
             eprintln!("[ssp] could not report to Statespace: {error:#}");
         }
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+            _ = default_digest.changed.notified() => {}
+        }
     }
 }
 
@@ -575,18 +469,5 @@ mod tests {
         );
         assert!(pairs(&["=x".into()], "--variant-env").is_err());
         assert!(pairs(&["NOVALUE".into()], "--variant-env").is_err());
-    }
-
-    #[test]
-    fn remembers_default_images() {
-        let directory = tempfile::tempdir().unwrap();
-        // SAFETY: tests that read STATESPACE_STATE run in this one test.
-        unsafe { std::env::set_var("STATESPACE_STATE", directory.path()) };
-        let history = History::load("shop");
-        assert!(!history.contains("ghcr.io/acme/shop@sha256:a"));
-        history.add("ghcr.io/acme/shop@sha256:a");
-        let reloaded = History::load("shop");
-        assert!(reloaded.contains("ghcr.io/acme/shop@sha256:a"));
-        assert!(!History::load("other").contains("ghcr.io/acme/shop@sha256:a"));
     }
 }

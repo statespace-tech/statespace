@@ -1,4 +1,4 @@
-# The tiny app as an image. Build a variant with another greeting:
+# The tiny app as an image. Build an arm with another greeting:
 #   docker build --build-arg GREETING=hi -t app:hi examples/app
 FROM python:3.12-alpine
 ARG GREETING=hello

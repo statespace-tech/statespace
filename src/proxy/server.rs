@@ -45,8 +45,8 @@ pub struct Current {
 pub enum Upstreams {
     /// Containers this proxy runs.
     Docker(Supervisor),
-    /// The default beside the proxy, and arms a controller runs elsewhere.
-    Kubernetes {
+    /// The default at `--default`, and arms that a controller runs elsewhere.
+    Forward {
         default: String,
         arms: RwLock<HashMap<Key, String>>,
         suspects: Mutex<HashMap<Key, Instant>>,
@@ -57,8 +57,8 @@ impl Upstreams {
     pub fn address(&self, target: &Target) -> Option<String> {
         match (self, target) {
             (Self::Docker(supervisor), target) => supervisor.address(target),
-            (Self::Kubernetes { default, .. }, Target::Default) => Some(default.clone()),
-            (Self::Kubernetes { arms, suspects, .. }, Target::Arm(key)) => {
+            (Self::Forward { default, .. }, Target::Default) => Some(default.clone()),
+            (Self::Forward { arms, suspects, .. }, Target::Arm(key)) => {
                 let suspected = suspects
                     .lock()
                     .expect("suspects are never poisoned")
@@ -78,13 +78,13 @@ impl Upstreams {
     pub fn suspect(&self, target: &Target) {
         match (self, target) {
             (Self::Docker(supervisor), target) => supervisor.suspect(target),
-            (Self::Kubernetes { suspects, .. }, Target::Arm(key)) => {
+            (Self::Forward { suspects, .. }, Target::Arm(key)) => {
                 suspects
                     .lock()
                     .expect("suspects are never poisoned")
                     .insert(key.clone(), Instant::now());
             }
-            (Self::Kubernetes { .. }, Target::Default) => {}
+            (Self::Forward { .. }, Target::Default) => {}
         }
     }
 }
@@ -253,7 +253,7 @@ async fn forward(
             *again.headers_mut() = headers;
             again
                 .headers_mut()
-                .insert("x-statespace-variant", HeaderValue::from_static("default"));
+                .insert("x-statespace-arm", HeaderValue::from_static("default"));
             match shared.client.request(again).await {
                 Ok(response) => response,
                 Err(error) => {
@@ -315,8 +315,8 @@ async fn forward(
             "subject_id": subject,
             "experiment": key.experiment,
             "experiment_version": key.experiment_version,
-            "variant": key.arm,
-            "variant_version": key.version,
+            "arm": key.arm,
+            "commit": key.commit,
             "method": method.as_str(),
             "path": path,
             "status": status.as_u16(),
@@ -382,7 +382,7 @@ fn prepare_headers(
     };
     set("x-forwarded-for", &forwarded);
     set(
-        "x-statespace-variant",
+        "x-statespace-arm",
         match serve {
             Target::Default => "default",
             Target::Arm(key) => &key.arm,
@@ -556,9 +556,9 @@ mod tests {
             experiment: "price".into(),
             experiment_version: 1,
             arm: "control".into(),
-            version: None,
+            commit: "b".repeat(40),
         };
-        let upstreams = Upstreams::Kubernetes {
+        let upstreams = Upstreams::Forward {
             default: "http://localhost:8000".into(),
             arms: RwLock::new(HashMap::from([(key.clone(), "http://arm".to_owned())])),
             suspects: Mutex::default(),

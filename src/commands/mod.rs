@@ -3,19 +3,21 @@
 
 mod app;
 mod auth;
+mod ci;
 mod experiment;
+mod init;
+mod repo;
 mod token;
-mod variant;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     api::Api,
-    cli::{Cli, Command},
+    cli::{Cli, Command, ControllerCommand, InitCommand},
     config::{DEFAULT_ENDPOINT, Settings},
     controller,
-    output::{bytes, emit, fields, list, note, text, time},
-    proxy, signing,
+    output::{bytes, emit, fields, list, text, time},
+    proxy,
 };
 
 pub fn run(cli: Cli) -> anyhow::Result<()> {
@@ -29,27 +31,22 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         Command::Login { no_open } => auth::login(&api, no_open),
         Command::Logout { all } => auth::logout(&api, all),
         Command::Whoami => whoami(&api.get("/v1/whoami")?),
-        Command::Keygen => {
-            let (private_key, public_key) = signing::generate();
-            let keys = json!({ "private_key": private_key, "public_key": public_key });
-            emit(&keys, || {
-                fields(&[
-                    ("Private key", private_key.clone()),
-                    ("Public key", public_key.clone()),
-                ])
-            })?;
-            note(
-                "Store the private key as SSP_SIGNING_KEY in CI. \
-                 Give the public key to proxies and controllers as --trust-key.",
-            );
-            Ok(())
-        }
+        Command::Init(InitCommand::Github { app, image, force }) => init::github(app, image, force),
+        Command::Check(arguments) => ci::check(&arguments),
+        Command::Apply {
+            image,
+            file,
+            dry_run,
+        } => ci::apply(&api, &image, &file, dry_run),
+        Command::Status { experiment, app } => experiment::status(&api, experiment, app),
+        Command::Stop { target, app } => experiment::stop(&api, &target, app),
+        Command::Repo(command) => repo::run(&api, command),
         Command::Token(command) => token::run(&api, command),
         Command::App(command) => app::run(&api, command),
-        Command::Variant(command) => variant::run(&api, command),
-        Command::Experiment(command) => experiment::run(&api, command),
         Command::Proxy(arguments) => proxy::run(api, *arguments),
-        Command::Controller(arguments) => controller::run(api, *arguments),
+        Command::Controller(ControllerCommand::Kubernetes(arguments)) => {
+            controller::run(api, *arguments)
+        }
     }
 }
 

@@ -1,10 +1,9 @@
 //! The connection of `ssp proxy` and `ssp controller` to Statespace:
-//! configuration, control pins, reports, and events.
+//! configuration, reports, and events.
 
 use std::time::Duration;
 
 use anyhow::bail;
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::assign::HostConfig;
@@ -18,12 +17,6 @@ pub struct Remote {
     app: String,
 }
 
-/// The default image a version's control arm runs.
-#[derive(Deserialize)]
-pub struct ControlPin {
-    pub image: String,
-}
-
 impl Remote {
     pub fn new(endpoint: &str, token: String, app: String) -> anyhow::Result<Self> {
         Ok(Self {
@@ -35,10 +28,6 @@ impl Remote {
             token,
             app,
         })
-    }
-
-    pub fn app(&self) -> &str {
-        &self.app
     }
 
     fn url(&self, path: &str) -> String {
@@ -85,41 +74,25 @@ impl Remote {
         Ok(Self::check(response).await?.json().await?)
     }
 
-    /// Report this proxy or controller: its kind, version, and capacity.
+    /// Report this proxy or controller: its kind, version, capacity, and
+    /// the default it runs, by digest, when it knows it.
     pub async fn report(
         &self,
         id: &str,
         kind: &str,
-        max_variants: u32,
+        max_arms: u32,
+        default_image: Option<&str>,
         report: Value,
     ) -> anyhow::Result<()> {
         let body = json!({
             "id": id,
             "kind": kind,
             "version": env!("CARGO_PKG_VERSION"),
-            "max_variants": max_variants,
+            "max_arms": max_arms,
+            "default_image": default_image,
             "report": report,
         });
         self.post(self.url("/hosts"), &body).await.map(drop)
-    }
-
-    /// Propose `image` as the control arm of a running version. Returns the
-    /// pin every proxy and controller uses, which may be another's.
-    pub async fn pin_control(
-        &self,
-        experiment: &str,
-        version: u32,
-        image: &str,
-    ) -> anyhow::Result<ControlPin> {
-        let url = self.url(&format!(
-            "/experiments/{}/versions/{version}/control",
-            segment(experiment)
-        ));
-        Ok(self
-            .post(url, &json!({ "image": image }))
-            .await?
-            .json()
-            .await?)
     }
 
     /// Report every arm a controller runs.

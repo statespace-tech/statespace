@@ -1,22 +1,28 @@
 ---
 name: statespace
-description: A/B test versions of an app in production with the Statespace `ssp` CLI. Use when asked to set up Statespace, test a code change on live traffic, compare a branch with production, roll out a change gradually, or read experiment results.
+description: A/B test versions of an app in production with Statespace, through pull requests. Use when asked to set up Statespace, test a code change on live traffic, compare a branch with production, roll out a change gradually, or read experiment results.
 ---
 
 # Statespace
 
-Statespace lets you A/B test multiple versions of an app in production.
+Statespace lets you A/B test multiple versions of an app in production. Experiments run
+from pull requests:
 
-- A **variant** is a signed image of the app. Usually, you build it from a branch.
-- An **experiment** gives a share of the app's subjects to each variant. **Control** gets
-  the same share. Control is a copy of the deployed image. Statespace pins it when the
-  experiment starts.
+- A branch named `exp/<experiment>/<arm>` is an **arm**. `exp/<experiment>` is an
+  experiment with one arm.
+- `statespace.toml` on the branch gives the arm's `share` of the app's subjects, and its
+  `subject` and `eligibility` rules.
+- The arm runs the latest commit while GitHub says that its pull request can merge.
+  GitHub's branch protection decides who must approve.
+- Each arm is compared with a **control**: the default that its branch started from. The
+  control gets the share of the largest arm with the same base.
 - All other subjects get the **default**, which is the deployed app.
 - `ssp proxy` sends each subject to its arm. Each arm records all lines that it prints.
 
-Use the CLI to change things. Use SQL to read data. Add `--json` to each `ssp` command to
-get one JSON document. With `--json`, an error is `{"error": "..."}` on standard error,
-with exit status 1.
+You cannot start an arm with a command. You push commits and open pull requests; people
+or review agents approve them. Use SQL to read data. Add `--json` to each `ssp` command
+to get one JSON document. With `--json`, an error is `{"error": "..."}` on standard
+error, with exit status 1.
 
 ## Set up
 
@@ -27,18 +33,19 @@ with exit status 1.
    ```
 
 2. Check the sign-in. If `ssp whoami` fails, ask the user to run `ssp login`. This
-   command opens a browser, so the user must run it. In CI and on servers, use a token in
-   `SSP_TOKEN`.
+   command opens a browser, so the user must run it.
 
    ```shell
    ssp whoami --json
    ```
 
-3. Find the app. If there is no app, ask the user for a name and create it.
+3. If the repository has no `statespace.toml`, set it up. Ask the user for the app name.
+   Then ask the user to install the GitHub App with `ssp repo connect`, to add the
+   production step that `ssp init github` prints, and to require one approval in branch
+   protection.
 
    ```shell
-   ssp app list --json
-   ssp app create <app> --json
+   ssp init github --app <app> --json
    ```
 
 4. Get a database URL to read the data. The token secret shows only once. Do not write it
@@ -56,77 +63,82 @@ If the user did not give a task, stop after the setup. Then ask which change to 
 1. Before you change code, read what other experiments tested and found.
 
    ```shell
-   ssp experiment list --app <app> --json
-   psql "$DATABASE_URL" -c "SELECT * FROM <app>.notes ORDER BY timestamp DESC LIMIT 20"
+   ssp status --json
+   gh pr list --search "head:exp/" --state all --limit 20
    psql "$DATABASE_URL" -c "SELECT data->>'event' AS event, count(*) FROM <app>.output
                             WHERE data IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
    ```
 
-2. Make one change on a branch. To measure a new outcome, print a JSON line where it
-   occurs. Add the subject from the `x-statespace-subject` request header:
+2. Start a branch from the latest default branch. Make one change. To measure a new
+   outcome, print a JSON line where it occurs. Add the subject from the
+   `x-statespace-subject` request header:
    `{"event": "<what occurred>", "subject": "<subject id>", ...fields}`.
 
-3. Make sure that the image of the branch starts and answers requests.
+   ```shell
+   git switch -c exp/<experiment>/<arm> origin/main
+   ```
+
+3. Set the share in `statespace.toml`. Start small, such as `share = 0.02`. Check the
+   file, and test the rules with a request.
+
+   ```shell
+   ssp check --json
+   ssp check --path / --header cf-ipcountry=US --json
+   ```
+
+4. Make sure that the image starts and answers requests.
 
    ```shell
    docker build -t <app>:mine . && docker run --rm -p 8000:8000 <app>:mine
    ```
 
-4. Push the branch. CI builds and pushes its image. Then CI publishes the image with a
-   signature. Only CI has the signing key.
+5. Push, and open a pull request. In the description, give the hypothesis: why the change
+   can move the outcome. CI records each commit with `ssp apply`.
 
    ```shell
-   ssp variant create <variant> --app <app> --image <registry>/<app>:<commit> --json
+   git push -u origin exp/<experiment>/<arm>
+   gh pr create --fill
    ```
 
-5. Create the experiment with a note that gives the hypothesis. Start with a small split.
-   `--split` gives the share of all subjects for each variant. Control gets the same
-   share.
+6. Read the `statespace/arm` check. It tells whether the arm runs, and why it waits: for
+   approval, for a check, for a deploy of its base, or for traffic. Do not try to go
+   around a wait.
 
    ```shell
-   ssp experiment create <experiment> --app <app> --split <variant>=0.02 \
-     --note "<why this change can move the outcome>" --json
-   ssp experiment start <experiment> --note "<what this run tests>" --json
+   gh pr checks
+   ssp status <experiment> --json
    ```
 
-6. Make sure that the arms run before you wait for outcomes.
-
-   ```shell
-   psql "$DATABASE_URL" -c "SELECT * FROM <app>.hosts"
-   psql "$DATABASE_URL" -c "SELECT variant, event, data, timestamp FROM <app>.lifecycle
-                            ORDER BY timestamp DESC LIMIT 20"
-   ```
-
-7. Wait for outcomes. Then compare the arms and make a decision: increase the split,
-   publish a fix, or stop. Write a note with the evidence for each decision.
+7. Wait for outcomes. Then compare each arm with its control, and make a decision: push a
+   fix, raise the share in `statespace.toml`, make the pull request a draft to stop, or
+   ask to merge. Write the evidence in a pull request comment.
 
    ```shell
    psql "$DATABASE_URL" -c "SELECT * FROM <app>.sample_ratio WHERE experiment = '<experiment>'"
-   psql "$DATABASE_URL" -c "SELECT variant, count(DISTINCT subject_id) AS subjects,
+   psql "$DATABASE_URL" -c "SELECT arm, commit, count(DISTINCT subject_id) AS subjects,
        count(DISTINCT subject_id) FILTER (WHERE data->>'event' = '<event>') AS converted
-     FROM <app>.logs WHERE experiment = '<experiment>' GROUP BY variant"
-   ssp experiment update <experiment> --split <variant>=0.1 --json
-   ssp experiment start <experiment> --json
-   ssp experiment stop <experiment> --note "<result and decision>" --json
+     FROM <app>.logs WHERE experiment = '<experiment>' GROUP BY arm, commit"
    ```
 
 ## Rules
 
-- Put one idea in each variant. Then a result shows its cause.
-- Compare a variant with the control arm of its experiment. Do not compare it with the
-  default. The variant and control are both new containers with the same share of
-  subjects.
+- Put one idea in each arm. Then a result shows its cause.
+- Compare an arm with the control of its base. In `<app>.arms`, that control's `commit`
+  is the arm's `base_commit`. Do not compare an arm with the default.
+- Each new commit needs approval again before it runs, unless the repository says
+  otherwise. Push only commits that you want users to see.
+- Arms of one experiment must use the same `subject` and `eligibility`. To test another
+  audience, use another experiment name.
+- Merging an arm ends its experiment. The other arms run again only after you update
+  them with the default branch.
 - Each arm uses the same database and services as the default. Do not change the database
-  schema in a variant. Put migrations in the deployed code first.
-- Compare the arms before you increase the split. A difference within noise is not
-  evidence.
+  schema in an arm. Put migrations in the deployed code first.
+- Compare the arms before you raise the share. A difference within noise is not evidence.
 - If `sample_ratio` shows a mismatch, the subjects did not split as the shares tell. Do
-  not trust the comparison. Find `variant-unavailable` runs, and read the `lifecycle` and
+  not trust the comparison. Find `arm-unavailable` runs, and read the `lifecycle` and
   `stderr` lines of the arm. Repair the arm before you read outcomes.
 - A rate such as errors needs a denominator. Divide by the rows of the arm in `requests`.
-- `ssp experiment start` fails when other experiments of the app use the subjects that it
-  needs. It shows a warning when the proxies run fewer arms than it needs.
-- To ship a variant, merge its branch and deploy it as usual. Statespace does not deploy
-  the default.
-- `ssp app delete`, `ssp experiment delete`, and `ssp token revoke --all` need `--yes`.
-  You cannot undo them. Ask the user before you run them.
+- `ssp stop` is for emergencies. It stops arms at once and makes their pull requests
+  drafts. Ask the user before you run it, unless the arm harms users.
+- `ssp app delete` and `ssp token revoke --all` need `--yes`. You cannot undo them. Ask
+  the user before you run them.

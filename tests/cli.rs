@@ -19,8 +19,6 @@ fn ssp(arguments: &[&str]) -> (bool, Value, Value) {
         .unwrap()
         .env("STATESPACE_CONFIG", config.path().join("config.toml"))
         .env_remove("SSP_TOKEN")
-        .env_remove("SSP_SIGNING_KEY")
-        .env_remove("SSP_TRUST_KEY")
         .env_remove("STATESPACE_APP")
         .env("STATESPACE_URL", "http://127.0.0.1:9")
         .arg("--json")
@@ -57,69 +55,120 @@ fn reports_errors_as_text() {
 }
 
 #[test]
-fn prints_keys_as_text() {
-    let output = Command::cargo_bin("ssp")
-        .unwrap()
-        .arg("keygen")
-        .output()
-        .unwrap();
-    let text = String::from_utf8_lossy(&output.stdout);
-    assert!(text.starts_with("Private key: "), "{text}");
-    assert!(text.contains("\nPublic key:  "), "{text}");
-}
-
-#[test]
 fn reports_errors_as_json() {
-    assert!(error(&["experiment", "list"]).contains("ssp login"));
-    assert!(error(&["experiment", "delete", "checkout"]).contains("--yes"));
+    assert!(error(&["status", "--app", "web"]).contains("ssp login"));
+    assert!(error(&["stop", "checkout", "--app", "web"]).contains("ssp login"));
     assert!(error(&["app", "delete", "web"]).contains("--yes"));
+    assert!(error(&["app", "set", "web"]).contains("--max-traffic"));
     assert!(error(&["token", "revoke", "--all"]).contains("--yes"));
-    let message = error(&["experiment", "create", "checkout", "--app", "web"]);
-    assert!(message.contains("--split"), "{message}");
-    let message = error(&[
-        "variant",
-        "create",
-        "fast",
-        "--app",
-        "web",
-        "--image",
-        "ghcr.io/acme/web:main",
-        "--signing-key=not-a-key",
+}
+
+/// `ssp init github` writes files that `ssp check` and `ssp apply --dry-run` read.
+#[test]
+fn sets_up_a_repository() {
+    let directory = tempfile::tempdir().unwrap();
+    let git = |arguments: &[&str]| {
+        assert!(
+            std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(directory.path())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    };
+    git(&[
+        "init",
+        "--quiet",
+        "--initial-branch",
+        "exp/checkout/one-page",
     ]);
-    assert!(message.contains("signing key"), "{message}");
-}
-
-#[test]
-fn prints_signing_key_pairs() {
-    let (ok, keys, _) = ssp(&["keygen"]);
+    git(&["remote", "add", "origin", "git@github.com:Acme/Web.git"]);
+    let run = |arguments: &[&str]| {
+        let output = Command::cargo_bin("ssp")
+            .unwrap()
+            .current_dir(directory.path())
+            .env_remove("GITHUB_ACTIONS")
+            .arg("--json")
+            .args(arguments)
+            .output()
+            .unwrap();
+        let parse = |bytes: &[u8]| serde_json::from_slice(bytes).unwrap_or(Value::Null);
+        (
+            output.status.success(),
+            parse(&output.stdout),
+            parse(&output.stderr),
+        )
+    };
+    let (ok, written, _) = run(&["init", "github", "--app", "web"]);
     assert!(ok);
-    assert_eq!(keys["private_key"].as_str().unwrap().len(), 44);
-    assert_eq!(keys["public_key"].as_str().unwrap().len(), 44);
+    assert_eq!(written["image"], "ghcr.io/acme/web");
+    let workflow =
+        std::fs::read_to_string(directory.path().join(".github/workflows/statespace.yml")).unwrap();
+    assert!(workflow.contains("image: ghcr.io/acme/web@${{ steps.build.outputs.digest }}"));
+    assert!(workflow.contains("id-token: write"));
+    let (ok, _, error) = run(&["init", "github", "--app", "web"]);
+    assert!(!ok && error["error"].as_str().unwrap().contains("--force"));
+
+    let (ok, checked, _) = run(&["check"]);
+    assert!(ok);
+    assert_eq!(
+        (checked["app"].clone(), checked["share"].clone()),
+        (json!("web"), json!(0.05))
+    );
+    let toml =
+        "app = \"web\"\nshare = 0.1\neligibility = 'request.headers[\"cf-ipcountry\"] == \"US\"'\n";
+    std::fs::write(directory.path().join("statespace.toml"), toml).unwrap();
+    let (ok, checked, _) = run(&[
+        "check",
+        "--path",
+        "/",
+        "--cookie",
+        "ssp_sid=u_1",
+        "--header",
+        "CF-IPCountry=FR",
+    ]);
+    assert!(ok);
+    assert_eq!(
+        checked["request"],
+        json!({"subject": "u_1", "eligible": false})
+    );
+
+    let (ok, plan, _) = run(&["apply", "--image", "web:1", "--dry-run"]);
+    assert!(ok);
+    assert_eq!(
+        (plan["experiment"].clone(), plan["arm"].clone()),
+        (json!("checkout"), json!("one-page"))
+    );
+    let (ok, _, error) = run(&["apply", "--image", "web:1"]);
+    assert!(!ok && error["error"].as_str().unwrap().contains("GitHub Actions"));
 }
 
 #[test]
-fn proxies_need_what_their_runtime_needs() {
+fn proxies_need_one_default() {
     let base = ["proxy", "--app", "web", "--token", "t"];
-    let docker = [&base[..], &["--runtime", "docker", "--image", "app:1"]].concat();
-    assert!(error(&docker).contains("--trust-key"));
-    let unsigned = [&base[..], &["--runtime", "docker", "--trust-key", "k"]].concat();
-    assert!(error(&unsigned).contains("--image"));
-    let kubernetes = [&base[..], &["--runtime", "kubernetes"]].concat();
-    assert!(error(&kubernetes).contains("--default"));
-    let mixed = [
+    let (ok, _, _) = ssp(&base);
+    assert!(!ok, "a proxy needs --image, --image-file, or --default");
+    let (ok, _, _) = ssp(&[
         &base[..],
-        &[
-            "--runtime",
-            "kubernetes",
-            "--default",
-            "http://localhost:8000",
-            "--image",
-            "app:1",
-        ],
+        &["--image", "app:1", "--default", "http://localhost:8000"],
+    ]
+    .concat());
+    assert!(!ok, "a proxy runs the default or routes to it, not both");
+    let routing = [
+        &base[..],
+        &["--default", "http://localhost:8000", "--port", "8000"],
     ]
     .concat();
-    assert!(error(&mixed).contains("Deployment"));
-    let anonymous = ["proxy", "--app", "web", "--runtime", "kubernetes"];
+    assert!(error(&routing).contains("--port"));
+    let anonymous = [
+        "proxy",
+        "--app",
+        "web",
+        "--default",
+        "http://localhost:8000",
+    ];
     assert!(error(&anonymous).contains("SSP_TOKEN"));
 }
 
@@ -156,12 +205,10 @@ impl Drop for Process {
 }
 
 /// A stand-in for Statespace: it serves one app's configuration and keeps
-/// what proxies and `ssp variant create` send.
+/// what proxies send.
 #[derive(Default)]
 struct Fake {
     config: Value,
-    variants: Vec<Value>,
-    pin: Option<String>,
     events: Vec<Value>,
     reports: Vec<Value>,
 }
@@ -206,18 +253,7 @@ fn answer(mut stream: TcpStream, fake: &Mutex<Fake>) {
         ("GET", path)
             if path.starts_with("/v1/runtime/apps/") && path.matches('/').count() == 4 =>
         {
-            let mut config = fake.config.clone();
-            if let (Some(pin), Some(experiment)) = (&fake.pin, config["experiments"].get_mut(0)) {
-                experiment["control"]["image"] = json!(pin);
-            }
-            (200, config)
-        }
-        ("POST", path) if path.ends_with("/control") => {
-            let pin = fake
-                .pin
-                .get_or_insert_with(|| body["image"].as_str().unwrap_or_default().to_owned())
-                .clone();
-            (200, json!({ "image": pin }))
+            (200, fake.config.clone())
         }
         ("POST", path) if path.ends_with("/hosts") => {
             fake.reports.push(body);
@@ -226,10 +262,6 @@ fn answer(mut stream: TcpStream, fake: &Mutex<Fake>) {
         ("POST", "/v1/events") => {
             fake.events.push(body);
             (202, json!({"accepted": 1}))
-        }
-        ("POST", path) if path.ends_with("/variants") => {
-            fake.variants.push(body.clone());
-            (201, body)
         }
         _ => (404, json!({"error": "not found"})),
     };
@@ -292,7 +324,7 @@ fn get(port: u16, subject: &str) -> Option<Value> {
     reqwest::blocking::Client::new()
         .get(format!("http://127.0.0.1:{port}/checkout?step=1"))
         .header("cookie", format!("ssp_sid={subject}"))
-        .header("x-statespace-variant", "spoofed")
+        .header("x-statespace-arm", "spoofed")
         .timeout(Duration::from_secs(5))
         .send()
         .ok()?
@@ -300,8 +332,8 @@ fn get(port: u16, subject: &str) -> Option<Value> {
         .ok()
 }
 
-/// A proxy on Docker runs the default and each arm as containers, signs
-/// nothing it should not run, and records only the arms.
+/// A proxy on Docker runs the default and each arm as containers, and
+/// records only the arms.
 #[test]
 fn docker_proxies_run_the_default_and_each_arm() {
     if std::env::var("STATESPACE_DOCKER_TESTS").as_deref() != Ok("1") {
@@ -357,46 +389,17 @@ fn docker_proxies_run_the_default_and_each_arm() {
     let api = format!("http://127.0.0.1:{}", serve(fake.clone()));
     let config = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
-    let run = |arguments: &[&str]| {
-        let output = std::process::Command::new(cargo_bin("ssp"))
-            .env("STATESPACE_CONFIG", config.path().join("config.toml"))
-            .env("STATESPACE_URL", &api)
-            .env("SSP_TOKEN", "test")
-            .arg("--json")
-            .args(arguments)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{arguments:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    let digest = |reference: &str| {
+        docker(&[
+            "image",
+            "inspect",
+            "--format",
+            "{{index .RepoDigests 0}}",
+            reference,
+        ])
     };
-    let keys = run(&["keygen"]);
-    let private_key = keys["private_key"].as_str().unwrap();
-    let public_key = keys["public_key"].as_str().unwrap();
-    // A tag is published by its digest.
-    let published = run(&[
-        "variant",
-        "create",
-        "lower-price",
-        "--app",
-        &app,
-        "--image",
-        &variant,
-        "--commit",
-        "abc123",
-        "--signing-key",
-        private_key,
-    ]);
-    let image = published["image"].as_str().unwrap().to_owned();
-    assert!(
-        image.starts_with(&format!("{repository}@sha256:")),
-        "{image}"
-    );
-    // A forged variant never runs: its signature covers another image.
-    let forged = format!("{repository}@sha256:{}", "0".repeat(64));
+    let default_digest = digest(&default);
+    let variant_digest = digest(&variant);
     {
         let mut fake = fake.lock().unwrap();
         fake.config = json!({
@@ -408,27 +411,24 @@ fn docker_proxies_run_the_default_and_each_arm() {
                 "version": 1,
                 "subject": "request.cookies.ssp_sid",
                 "eligibility": null,
-                "salt": "experiment-salt",
-                "traffic_ranges": [[0.0, 0.9]],
-                "control": {"image": null, "address": null, "ready": false},
-                "variants": [
+                "arms": [
                     {
+                        "kind": "variant",
                         "name": "lower-price",
-                        "version": 1,
+                        "commit": "a".repeat(40),
+                        "image": variant_digest,
+                        "repo": "acme/web",
                         "ranges": [[0.0, 0.4]],
-                        "image": image,
-                        "commit": "abc123",
-                        "signature": published["signature"],
                         "address": null,
                         "ready": false,
                     },
                     {
-                        "name": "forged",
-                        "version": 1,
-                        "ranges": [[0.4, 0.5]],
-                        "image": forged,
-                        "commit": null,
-                        "signature": published["signature"],
+                        "kind": "control",
+                        "name": "control",
+                        "commit": "b".repeat(40),
+                        "image": default_digest,
+                        "repo": "acme/web",
+                        "ranges": [[0.4, 0.8]],
                         "address": null,
                         "ready": false,
                     },
@@ -436,7 +436,6 @@ fn docker_proxies_run_the_default_and_each_arm() {
             }],
         });
     }
-
     let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
@@ -452,10 +451,9 @@ fn docker_proxies_run_the_default_and_each_arm() {
                 .env("SSP_TOKEN", "test")
                 .env("STATESPACE_STATE", state.path())
                 .env("SHARED", "from-the-proxy")
-                .args(["proxy", "--app", &app, "--runtime", "docker"])
+                .args(["proxy", "--app", &app])
                 .arg("--image-file")
                 .arg(&image_file)
-                .args(["--trust-key", public_key])
                 .args([
                     "--listen",
                     &format!("127.0.0.1:{port}"),
@@ -481,12 +479,11 @@ fn docker_proxies_run_the_default_and_each_arm() {
         );
         for index in 0..40 {
             if let Some(body) = get(port, &format!("u_{index}")) {
-                served.insert(body["variant"].as_str().unwrap_or("?").to_owned(), body);
+                served.insert(body["arm"].as_str().unwrap_or("?").to_owned(), body);
             }
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    assert!(!served.contains_key("forged"), "{served:?}");
     assert!(
         !served.contains_key("spoofed"),
         "clients cannot pick an arm"
@@ -503,14 +500,10 @@ fn docker_proxies_run_the_default_and_each_arm() {
         .map(|index| format!("x_{index}"))
         .find_map(|subject| {
             let body = get(port, &subject)?;
-            (body["variant"] == "default").then_some(body)
+            (body["arm"] == "default").then_some(body)
         })
         .expect("a subject outside the slice");
     assert_eq!(outside["greeting"], "hello");
-
-    // The proxy pinned its own default for the control arm.
-    let pin = fake.lock().unwrap().pin.clone().unwrap();
-    assert!(pin.starts_with(&format!("{repository}@sha256:")), "{pin}");
 
     // Runs, the arms' requests, and every line the arms print reach Statespace.
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -535,12 +528,11 @@ fn docker_proxies_run_the_default_and_each_arm() {
         let requests = rows("requests");
         if visits > 0 && !runs.is_empty() && !requests.is_empty() {
             assert!(output.iter().all(|line| line["experiment"] == "checkout"));
+            assert!(requests.iter().all(|request| request["arm"] != "default"));
             assert!(
-                requests
-                    .iter()
-                    .all(|request| request["variant"] != "default")
+                runs.iter()
+                    .any(|run| run["arm"] == "control" && run["commit"] == "b".repeat(40))
             );
-            assert!(runs.iter().any(|run| run["variant"] == "control"));
             break;
         }
         assert!(
@@ -550,17 +542,15 @@ fn docker_proxies_run_the_default_and_each_arm() {
         std::thread::sleep(Duration::from_millis(500));
     }
     let reports = fake.lock().unwrap().reports.clone();
-    assert!(
-        reports
-            .iter()
-            .any(|report| report["kind"] == "proxy" && report["report"]["runtime"] == "docker")
-    );
+    assert!(reports.iter().any(|report| report["kind"] == "proxy"
+        && report["report"]["runs"] == "containers"
+        && report["default_image"] == default_digest));
 
     // On SIGHUP the proxy swaps the default for the image its file names,
     // and every request is answered meanwhile.
     let outside_subject = (0..200)
         .map(|index| format!("x_{index}"))
-        .find(|subject| get(port, subject).is_some_and(|body| body["variant"] == "default"))
+        .find(|subject| get(port, subject).is_some_and(|body| body["arm"] == "default"))
         .unwrap();
     std::fs::write(&image_file, &variant).unwrap();
     let _ = std::process::Command::new("kill")

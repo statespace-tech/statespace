@@ -1,0 +1,33 @@
+# Build the shop's default from main, record it, and deploy it. Copy this file
+# to .github/workflows/production.yml, and replace the deploy step with yours.
+name: Production
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          push: true
+          tags: ghcr.io/acme/shop:${{ github.sha }}
+      # Arms based on this commit start once a proxy runs this image.
+      - uses: statespace-tech/action@v1
+        with:
+          image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
+      - name: Deploy
+        run: |
+          image=ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
+          echo "Write $image to /etc/shop/image on each machine, then run systemctl reload shop"

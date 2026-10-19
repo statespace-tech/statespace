@@ -1,4 +1,5 @@
-//! Apps: one codebase and deployment, with its own analysis schema.
+//! Apps: one codebase and deployment, with its own analysis schema. The
+//! first build CI records creates an app.
 
 use anyhow::bail;
 use reqwest::Method;
@@ -12,19 +13,18 @@ use crate::{
 
 pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
     match command {
-        AppCommand::Create {
+        AppCommand::Set {
             name,
+            max_traffic,
             output_retention,
         } => {
-            let body = json!({ "name": name, "output_retention_days": output_retention });
-            let app: Value = api.send(Method::POST, "/v1/apps", &body)?;
-            emit(&app, || format!("Created app {name}.\n\n{}", details(&app)))
-        }
-        AppCommand::Update {
-            name,
-            output_retention,
-        } => {
-            let body = json!({ "output_retention_days": output_retention });
+            if max_traffic.is_none() && output_retention.is_none() {
+                bail!("pass --max-traffic or --output-retention-days");
+            }
+            let body = json!({
+                "max_traffic": max_traffic,
+                "output_retention_days": output_retention,
+            });
             let app: Value = api.send(Method::PATCH, &path(&name), &body)?;
             emit(&app, || format!("Updated app {name}.\n\n{}", details(&app)))
         }
@@ -32,16 +32,19 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
             let apps: Vec<Value> = api.get("/v1/apps")?;
             emit(&apps, || {
                 if apps.is_empty() {
-                    return "No apps. Create one with `ssp app create`.".into();
+                    return "No apps. CI creates an app when `ssp apply` records its first \
+                            build."
+                        .into();
                 }
                 table(
-                    &["NAME", "IN EXPERIMENTS", "RETENTION", "CREATED"],
+                    &["NAME", "REPOSITORY", "IN EXPERIMENTS", "LIMIT", "CREATED"],
                     apps.iter()
                         .map(|app| {
                             vec![
                                 text(&app["name"]),
+                                text(&app["repo"]),
                                 share(app["traffic_used"].as_f64().unwrap_or(0.0)),
-                                retention(app),
+                                share(app["max_traffic"].as_f64().unwrap_or(1.0)),
                                 time(&app["created_at"]),
                             ]
                         })
@@ -66,7 +69,7 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
         }
         AppCommand::Delete { name, yes } => {
             if !yes {
-                bail!("pass --yes to delete {name} with its variants, experiments, and events");
+                bail!("pass --yes to delete {name} with its builds, experiments, and events");
             }
             api.delete(&path(&name))?;
             emit(&json!({ "deleted": name }), || {
@@ -79,11 +82,13 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
 fn details(app: &Value) -> String {
     fields(&[
         ("Name", text(&app["name"])),
+        ("Repository", text(&app["repo"])),
         (
             "In experiments",
             format!(
-                "{} of subjects",
-                share(app["traffic_used"].as_f64().unwrap_or(0.0))
+                "{} of subjects, of at most {}",
+                share(app["traffic_used"].as_f64().unwrap_or(0.0)),
+                share(app["max_traffic"].as_f64().unwrap_or(1.0))
             ),
         ),
         ("Output retention", retention(app)),
