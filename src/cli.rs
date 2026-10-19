@@ -69,8 +69,8 @@ pub enum Command {
         #[arg(long, env = "STATESPACE_APP")]
         app: Option<String>,
     },
-    /// Stop the arms of an experiment at once and make their pull requests
-    /// drafts. Mark a pull request ready for review to run its arm again.
+    /// Stop the arms of an experiment at once. A new commit, or marking the
+    /// pull request as a draft and then ready, runs an arm again.
     Stop {
         /// An experiment, or one arm: `checkout`, `checkout/one-page`, or
         /// `exp/checkout/one-page`.

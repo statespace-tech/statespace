@@ -138,7 +138,8 @@ If the user did not give a task, stop after the setup. Then ask which change to 
   not trust the comparison. Find `arm-unavailable` runs, and read the `lifecycle` and
   `stderr` lines of the arm. Repair the arm before you read outcomes.
 - A rate such as errors needs a denominator. Divide by the rows of the arm in `requests`.
-- `ssp stop` is for emergencies. It stops arms at once and makes their pull requests
-  drafts. Ask the user before you run it, unless the arm harms users.
+- `ssp stop` is for emergencies. It stops arms at once, until a new commit, or until their
+  pull request is marked as a draft and then ready. Ask the user before you run it, unless
+  the arm harms users. To stop an arm in the normal way, run `gh pr ready <number> --undo`.
 - `ssp app delete` and `ssp token revoke --all` need `--yes`. You cannot undo them. Ask
   the user before you run them.

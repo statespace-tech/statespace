@@ -17,7 +17,8 @@ terminal flow of 0.1.0.
 - `ssp apply` records a CI job's image with the job's GitHub OIDC token. On the default
   branch, the image becomes a default build; on an `exp/` branch, a version of the arm.
 - `ssp status` shows experiments, their arms and controls, and their pull requests.
-- `ssp stop` stops arms at once and makes their pull requests drafts.
+- `ssp stop` stops arms at once. A new commit, or a pull request marked as a draft and then
+  ready, runs them again.
 - `ssp repo connect` and `ssp repo list` install the Statespace GitHub App.
 - `ssp app set --max-traffic` limits the share of an app's subjects in experiments.
 - Each base commit of an experiment's arms has its own control.

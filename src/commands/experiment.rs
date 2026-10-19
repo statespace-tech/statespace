@@ -95,8 +95,8 @@ pub fn stop(api: &Api, value: &str, app: Option<String>) -> anyhow::Result<()> {
     )?;
     emit(&stopped, || {
         format!(
-            "Stopped {}. Its pull requests are drafts now; mark one ready for review to run \
-             its arm again.\n\n{}",
+            "Stopped {}. To run an arm again, push a commit, or mark its pull request as a \
+             draft and then ready.\n\n{}",
             arm.map_or(experiment.clone(), |arm| format!("{experiment}/{arm}")),
             show(&stopped)
         )

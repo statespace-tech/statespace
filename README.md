@@ -133,8 +133,9 @@ GitHub's own rules decide what runs:
 
 The `statespace/arm` check on the pull request tells what runs and why an arm
 waits. It never fails, so it never blocks a merge. To stop an arm, make its pull
-request a draft. In an emergency, `ssp stop checkout` stops all arms at once and
-makes their pull requests drafts.
+request a draft. In an emergency, `ssp stop checkout` stops all arms at once.
+They run again after a new commit, or after their pull request is marked as a
+draft and then ready.
 
 Create a token that can read the app. Then compare the arms in SQL.
 
@@ -283,7 +284,7 @@ ssp app erase-subject web user-42
 | `ssp check` | Check `statespace.toml`, and test a request against its rules |
 | `ssp apply` | In CI: record the image of the job's commit |
 | `ssp status [experiment]` | Show experiments, their arms, and their pull requests |
-| `ssp stop <experiment>[/<arm>]` | Stop arms at once and make their pull requests drafts |
+| `ssp stop <experiment>[/<arm>]` | Stop arms at once, until a new commit or GitHub resumes them |
 | `ssp repo connect`, `ssp repo list` | Install the GitHub App, and list its repositories |
 | `ssp app list`, `show`, `set`, `erase-subject`, `delete` | Show and change apps |
 | `ssp token create`, `list`, `revoke` | Tokens for proxies, controllers, agents, and SQL |
