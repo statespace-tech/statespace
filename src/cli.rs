@@ -190,7 +190,7 @@ pub enum TokenCommand {
 pub const SCOPES: [&str; 6] = [
     "runtime:read",
     "events:write",
-    "variants:report",
+    "arms:report",
     "experiments:write",
     "query:read",
     "tokens:manage",
@@ -212,7 +212,7 @@ impl Preset {
     pub fn scopes(self) -> Vec<&'static str> {
         match self {
             Self::Runtime => vec!["runtime:read", "events:write"],
-            Self::Controller => vec!["runtime:read", "events:write", "variants:report"],
+            Self::Controller => vec!["runtime:read", "events:write", "arms:report"],
             Self::Analyst => vec!["query:read"],
             Self::Admin => SCOPES.to_vec(),
         }
