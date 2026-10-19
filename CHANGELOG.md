@@ -31,6 +31,7 @@ terminal flow of 0.1.0.
 - Events, views, headers, and container variables name an `arm` and its `commit`:
   `x-statespace-arm`, `STATESPACE_ARM`, and `STATESPACE_COMMIT`.
 - `ssp login` signs in with GitHub only.
+- The controller preset's scope `variants:report` is `arms:report`.
 
 ### Removed
 
