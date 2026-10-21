@@ -79,11 +79,14 @@ that subject.
 
 1. On [statespace.com](https://statespace.com), select **Connect GitHub**, and
    install the Statespace GitHub App on your repositories. The same screen signs
-   you in. Your workspace gets the name of the GitHub organization or user.
+   you in. The GitHub organization or user becomes your workspace. Teammates
+   join when they sign in with GitHub.
 
 2. Merge the "Set up Statespace" pull request that the App opens. It adds
    `statespace.toml` and `.github/workflows/statespace.yml`. The workflow builds
-   your `Dockerfile` on each push to an `exp/` branch, and records the image.
+   the `Dockerfile` nearest the root on each push to an `exp/` branch, and
+   records the image. To build another way, such as with ko, Jib, or
+   buildpacks, replace the build step. The file sets `max_traffic = 0.2`.
 
 3. Add this step after the build in the workflow that builds production. It
    records each production image, so that Statespace knows the commit of the
@@ -95,12 +98,13 @@ that subject.
        image: ghcr.io/acme/web@${{ steps.build.outputs.digest }}
    ```
 
-4. Run your app behind `ssp proxy`, with a runtime token.
+4. Run your app behind `ssp proxy`, with a runtime token for the app. The proxy
+   takes the app from the token.
 
    ```shell
    # Store the token as SSP_TOKEN where the proxy runs.
-   ssp token create --name production --preset runtime
-   ssp proxy --app web --image ghcr.io/acme/web:main --health /health
+   ssp token create --name production --preset runtime --app web
+   ssp proxy --image ghcr.io/acme/web:main --health /health
    ```
 
 5. In branch protection for the default branch, require one approval. Then a
@@ -134,9 +138,12 @@ GitHub's own rules decide what runs:
 | Merged | The experiment ends. Its other arms run again after you update them with the default branch |
 | Closed | The arm is removed |
 
-The `statespace/arm` check on the pull request tells what runs and why an arm
-waits. It never fails, so it never blocks a merge. To stop an arm, make its pull
-request a draft.
+The `Statespace` check on the pull request tells what runs and why an arm waits,
+such as `Running at 10% (+10% control), 20% in the experiment`. It fails only
+when CI could not record a commit, so a wait never blocks a merge. While the arm
+runs, the check shows the evidence of the arm and its control: subjects,
+requests, errors, p90 latency, the events they printed, and whether the split
+matches the shares. To stop an arm, make its pull request a draft.
 
 In an emergency, stop arms at once. `ssp stop` makes their pull requests drafts
 as the Statespace App, and comments who stopped them. `ssp resume` marks ready
@@ -158,7 +165,8 @@ ssp resume https://github.com/acme/web/pull/418
 
 If a stop or a resume cannot change a pull request, `ssp` names it and exits
 with status 1. On the dashboard, each arm, experiment, and app has **Stop** and
-**Resume**.
+**Resume**. A stop and a resume need the triage role on the repository, as on
+GitHub.
 
 Create a token that can read the app. Then compare the arms in SQL.
 
@@ -238,8 +246,7 @@ starts an arm.
 On a machine with Docker, the proxy runs the default and the arms:
 
 ```shell
-ssp proxy --app web \
-  --listen 0.0.0.0:8080 \
+ssp proxy --listen 0.0.0.0:8080 \
   --image-file /etc/web/image \
   --health /health \
   --arm-env DATABASE_URL="$ARM_DATABASE_URL" \
@@ -250,8 +257,11 @@ On Kubernetes, or on any platform that runs the arms for it, the proxy only
 routes:
 
 ```shell
-ssp proxy --app web --default http://localhost:8000
+ssp proxy --default http://localhost:8000
 ```
+
+The proxy takes the app from a runtime token for one app. With a token for
+every app, pass `--app web`.
 
 | Flag | Meaning |
 | --- | --- |
@@ -286,8 +296,10 @@ Deployment with the image of the arm. It reports the address of each arm, so the
 proxies can send requests to it. It also records each line that the arms print.
 
 ```shell
-ssp controller kubernetes --app web --deployment web
+ssp controller kubernetes --deployment web
 ```
+
+The controller and the proxies can use the same runtime token.
 
 [`examples/kubernetes`](examples/kubernetes) has the manifests: the sidecar, the
 controller, and its permissions. [`examples/fastapi`](examples/fastapi) is a full
@@ -316,16 +328,25 @@ curl -X DELETE -H "Authorization: Bearer $SSP_TOKEN" \
 
 | Command | Use |
 | --- | --- |
-| `ssp status [<target>...]` | Show what runs, and why. Without a target: the arm of the `exp/` branch you are on, else the app or repository you are in |
+| `ssp status [<target>...]` | Show what runs, and why, and each experiment's share of the app's subjects. Without a target: the arm of the `exp/` branch you are on, else the app or repository you are in |
 | `ssp stop <target>...` | Stop arms at once: make their pull requests drafts |
 | `ssp resume <target>...` | Mark the drafts that a stop made ready for review |
 | `ssp apply` | In CI: record the image of the job's commit. `statespace-tech/action` runs it. `--dry-run` checks `statespace.toml` anywhere |
 | `ssp token create`, `list`, `revoke` | Tokens for proxies, controllers, agents, and SQL |
-| `ssp login`, `logout`, `whoami` | Sign in with GitHub |
+| `ssp login`, `logout`, `whoami` | Sign in with GitHub, and show your workspaces |
 | `ssp proxy`, `ssp controller kubernetes` | Run on your servers |
 
 A target is a pull request URL, a repository URL, or a path such as `.`: the
 app of the nearest `statespace.toml`. To delete an app, use the dashboard.
+
+## Workspaces
+
+A workspace is the GitHub organization or user that installed the App. People
+join every workspace whose installation they can access, and do what their role
+on each repository allows: read sees, triage stops and resumes, write edits, and
+admins of every repository manage tokens. `ssp status`, `stop`, and `resume` use
+the workspace of their target's owner. Pass `--workspace acme`, or set
+`STATESPACE_WORKSPACE`, to choose another.
 
 ## Tokens
 
@@ -334,8 +355,7 @@ the usual scopes.
 
 | Preset | For |
 | --- | --- |
-| `runtime` | `ssp proxy`: read the configuration of the app and send events |
-| `controller` | `ssp controller`: the `runtime` scopes, and report the addresses of arms |
+| `runtime` | `ssp proxy` and `ssp controller`: read the configuration of the app, send events, and report the addresses of arms. With `--app`, the token is for one app |
 | `analyst` | SQL: read runs, output, and requests |
 | `admin` | All scopes, for agents that do all of the work |
 

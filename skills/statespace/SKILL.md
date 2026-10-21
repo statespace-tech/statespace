@@ -107,9 +107,11 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    gh pr create --fill
    ```
 
-6. Read the `statespace/arm` check. It tells whether the arm runs, and why it waits: for
+6. Read the `Statespace` check. It tells whether the arm runs, and why it waits: for
    approval, for a check, for a deploy of its base, or for traffic. Do not try to go
-   around a wait.
+   around a wait. If the check failed, CI could not record the commit; read why, and fix
+   it. While the arm runs, the check shows the subjects, requests, errors, latency, and
+   events of each arm and control, and whether the split matches the shares.
 
    ```shell
    gh pr checks
