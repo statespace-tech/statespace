@@ -8,8 +8,8 @@ description: A/B test versions of an app in production with Statespace, through 
 Statespace lets you A/B test multiple versions of an app in production. Experiments run
 from pull requests:
 
-- A branch named `exp/<experiment>/<arm>` is an **arm**. `exp/<experiment>` is an
-  experiment with one arm.
+- A branch named `exp/<name>` is an experiment with one **arm**. To compare more arms,
+  name the branches `exp/<experiment>/<arm>`.
 - `statespace.toml` on the branch gives the arm's `share` of the app's subjects, and its
   `subject` and `eligibility` rules.
 - The arm runs the latest commit while GitHub says that its pull request can merge.
@@ -39,13 +39,18 @@ error, with exit status 1.
    ssp whoami --json
    ```
 
-3. If the repository has no `statespace.toml`, set it up. Ask the user for the app name.
-   Then ask the user to install the GitHub App with `ssp repo connect`, to add the
-   production step that `ssp init github` prints, and to require one approval in branch
+3. If the repository has no `statespace.toml`, ask the user to select **Connect GitHub**
+   on https://statespace.com and install the Statespace GitHub App on the repository.
+   The App opens a "Set up Statespace" pull request with `statespace.toml` and the `exp/`
+   workflow. Review it with the user. If the repository has no `Dockerfile`, complete the
+   build step of the workflow. Then ask the user to merge it, to add this step after the
+   build in the workflow that builds production, and to require one approval in branch
    protection.
 
-   ```shell
-   ssp init github --app <app> --json
+   ```yaml
+   - uses: statespace-tech/action@v1
+     with:
+       image: <registry>/<image>@${{ steps.build.outputs.digest }}
    ```
 
 4. Get a database URL to read the data. The token secret shows only once. Do not write it
@@ -75,15 +80,14 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    `{"event": "<what occurred>", "subject": "<subject id>", ...fields}`.
 
    ```shell
-   git switch -c exp/<experiment>/<arm> origin/main
+   git switch -c exp/<name> origin/main
    ```
 
 3. Set the share in `statespace.toml`. Start small, such as `share = 0.02`. Check the
-   file, and test the rules with a request.
+   file and see the plan. Nothing is recorded.
 
    ```shell
-   ssp check --json
-   ssp check --path / --header cf-ipcountry=US --json
+   ssp apply --dry-run --image <app>:mine --json
    ```
 
 4. Make sure that the image starts and answers requests.
@@ -96,7 +100,7 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    can move the outcome. CI records each commit with `ssp apply`.
 
    ```shell
-   git push -u origin exp/<experiment>/<arm>
+   git push -u origin exp/<name>
    gh pr create --fill
    ```
 
@@ -106,7 +110,7 @@ If the user did not give a task, stop after the setup. Then ask which change to 
 
    ```shell
    gh pr checks
-   ssp status <experiment> --json
+   ssp status --json
    ```
 
 7. Wait for outcomes. Then compare each arm with its control, and make a decision: push a
@@ -138,8 +142,11 @@ If the user did not give a task, stop after the setup. Then ask which change to 
   not trust the comparison. Find `arm-unavailable` runs, and read the `lifecycle` and
   `stderr` lines of the arm. Repair the arm before you read outcomes.
 - A rate such as errors needs a denominator. Divide by the rows of the arm in `requests`.
-- `ssp stop` is for emergencies. It stops arms at once, until a new commit, or until their
-  pull request is marked as a draft and then ready. Ask the user before you run it, unless
-  the arm harms users. To stop an arm in the normal way, run `gh pr ready <number> --undo`.
-- `ssp app delete` and `ssp token revoke --all` need `--yes`. You cannot undo them. Ask
-  the user before you run them.
+- `ssp stop <pull request URL>` is for emergencies. It makes the pull request a draft as
+  the Statespace App, so its arms stop at once. Ask the user before you run it, unless the
+  arm harms users. `ssp resume <pull request URL>` runs them again. To stop an arm in the
+  normal way, run `gh pr ready <number> --undo`.
+- Change settings with commits to `statespace.toml`. App settings, such as `max_traffic`,
+  take effect when they merge to the default branch.
+- `ssp token revoke --all` needs `--yes`. You cannot undo it. Ask the user before you run
+  it.

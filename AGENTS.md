@@ -1,25 +1,25 @@
 # Contributor instructions
 
-`ssp` defines apps, variants, and experiments. `ssp proxy` is a reverse proxy that
-assigns each request's subject and forwards it to the app's default or an experiment's
-arm; on Docker it also runs them as containers. `ssp controller` runs the arms on
-Kubernetes.
+Experiments run from pull requests of `exp/` branches. `ssp apply` records the image that
+CI built, `ssp status`, `ssp stop`, and `ssp resume` act on pull requests, and settings
+live in `statespace.toml`. `ssp proxy` is a reverse proxy that assigns each request's
+subject and forwards it to the app's default or an experiment's arm; on Docker it also
+runs them as containers. `ssp controller kubernetes` runs the arms on Kubernetes.
 
 ## Rules
 
 - Print text by default and exactly one JSON document with `--json`, except `ssp proxy`
   and `ssp controller`. Send notes and warnings to standard error. Errors exit 1, as
   `{"error": "..."}` with `--json`.
-- Change things through the CLI; read data through SQL. Add no command that only reads
-  recorded data.
+- Change settings through commits to `statespace.toml`, not commands. Read data through
+  SQL. Add no command that only reads recorded data.
 - Keep commands noninteractive, except `ssp login`.
 - Print secrets only in the response that creates them.
 - Require `--yes` for irreversible commands.
-- Keep `src/signing.rs` byte-for-byte compatible with the backend's signed message.
 - `ssp proxy` must never block or slow the app: drop events rather than wait, and send a
   subject to the default rather than fail its request.
-- Run only what the customer approved: variants signed by a trusted key, and control arms
-  whose image the proxy or controller ran as the default itself.
+- Run only images that Statespace recorded from the repository's CI: arms of pull requests
+  that can merge, and controls whose image a proxy or controller ran as the default.
 - Never record the default.
 - Never change the bucket function: it would move subjects of running experiments.
 

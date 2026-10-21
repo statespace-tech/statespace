@@ -44,16 +44,16 @@ Read https://statespace.com/skill.md and follow it.
 
 ## How it works
 
-Statespace runs experiments from pull requests. A branch named
-`exp/<experiment>/<arm>` is an arm of the experiment. When GitHub says that the
-branch's pull request can merge, the arm runs the latest commit for a share of
-your users. Each arm is compared with a control: the default that its branch
-started from.
+Statespace runs experiments from pull requests. A branch named `exp/<name>` is
+an experiment with one arm. When GitHub says that the branch's pull request can
+merge, the arm runs the latest commit for a share of your users. Each arm is
+compared with a control: the default that its branch started from. To compare
+more arms in one experiment, name the branches `exp/<experiment>/<arm>`.
 
 ```text
+exp/pricing            → experiment "pricing": one arm
 exp/checkout/one-page  ┐
 exp/checkout/two-step  ┘→ experiment "checkout": arms one-page and two-step, one control
-exp/pricing            → experiment "pricing": one arm
 ```
 
 `ssp proxy` is a reverse proxy in front of your app. For each request, it finds
@@ -76,31 +76,32 @@ that subject.
 
 ## Set up
 
-1. Sign in, and install the Statespace GitHub App on your repository.
+1. On [statespace.com](https://statespace.com), select **Connect GitHub**, and
+   install the Statespace GitHub App on your repositories. The same screen signs
+   you in. Your workspace gets the name of the GitHub organization or user.
 
-   ```shell
-   ssp login
-   ssp repo connect
+2. Merge the "Set up Statespace" pull request that the App opens. It adds
+   `statespace.toml` and `.github/workflows/statespace.yml`. The workflow builds
+   your `Dockerfile` on each push to an `exp/` branch, and records the image.
+
+3. Add this step after the build in the workflow that builds production. It
+   records each production image, so that Statespace knows the commit of the
+   default that your proxies run. The App does not change deploy workflows.
+
+   ```yaml
+   - uses: statespace-tech/action@v1
+     with:
+       image: ghcr.io/acme/web@${{ steps.build.outputs.digest }}
    ```
 
-2. In the repository, write `statespace.toml` and the CI workflow.
-
-   ```shell
-   ssp init github --app web
-   ```
-
-   `ssp init github` also prints a step for the workflow that builds production.
-   Add it after the build. The step records each production image, so that
-   Statespace knows the commit of the default that your proxies run.
-
-3. Run your app behind `ssp proxy`, with a runtime token.
+4. Run your app behind `ssp proxy`, with a runtime token.
 
    ```shell
    ssp token create --name production --preset runtime   # store it as SSP_TOKEN
    ssp proxy --app web --image ghcr.io/acme/web:main --health /health
    ```
 
-4. In branch protection for the default branch, require one approval. Then a
+5. In branch protection for the default branch, require one approval. Then a
    second person approves each commit before users see it.
 
 Print a line where the outcome occurs.
@@ -114,7 +115,7 @@ print(json.dumps({"event": "purchase", "subject": user_id, "amount": 42}))
 Push a branch and open a pull request.
 
 ```shell
-git switch -c exp/checkout/one-page
+git switch -c exp/one-page-checkout
 # change the code, then commit and push
 gh pr create --fill
 ```
@@ -133,9 +134,24 @@ GitHub's own rules decide what runs:
 
 The `statespace/arm` check on the pull request tells what runs and why an arm
 waits. It never fails, so it never blocks a merge. To stop an arm, make its pull
-request a draft. In an emergency, `ssp stop checkout` stops all arms at once.
-They run again after a new commit, or after their pull request is marked as a
-draft and then ready.
+request a draft.
+
+In an emergency, stop arms at once. `ssp stop` makes their pull requests drafts
+as the Statespace App, and comments who stopped them. `ssp resume` marks ready
+only the drafts that a stop made. You can also select **Ready for review** on
+GitHub.
+
+```shell
+ssp status                                            # the arm of this exp/ branch
+ssp stop https://github.com/acme/web/pull/418         # the arms of one pull request
+ssp stop https://github.com/acme/web                  # every arm of the repository
+ssp stop .                                            # every arm of this app
+ssp resume https://github.com/acme/web/pull/418
+```
+
+If a stop or a resume cannot change a pull request, `ssp` names it and exits
+with status 1. On the dashboard, each arm, experiment, and app has **Stop** and
+**Resume**.
 
 Create a token that can read the app. Then compare the arms in SQL.
 
@@ -151,31 +167,38 @@ Commands print text. Add `--json` to print one JSON document.
 
 ## statespace.toml
 
-The file is at the root of the repository. Each branch reads its own copy.
+The file is at the root of the repository, or in the folder of a service. Each
+branch reads its own copy. All settings are in this file, so they change by
+commits, with review and history.
 
 ```toml
 app = "web"
 share = 0.05
 subject = 'request.headers["x-user-id"]'
 eligibility = 'request.headers["cf-ipcountry"] == "US"'
+max_traffic = 0.2
 ```
 
-| Key | Meaning |
-| --- | --- |
-| `app` | The app. Its first build creates it |
-| `share` | The share of all the app's subjects that the arm gets. Its control gets the share of the largest arm with the same base |
-| `subject` | A CEL expression that gives the subject. The default is `request.cookies.ssp_sid`, a cookie the proxy sets for each new visitor |
-| `eligibility` | A CEL expression that tells who may enter. Omit it to let everyone in |
+| Key | Read from | Meaning |
+| --- | --- | --- |
+| `app` | Each branch | The app. Its first build creates it |
+| `share` | The `exp/` branch | The share of all the app's subjects that the arm gets. Its control gets the share of the largest arm with the same base |
+| `subject` | The `exp/` branch | A CEL expression that gives the subject. The default is `request.cookies.ssp_sid`, a cookie the proxy sets for each new visitor |
+| `eligibility` | The `exp/` branch | A CEL expression that tells who may enter. Omit it to let everyone in |
+| `max_traffic` | The default branch | The share of the app's subjects that experiments may hold, controls included. The default is 1 |
+| `output_retention_days` | The default branch | The days to keep the lines that arms print, 1 to 365. The default is 7 |
 
 CEL expressions can use the `method`, `path`, `query`, `headers`, and `cookies`
 of the request. All arms of an experiment must have the same `subject` and
-`eligibility`. To test the file and a request:
+`eligibility`. To check the file and see the plan without recording anything:
 
 ```shell
-ssp check --path /checkout --header cf-ipcountry=US --cookie ssp_sid=u_1
+ssp apply --dry-run --image ghcr.io/acme/web:latest
 ```
 
-On the default branch, Statespace reads only `app`.
+On the dashboard, **Edit** commits the change as the Statespace App, with you as
+co-author. It commits arm settings to the arm's branch. It opens a pull request
+for app settings, which take effect when it merges.
 
 ## Fair comparisons
 
@@ -187,9 +210,8 @@ On the default branch, Statespace reads only `app`.
   it gets a control of the new base.
 - Arms keep their subjects across commits. Two experiments of an app never share
   a subject.
-- `ssp app set web --max-traffic 0.2` limits the share of subjects in
-  experiments, controls included. Arms that do not fit wait, first come, first
-  served.
+- `max_traffic` limits the share of subjects in experiments, controls
+  included. Arms that do not fit wait, first come, first served.
 
 ## Provenance
 
@@ -270,26 +292,28 @@ ssp token create --name analysis --preset analyst --app web
 psql "$DATABASE_URL" -c "SELECT * FROM web.sample_ratio WHERE mismatch"
 ```
 
-To erase the data of one subject from an app:
+To erase the data of one subject from an app, for a privacy request, open the
+app on the dashboard and select **Erase a subject**. Or use the API:
 
 ```shell
-ssp app erase-subject web user-42
+curl -X DELETE -H "Authorization: Bearer $SSP_TOKEN" \
+  https://api.statespace.com/v1/apps/web/subjects/user-42
 ```
 
 ## Commands
 
 | Command | Use |
 | --- | --- |
-| `ssp init github` | Write `statespace.toml` and the CI workflow |
-| `ssp check` | Check `statespace.toml`, and test a request against its rules |
-| `ssp apply` | In CI: record the image of the job's commit |
-| `ssp status [experiment]` | Show experiments, their arms, and their pull requests |
-| `ssp stop <experiment>[/<arm>]` | Stop arms at once, until a new commit or GitHub resumes them |
-| `ssp repo connect`, `ssp repo list` | Install the GitHub App, and list its repositories |
-| `ssp app list`, `show`, `set`, `erase-subject`, `delete` | Show and change apps |
+| `ssp status [<target>...]` | Show what runs, and why. Without a target: the arm of the `exp/` branch you are on, else the app or repository you are in |
+| `ssp stop <target>...` | Stop arms at once: make their pull requests drafts |
+| `ssp resume <target>...` | Mark the drafts that a stop made ready for review |
+| `ssp apply` | In CI: record the image of the job's commit. `statespace-tech/action` runs it. `--dry-run` checks `statespace.toml` anywhere |
 | `ssp token create`, `list`, `revoke` | Tokens for proxies, controllers, agents, and SQL |
 | `ssp login`, `logout`, `whoami` | Sign in with GitHub |
 | `ssp proxy`, `ssp controller kubernetes` | Run on your servers |
+
+A target is a pull request URL, a repository URL, or a path such as `.`: the
+app of the nearest `statespace.toml`. To delete an app, use the dashboard.
 
 ## Tokens
 

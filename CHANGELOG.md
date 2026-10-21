@@ -4,23 +4,26 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
-Experiments run from pull requests. A branch named `exp/<experiment>/<arm>` is an arm,
-and it runs while GitHub says that its pull request can merge. This release removes the
-terminal flow of 0.1.0.
+Experiments run from pull requests. A branch named `exp/<name>` is an experiment with one
+arm, and `exp/<experiment>/<arm>` is one arm of a larger experiment. An arm runs while
+GitHub says that its pull request can merge. This release removes the terminal flow of
+0.1.0.
 
 ### Added
 
-- `ssp init github` writes `statespace.toml` and a workflow that publishes each commit of
-  an `exp/` branch.
-- `statespace.toml` gives the app, and an arm's share, subject rule, and eligibility rule.
-  `ssp check` tests it and a request.
+- The Statespace GitHub App opens a "Set up Statespace" pull request with
+  `statespace.toml` and a workflow that records each commit of an `exp/` branch.
+- `statespace.toml` gives the app, an arm's share, subject rule, and eligibility rule, and
+  the app's `max_traffic` and `output_retention_days`. App settings take effect from the
+  default branch.
 - `ssp apply` records a CI job's image with the job's GitHub OIDC token. On the default
   branch, the image becomes a default build; on an `exp/` branch, a version of the arm.
-- `ssp status` shows experiments, their arms and controls, and their pull requests.
-- `ssp stop` stops arms at once. A new commit, or a pull request marked as a draft and then
-  ready, runs them again.
-- `ssp repo connect` and `ssp repo list` install the Statespace GitHub App.
-- `ssp app set --max-traffic` limits the share of an app's subjects in experiments.
+  `--dry-run` checks `statespace.toml` and prints the plan anywhere.
+- `ssp status` shows what runs, and why. Without a target, it shows the arm of the `exp/`
+  branch you are on, else the app or repository you are in.
+- `ssp stop` makes pull requests drafts as the Statespace App, so their arms stop at once.
+  `ssp resume` marks ready only the drafts that a stop made. Both take pull request URLs,
+  repository URLs, and paths, and exit 1 when they cannot change a pull request.
 - Each base commit of an experiment's arms has its own control.
 
 ### Changed
@@ -33,11 +36,12 @@ terminal flow of 0.1.0.
   `x-statespace-arm`, `STATESPACE_ARM`, and `STATESPACE_COMMIT`.
 - `ssp login` signs in with GitHub only.
 - The controller preset's scope `variants:report` is `arms:report`.
+- The dashboard erases a subject and deletes an app.
 
 ### Removed
 
-- `ssp variant`, `ssp experiment`, `ssp keygen`, `ssp app create`, `--runtime`,
-  `--trust-key`, signing keys, and the `publisher` token preset.
+- `ssp app`, `ssp variant`, `ssp experiment`, `ssp keygen`, `--runtime`, `--trust-key`,
+  signing keys, and the `publisher` token preset.
 
 ## 0.1.0 - 2026-10-15
 
