@@ -25,6 +25,19 @@ pub fn emit(value: &impl Serialize, text: impl FnOnce() -> String) -> anyhow::Re
     Ok(())
 }
 
+/// An error that the command printed already, as part of its output. It
+/// only sets the exit status.
+#[derive(Debug)]
+pub struct Reported;
+
+impl std::fmt::Display for Reported {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the command failed")
+    }
+}
+
+impl std::error::Error for Reported {}
+
 /// A note for people, on standard error. `--json` leaves it out.
 pub fn note(message: &str) {
     if !json() {

@@ -61,15 +61,16 @@ pub enum Command {
         /// A GitHub pull request or repository URL, or a path.
         targets: Vec<String>,
     },
-    /// Stop arms at once. Their subjects get the default until a resume, a new
-    /// commit, or a draft marked ready again.
+    /// Stop arms at once: their pull requests become drafts, and their
+    /// subjects get the default until the pull requests are ready again.
     Stop {
         /// A GitHub pull request URL (its arms), a repository URL (every arm
         /// of its apps), or a path such as `.` (the app of its statespace.toml).
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Lift a stop. Arms run again while their pull requests can merge.
+    /// Mark the pull requests that a stop made drafts ready for review. Their
+    /// arms run again while they can merge.
     Resume {
         /// A GitHub pull request or repository URL, or a path.
         #[arg(required = true)]

@@ -21,7 +21,8 @@ fn main() {
     let cli = cli::Cli::parse();
     output::set_json(cli.json);
     if let Err(error) = commands::run(cli) {
-        if output::json() {
+        if error.is::<output::Reported>() {
+        } else if output::json() {
             eprintln!("{}", json!({ "error": format!("{error:#}") }));
         } else {
             eprintln!("error: {error:#}");

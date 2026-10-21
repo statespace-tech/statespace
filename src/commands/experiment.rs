@@ -1,5 +1,6 @@
 //! Experiments run from pull requests. `ssp status` shows what runs and why;
-//! `ssp stop` holds arms in an emergency, and `ssp resume` lifts the hold.
+//! `ssp stop` makes pull requests drafts in an emergency, and `ssp resume`
+//! marks them ready again.
 
 use std::collections::BTreeMap;
 
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 use super::target::{self, Target};
 use crate::{
     api::Api,
-    output::{emit, share, table, text},
+    output::{Reported, emit, share, table, text},
 };
 
 /// An arm or a control of an experiment, as `ssp status` shows it.
@@ -155,17 +156,13 @@ fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
             let arm = arms
                 .iter()
                 .find(|arm| arm["kind"] == "variant" && arm["name"] == pull["arm"]);
-            let status = if let Some(who) = pull["held_by"].as_str() {
-                format!("stopped by {who}")
-            } else {
-                match (pull["running_commit"].as_str(), pull["waiting"].as_str()) {
-                    (Some(_), Some(waiting)) if running => {
-                        format!("running; {} waits: {waiting}", short(&pull["head_commit"]))
-                    }
-                    (Some(_), None) if running => "running".into(),
-                    (_, Some(waiting)) => format!("waiting: {waiting}"),
-                    _ => "waiting".into(),
+            let status = match (pull["running_commit"].as_str(), pull["waiting"].as_str()) {
+                (Some(_), Some(waiting)) if running => {
+                    format!("running; {} waits: {waiting}", short(&pull["head_commit"]))
                 }
+                (Some(_), None) if running => "running".into(),
+                (_, Some(waiting)) => format!("waiting: {waiting}"),
+                _ => "waiting".into(),
             };
             let number = pull["number"].as_i64();
             Row {
@@ -207,10 +204,10 @@ fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
 
 pub fn stop(api: &Api, values: &[String]) -> anyhow::Result<()> {
     let changed = change(api, "/v1/stop", values)?;
-    emit(&changed, || {
+    report(&changed, "stop", || {
         format!(
-            "{}\nTheir subjects get the default. To run them again: ssp resume {}, a new \
-             commit, or a draft marked ready again.",
+            "{}\nTheir pull requests are drafts now, and their subjects get the default. \
+             To run them again: ssp resume {}, or mark them ready for review.",
             arms(&changed, "Stopped"),
             values.join(" ")
         )
@@ -219,12 +216,38 @@ pub fn stop(api: &Api, values: &[String]) -> anyhow::Result<()> {
 
 pub fn resume(api: &Api, values: &[String]) -> anyhow::Result<()> {
     let changed = change(api, "/v1/resume", values)?;
-    emit(&changed, || {
+    report(&changed, "resume", || {
         format!(
             "{}\nThey run while their pull requests can merge.",
             arms(&changed, "Resumed")
         )
     })
+}
+
+/// Print what a stop or a resume changed. Then print the pull requests it
+/// could not change, and fail.
+fn report(changed: &Value, verb: &str, done: impl FnOnce() -> String) -> anyhow::Result<()> {
+    let failed = changed["failed"].as_array().cloned().unwrap_or_default();
+    if crate::output::json()
+        || changed["arms"]
+            .as_array()
+            .is_some_and(|arms| !arms.is_empty())
+    {
+        emit(changed, done)?;
+    }
+    if failed.is_empty() {
+        return Ok(());
+    }
+    if !crate::output::json() {
+        for pull in &failed {
+            eprintln!(
+                "error: could not {verb} {}: {}",
+                text(&pull["url"]),
+                text(&pull["error"])
+            );
+        }
+    }
+    Err(Reported.into())
 }
 
 fn change(api: &Api, path: &str, values: &[String]) -> anyhow::Result<Value> {
