@@ -31,10 +31,11 @@ use crate::{
 };
 
 pub fn run(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
+    let app = proxy::app(&api, arguments.shared.app.as_deref())?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(controller(api, arguments))
+        .block_on(controller(api, arguments, app))
 }
 
 /// What the controller needs on each pass.
@@ -54,12 +55,12 @@ struct Controller {
     noted: HashSet<String>,
 }
 
-async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
+async fn controller(api: Api, arguments: ControllerArgs, app: String) -> anyhow::Result<()> {
     let shared = &arguments.shared;
     let token = api
         .token()
-        .context("ssp controller needs a token with the controller preset; set SSP_TOKEN")?;
-    let remote = Remote::new(api.endpoint(), token.to_owned(), shared.app.clone())?;
+        .context("ssp controller needs a token with the runtime preset; set SSP_TOKEN")?;
+    let remote = Remote::new(api.endpoint(), token.to_owned(), app.clone())?;
     let kube = Kube::connect(arguments.namespace.clone())?;
     let id = proxy::instance_id();
     let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
@@ -86,7 +87,7 @@ async fn controller(api: Api, arguments: ControllerArgs) -> anyhow::Result<()> {
     let mut controller = Controller {
         kube,
         remote,
-        app: shared.app.clone(),
+        app,
         deployment: arguments.deployment.clone(),
         container: arguments.container.clone(),
         arm_env: proxy::pairs(&shared.arm_env, "--arm-env")?,

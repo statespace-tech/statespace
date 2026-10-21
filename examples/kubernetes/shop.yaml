@@ -30,16 +30,14 @@ spec:
             - secretRef:
                 name: shop
         - name: statespace-proxy
-          image: ghcr.io/statespace-tech/statespace:0.1.0
+          image: ghcr.io/statespace-tech/statespace:0.2.0
           args: ["proxy", "--default", "http://localhost:8000"]
           env:
-            - name: STATESPACE_APP
-              value: shop
             - name: SSP_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: statespace
-                  key: runtime-token
+                  key: token
           ports:
             - containerPort: 8080
           readinessProbe:

@@ -22,7 +22,6 @@ User=shop
 SupplementaryGroups=docker
 # Containers inherit this environment, without the proxy's own settings.
 EnvironmentFile=/etc/shop/env
-Environment=STATESPACE_APP=shop
 Environment=STATESPACE_IMAGE_FILE=/etc/shop/image
 Environment=STATESPACE_LISTEN=0.0.0.0:8080
 ExecStart=/usr/local/bin/ssp proxy --health /health --redact sk_live_\\w+

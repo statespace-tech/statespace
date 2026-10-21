@@ -19,7 +19,8 @@ For Kubernetes, see `../kubernetes`.
 
 1. Copy `statespace.toml` to the root of the shop's repository, and the two
    workflows to `.github/workflows/`.
-2. Install the Statespace GitHub App on the repository: `ssp repo connect`.
+2. On [statespace.com](https://statespace.com), select **Connect GitHub**, and
+   install the Statespace GitHub App on the repository.
 3. In branch protection for `main`, require one approval. Then a second person
    approves each commit before users see it.
 
@@ -49,8 +50,8 @@ printed after it, so subjects without a purchase count with no revenue.
 ## Deploy
 
 Install `ssp-proxy.service` wherever the shop runs now, with Docker. Give it a
-runtime token from `ssp token create --name production --preset runtime` as
-`SSP_TOKEN`. The proxy runs the image in `/etc/shop/image` as the default, and
+runtime token from `ssp token create --name production --preset runtime --app
+shop` as `SSP_TOKEN`. The proxy takes the app from the token. The proxy runs the image in `/etc/shop/image` as the default, and
 each arm and control beside it. The containers inherit the service's
 environment, such as `PAYMENT_KEY` from `/etc/shop/env`.
 

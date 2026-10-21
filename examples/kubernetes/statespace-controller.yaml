@@ -53,11 +53,9 @@ spec:
       serviceAccountName: statespace-controller
       containers:
         - name: controller
-          image: ghcr.io/statespace-tech/statespace:0.1.0
+          image: ghcr.io/statespace-tech/statespace:0.2.0
           args: ["controller", "kubernetes"]
           env:
-            - name: STATESPACE_APP
-              value: shop
             - name: STATESPACE_DEPLOYMENT
               value: shop
             # The controller's own Deployment, which owns every arm.
@@ -67,4 +65,4 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: statespace
-                  key: controller-token
+                  key: token

@@ -11,14 +11,13 @@ other cluster). Each pod of the shop runs `ssp proxy` beside the shop, and one
 
 ## Set up
 
-Create the tokens, and store them in a Secret.
+Create a runtime token for the app, and store it in a Secret. The proxies and
+the controller use the same token, and take the app from it.
 
 ```shell
-ssp token create --name shop-proxies --preset runtime
-ssp token create --name shop-controller --preset controller
+ssp token create --name shop --preset runtime --app shop
 kubectl create secret generic statespace \
-  --from-literal=runtime-token=<runtime token> \
-  --from-literal=controller-token=<controller token>
+  --from-literal=token=<token>
 kubectl apply -f shop.yaml -f statespace-controller.yaml
 ```
 

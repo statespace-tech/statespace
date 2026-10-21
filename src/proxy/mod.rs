@@ -37,10 +37,24 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub fn run(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
+    let app = app(&api, arguments.shared.app.as_deref())?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(proxy(api, arguments))
+        .block_on(proxy(api, arguments, app))
+}
+
+/// The app to serve: `--app`, or else the one app the token is limited to.
+/// The API refuses a token limited to another app.
+pub fn app(api: &Api, flag: Option<&str>) -> anyhow::Result<String> {
+    if let Some(app) = flag {
+        return Ok(app.to_owned());
+    }
+    let whoami: serde_json::Value = api.get("/v1/whoami")?;
+    whoami["credential"]["app"]
+        .as_str()
+        .map(str::to_owned)
+        .context("pass --app, or use a token that is limited to one app")
 }
 
 /// `NAME=VALUE` pairs, as `--arm-env` takes them.
@@ -74,9 +88,8 @@ pub fn instance_id() -> String {
     )
 }
 
-async fn proxy(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
+async fn proxy(api: Api, arguments: ProxyArgs, app: String) -> anyhow::Result<()> {
     let shared_arguments = &arguments.shared;
-    let app = shared_arguments.app.clone();
     let token = api
         .token()
         .context("ssp proxy needs a token with the runtime preset; set SSP_TOKEN")?;

@@ -141,10 +141,9 @@ pub const SCOPES: [&str; 6] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Preset {
-    /// For `ssp proxy`: read the app's configuration and send events.
+    /// For `ssp proxy` and `ssp controller`: read the app's configuration,
+    /// send events, and report where arms run.
     Runtime,
-    /// For `ssp controller`: runtime, and report where arms run.
-    Controller,
     /// For SQL: read runs, output, and requests.
     Analyst,
     /// Everything, for agents that run the whole loop.
@@ -154,8 +153,7 @@ pub enum Preset {
 impl Preset {
     pub fn scopes(self) -> Vec<&'static str> {
         match self {
-            Self::Runtime => vec!["runtime:read", "events:write"],
-            Self::Controller => vec!["runtime:read", "events:write", "arms:report"],
+            Self::Runtime => vec!["runtime:read", "events:write", "arms:report"],
             Self::Analyst => vec!["query:read"],
             Self::Admin => SCOPES.to_vec(),
         }
@@ -165,9 +163,10 @@ impl Preset {
 /// What `ssp proxy` and `ssp controller` share.
 #[derive(Args)]
 pub struct Shared {
-    /// The app whose experiments to serve.
+    /// The app whose experiments to serve. Defaults to the app of a token
+    /// that is limited to one app.
     #[arg(long, env = "STATESPACE_APP")]
-    pub app: String,
+    pub app: Option<String>,
     /// A path that must answer 200 before an arm gets traffic. Without it,
     /// an arm is ready once its port accepts connections.
     #[arg(long, env = "STATESPACE_HEALTH")]

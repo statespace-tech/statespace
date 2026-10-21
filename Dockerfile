@@ -1,5 +1,5 @@
-# The ssp image, for `ssp proxy --runtime kubernetes` beside an app and for
-# `ssp controller`. The release workflow builds it from the musl binaries in
+# The ssp image, for `ssp proxy --default` beside an app and for
+# `ssp controller kubernetes`. The release workflow builds it from the musl binaries in
 # image/<arch>/ssp.
 FROM alpine:3.22
 ARG TARGETARCH
