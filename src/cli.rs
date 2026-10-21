@@ -112,7 +112,8 @@ pub enum TokenCommand {
         /// A scope, for combinations no preset covers. Repeat for each.
         #[arg(long = "scope", value_parser = SCOPES)]
         scopes: Vec<String>,
-        /// Limit what the token reads in SQL to one app. Needs `query:read`.
+        /// Limit the token to one app: the views it reads in SQL, and the
+        /// proxies and controllers it runs, which then take the app from it.
         #[arg(long, env = "STATESPACE_APP")]
         app: Option<String>,
         /// Days until the token expires. Omit for no expiration.
