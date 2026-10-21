@@ -84,10 +84,11 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    ```
 
 3. Set the share in `statespace.toml`. Start small, such as `share = 0.02`. Check the
-   file and see the plan. Nothing is recorded.
+   file and see the plan with an image that is in the registry, such as the production
+   image. Nothing is recorded.
 
    ```shell
-   ssp apply --dry-run --image <app>:mine --json
+   ssp apply --dry-run --image <registry>/<image>:<tag> --json
    ```
 
 4. Make sure that the image starts and answers requests.

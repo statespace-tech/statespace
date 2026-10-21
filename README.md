@@ -190,7 +190,8 @@ max_traffic = 0.2
 
 CEL expressions can use the `method`, `path`, `query`, `headers`, and `cookies`
 of the request. All arms of an experiment must have the same `subject` and
-`eligibility`. To check the file and see the plan without recording anything:
+`eligibility`. To check the file and see the plan without recording anything,
+give an image that is in the registry:
 
 ```shell
 ssp apply --dry-run --image ghcr.io/acme/web:latest
