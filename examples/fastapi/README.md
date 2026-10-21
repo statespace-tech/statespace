@@ -29,7 +29,7 @@ For Kubernetes, see `../kubernetes`.
 Push a branch named `exp/price/lower-price` that lowers `PRICE`, and open a pull
 request. CI publishes each commit as a version of the arm. When GitHub says that
 the pull request can merge, 5% of the shop's subjects get the lower price and 5%
-get the control. The `statespace/arm` check on the pull request tells what runs.
+get the control. The `Statespace` check on the pull request tells what runs.
 
 To stop the arm, make the pull request a draft. To ship it, merge it.
 
