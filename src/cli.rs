@@ -23,6 +23,10 @@ pub struct Cli {
     /// Print one JSON document instead of text.
     #[arg(long, global = true)]
     pub json: bool,
+    /// The workspace, by its GitHub login, such as `acme`. Defaults to the
+    /// owner of the targets' repository, else your only workspace.
+    #[arg(long, env = "STATESPACE_WORKSPACE", global = true)]
+    pub workspace: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }

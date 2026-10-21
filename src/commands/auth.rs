@@ -34,15 +34,35 @@ pub fn login(api: &Api, no_open: bool) -> anyhow::Result<()> {
         eprintln!("Open {}", login.verification_url);
     }
     let token = wait_for_approval(api, &login)?;
-    let account: Value = api.with_token(token.clone()).get("/v1/account")?;
+    let me: Value = api.with_token(token.clone()).get("/v1/me")?;
     Settings {
         endpoint: Some(api.endpoint().into()),
         token: Some(token),
     }
     .save()?;
     emit(
-        &json!({ "status": "signed_in", "account": account }),
-        || format!("Signed in as {}.", text(&account["login"])),
+        &json!({ "status": "signed_in", "person": me["person"], "workspaces": me["workspaces"] }),
+        || {
+            let workspaces: Vec<String> = me["workspaces"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|workspace| text(&workspace["login"]))
+                .collect();
+            let login = text(&me["person"]["login"]);
+            match workspaces.as_slice() {
+                [] => format!(
+                    "Signed in as {login}. Install the Statespace GitHub App at \
+                     https://statespace.com to make a workspace."
+                ),
+                [one] => format!("Signed in as {login}, in the workspace {one}."),
+                many => format!(
+                    "Signed in as {login}. Your workspaces: {}. Commands use the owner of \
+                     their repository, or --workspace.",
+                    many.join(", ")
+                ),
+            }
+        },
     )
 }
 

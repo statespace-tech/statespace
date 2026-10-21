@@ -14,6 +14,8 @@ pub struct Api {
     client: Client,
     endpoint: String,
     token: Option<String>,
+    /// The workspace that a session acts on.
+    workspace: Option<String>,
 }
 
 impl Api {
@@ -26,7 +28,14 @@ impl Api {
                 .build()?,
             endpoint: endpoint.trim_end_matches('/').to_owned(),
             token,
+            workspace: None,
         })
+    }
+
+    /// The same client, acting on `workspace`.
+    pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
+        self.workspace = workspace;
+        self
     }
 
     pub fn endpoint(&self) -> &str {
@@ -46,6 +55,7 @@ impl Api {
             client: self.client.clone(),
             endpoint: self.endpoint.clone(),
             token: Some(token),
+            workspace: self.workspace.clone(),
         }
     }
 
@@ -60,7 +70,11 @@ impl Api {
             .token
             .as_deref()
             .context("not signed in; run `ssp login` or set SSP_TOKEN")?;
-        Ok(self.anonymous(method, path).bearer_auth(token))
+        let request = self.anonymous(method, path).bearer_auth(token);
+        Ok(match &self.workspace {
+            Some(workspace) => request.header("Statespace-Workspace", workspace),
+            None => request,
+        })
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {

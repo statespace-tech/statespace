@@ -95,6 +95,23 @@ pub fn here() -> anyhow::Result<Option<Target>> {
     Ok(Some(target))
 }
 
+/// The GitHub owner of what `values` name: the owner in a URL, or of the
+/// origin remote of a path's repository. Without values, of the current
+/// directory. It names the workspace to act on.
+pub fn owner(values: &[String]) -> Option<String> {
+    let first = values.first().map_or(".", String::as_str);
+    let repo = if first.contains("://") {
+        match url(first).ok()? {
+            Target::PullRequest { repo, .. } | Target::Repo(repo) => repo,
+            _ => return None,
+        }
+    } else {
+        let remote = git(Path::new(first), &["remote", "get-url", "origin"]).ok()?;
+        github_repository(&remote)?
+    };
+    repo.split_once('/').map(|(owner, _)| owner.to_owned())
+}
+
 fn url(value: &str) -> anyhow::Result<Target> {
     let path = value
         .trim_end_matches('/')
@@ -166,6 +183,20 @@ fn github_repository(url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspaces_follow_the_owner_of_urls() {
+        let owner = |value: &str| owner(&[value.to_owned()]);
+        assert_eq!(
+            owner("https://github.com/acme/atlas/pull/418").as_deref(),
+            Some("acme")
+        );
+        assert_eq!(
+            owner("https://github.com/globex/web").as_deref(),
+            Some("globex")
+        );
+        assert_eq!(owner("https://gitlab.com/acme/atlas"), None);
+    }
 
     #[test]
     fn reads_urls() {

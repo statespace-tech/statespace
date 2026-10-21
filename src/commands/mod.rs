@@ -24,7 +24,14 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         .endpoint
         .or_else(|| settings.endpoint.clone())
         .unwrap_or_else(|| DEFAULT_ENDPOINT.into());
-    let api = Api::new(&endpoint, cli.token.or(settings.token))?;
+    // Commands about repositories act on the workspace of their owner.
+    let workspace = cli.workspace.or_else(|| match &cli.command {
+        Command::Status { targets } | Command::Stop { targets } | Command::Resume { targets } => {
+            target::owner(targets)
+        }
+        _ => None,
+    });
+    let api = Api::new(&endpoint, cli.token.or(settings.token))?.with_workspace(workspace);
     match cli.command {
         Command::Login { no_open } => auth::login(&api, no_open),
         Command::Logout { all } => auth::logout(&api, all),
@@ -49,19 +56,22 @@ fn whoami(whoami: &Value) -> anyhow::Result<()> {
     emit(whoami, || {
         let account = &whoami["account"];
         let credential = &whoami["credential"];
-        let mut rows = vec![
+        let mut rows = Vec::new();
+        if let Some(login) = whoami["person"]["login"].as_str() {
+            rows.push(("Signed in as", login.to_owned()));
+        }
+        rows.extend([
             (
-                "Account",
+                "Workspace",
                 format!(
                     "{} ({})",
                     text(&account["login"]),
                     text(&account["provider"])
                 ),
             ),
-            ("Account ID", text(&account["id"])),
+            ("Workspace ID", text(&account["id"])),
             ("Plan", text(&account["plan"])),
-            ("Workspace", text(&account["workspace"])),
-        ];
+        ]);
         if let Some(host) = account["database_host"].as_str() {
             rows.push((
                 "Database",
