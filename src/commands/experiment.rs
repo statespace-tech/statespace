@@ -25,6 +25,9 @@ struct Row {
     commit: String,
     base: String,
     share: Option<f64>,
+    /// The share of the app's subjects in the experiment: every arm and
+    /// control of its running version.
+    total: Option<f64>,
     status: String,
 }
 
@@ -39,6 +42,7 @@ impl Row {
             "commit": self.commit,
             "base_commit": self.base,
             "share": self.share,
+            "experiment_share": self.total,
             "status": self.status,
         })
     }
@@ -100,8 +104,21 @@ pub fn status(api: &Api, values: &[String]) -> anyhow::Result<()> {
         groups
             .iter()
             .map(|((repo, app), rows)| {
+                let mut totals: Vec<String> = Vec::new();
+                for row in rows {
+                    let line = row.total.map(|total| {
+                        format!(
+                            "{} holds {} of {app}'s subjects.",
+                            row.experiment,
+                            share(total)
+                        )
+                    });
+                    if let Some(line) = line.filter(|line| !totals.contains(line)) {
+                        totals.push(line);
+                    }
+                }
                 format!(
-                    "{repo} › {app}\n{}",
+                    "{repo} › {app}\n{}{}",
                     table(
                         &[
                             "EXPERIMENT",
@@ -127,7 +144,11 @@ pub fn status(api: &Api, values: &[String]) -> anyhow::Result<()> {
                                 ]
                             })
                             .collect(),
-                    )
+                    ),
+                    totals
+                        .iter()
+                        .map(|line| format!("\n{line}"))
+                        .collect::<String>()
                 )
             })
             .collect::<Vec<_>>()
@@ -149,6 +170,7 @@ fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
         return Vec::new();
     }
     let repo = repos.get(&app).cloned().unwrap_or_else(|| "-".into());
+    let total = running.then(|| arms.iter().filter_map(|arm| arm["share"].as_f64()).sum());
     let mut rows: Vec<Row> = pulls
         .iter()
         .filter(|pull| pull["state"] == "open")
@@ -177,6 +199,7 @@ fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
                 commit: short(arm.map_or(&pull["head_commit"], |arm| &arm["commit"])),
                 base: arm.map_or_else(|| "-".into(), |arm| short(&arm["base_commit"])),
                 share: arm.and_then(|arm| arm["share"].as_f64()),
+                total,
                 status,
             }
         })
@@ -195,6 +218,7 @@ fn rows(experiment: &Value, repos: &BTreeMap<String, String>) -> Vec<Row> {
                     commit: short(&arm["commit"]),
                     base: "-".into(),
                     share: arm["share"].as_f64(),
+                    total,
                     status: "running".into(),
                 }),
         );
