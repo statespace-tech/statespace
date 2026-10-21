@@ -51,9 +51,9 @@ compared with a control: the default that its branch started from. To compare
 more arms in one experiment, name the branches `exp/<experiment>/<arm>`.
 
 ```text
-exp/pricing            → experiment "pricing": one arm
+exp/pricing            → experiment pricing, one arm
 exp/checkout/one-page  ┐
-exp/checkout/two-step  ┘→ experiment "checkout": arms one-page and two-step, one control
+exp/checkout/two-step  ┘→ experiment checkout, two arms
 ```
 
 `ssp proxy` is a reverse proxy in front of your app. For each request, it finds
@@ -64,9 +64,10 @@ the subject and sends the request to one of these:
 - **An arm:** the image of a commit of an `exp/` branch.
 
 ```text
-load balancer → ssp proxy :8080 → default                (your deployed image)
-                                → control of checkout    (the default the branch started from)
-                                → one-page@d4e5f6        (an image of the branch)
+load balancer → ssp proxy :8080
+  ├→ default                (your deployed image)
+  ├→ control of checkout    (the default of the base)
+  └→ one-page@d4e5f6        (an image of the branch)
 ```
 
 The proxy sends the subject to your app in the `x-statespace-subject` header. Your
@@ -97,7 +98,8 @@ that subject.
 4. Run your app behind `ssp proxy`, with a runtime token.
 
    ```shell
-   ssp token create --name production --preset runtime   # store it as SSP_TOKEN
+   # Store the token as SSP_TOKEN where the proxy runs.
+   ssp token create --name production --preset runtime
    ssp proxy --app web --image ghcr.io/acme/web:main --health /health
    ```
 
@@ -142,10 +144,15 @@ only the drafts that a stop made. You can also select **Ready for review** on
 GitHub.
 
 ```shell
-ssp status                                            # the arm of this exp/ branch
-ssp stop https://github.com/acme/web/pull/418         # the arms of one pull request
-ssp stop https://github.com/acme/web                  # every arm of the repository
-ssp stop .                                            # every arm of this app
+# The arm of the exp/ branch you are on
+ssp status
+# The arms of one pull request
+ssp stop https://github.com/acme/web/pull/418
+# Every arm of the repository
+ssp stop https://github.com/acme/web
+# Every arm of the app in this folder
+ssp stop .
+# Run the arms of the pull request again
 ssp resume https://github.com/acme/web/pull/418
 ```
 
@@ -158,9 +165,13 @@ Create a token that can read the app. Then compare the arms in SQL.
 ```shell
 ssp token create --name analysis --preset analyst --app web
 psql "$DATABASE_URL" -c "
-  SELECT arm, count(DISTINCT subject_id) AS subjects,
-         count(DISTINCT subject_id) FILTER (WHERE data->>'event' = 'purchase') AS buyers
-  FROM web.logs WHERE experiment = 'checkout' GROUP BY arm"
+  SELECT arm,
+         count(DISTINCT subject_id) AS subjects,
+         count(DISTINCT subject_id)
+           FILTER (WHERE data->>'event' = 'purchase') AS buyers
+  FROM web.logs
+  WHERE experiment = 'one-page-checkout'
+  GROUP BY arm"
 ```
 
 Commands print text. Add `--json` to print one JSON document.

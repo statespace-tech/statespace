@@ -30,7 +30,8 @@ cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --locked
 sh -n install.sh && shellcheck install.sh
-STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker   # needs Docker
+# Needs Docker
+STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
 ```
 
 ## Commits

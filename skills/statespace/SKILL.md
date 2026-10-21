@@ -70,8 +70,10 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    ```shell
    ssp status --json
    gh pr list --search "head:exp/" --state all --limit 20
-   psql "$DATABASE_URL" -c "SELECT data->>'event' AS event, count(*) FROM <app>.output
-                            WHERE data IS NOT NULL GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
+   psql "$DATABASE_URL" -c "
+     SELECT data->>'event' AS event, count(*) FROM <app>.output
+     WHERE data IS NOT NULL
+     GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
    ```
 
 2. Start a branch from the latest default branch. Make one change. To measure a new
@@ -119,10 +121,17 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    ask to merge. Write the evidence in a pull request comment.
 
    ```shell
-   psql "$DATABASE_URL" -c "SELECT * FROM <app>.sample_ratio WHERE experiment = '<experiment>'"
-   psql "$DATABASE_URL" -c "SELECT arm, commit, count(DISTINCT subject_id) AS subjects,
-       count(DISTINCT subject_id) FILTER (WHERE data->>'event' = '<event>') AS converted
-     FROM <app>.logs WHERE experiment = '<experiment>' GROUP BY arm, commit"
+   psql "$DATABASE_URL" -c "
+     SELECT * FROM <app>.sample_ratio
+     WHERE experiment = '<experiment>'"
+   psql "$DATABASE_URL" -c "
+     SELECT arm, commit,
+            count(DISTINCT subject_id) AS subjects,
+            count(DISTINCT subject_id)
+              FILTER (WHERE data->>'event' = '<event>') AS converted
+     FROM <app>.logs
+     WHERE experiment = '<experiment>'
+     GROUP BY arm, commit"
    ```
 
 ## Rules
