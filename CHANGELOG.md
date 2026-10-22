@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.2.0 - 2026-10-22
 
 Experiments run from pull requests. A branch named `exp/<name>` is an experiment with one
 arm, and `exp/<experiment>/<arm>` is one arm of a larger experiment. An arm runs while
