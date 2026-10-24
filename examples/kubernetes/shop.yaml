@@ -30,7 +30,7 @@ spec:
             - secretRef:
                 name: shop
         - name: statespace-proxy
-          image: ghcr.io/statespace-tech/statespace:0.2.0
+          image: ghcr.io/statespace-tech/statespace:0.3.0
           args: ["proxy", "--default", "http://localhost:8000"]
           env:
             - name: SSP_TOKEN
