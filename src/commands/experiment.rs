@@ -167,11 +167,13 @@ pub fn status(api: &Api, values: &[String]) -> anyhow::Result<()> {
                                 ]
                             })
                             .collect(),
-                    ),
-                    totals
-                        .iter()
-                        .map(|line| format!("\n{line}"))
-                        .collect::<String>()
+                    )
+                    .trim_end(),
+                    if totals.is_empty() {
+                        String::new()
+                    } else {
+                        format!("\n\n{}", totals.join("\n"))
+                    }
                 )
             })
             .collect::<Vec<_>>()
@@ -327,8 +329,8 @@ pub fn stop(api: &Api, values: &[String], reason: Option<&str>) -> anyhow::Resul
     let changed: Value = api.send(Method::POST, "/v1/stop", &request)?;
     report(&changed, "stop", || {
         format!(
-            "{}\nTheir subjects get the default now. Their pull requests do not change.\n\
-             To run them again: ssp resume {}",
+            "{}\nThe stopped arms send their subjects to the default now. Pull requests \
+             do not change.\nTo run the arms again: ssp resume {}",
             holds_lines(&changed),
             values.join(" ")
         )
@@ -340,7 +342,7 @@ pub fn resume(api: &Api, values: &[String]) -> anyhow::Result<()> {
     let changed: Value = api.send(Method::POST, "/v1/resume", &request)?;
     report(&changed, "resume", || {
         format!(
-            "{}\nTheir arms run again while their pull requests can merge, unless another \
+            "{}\nThe arms run again while their pull requests can merge, unless another \
              hold covers them. ssp status lists the holds.",
             changed["holds"]
                 .as_array()

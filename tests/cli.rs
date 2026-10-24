@@ -673,7 +673,7 @@ fn stops_place_holds_that_resumes_remove() {
         "{text}"
     );
     assert!(
-        text.contains("To run them again: ssp resume sandbox/price"),
+        text.contains("To run the arms again: ssp resume sandbox/price"),
         "{text}"
     );
     assert!(!text.contains("draft"), "{text}");

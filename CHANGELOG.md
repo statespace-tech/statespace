@@ -2,6 +2,13 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- `ssp status` prints one blank line, not two, before the holds.
+- `ssp stop` and `ssp resume` messages are correct for one target.
+
 ## 0.3.0 - 2026-10-24
 
 ### Added
