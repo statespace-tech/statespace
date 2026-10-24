@@ -273,7 +273,7 @@ mod tests {
                     "spec": {
                         "serviceAccountName": "shop",
                         "containers": [
-                            {"name": "statespace-proxy", "image": "ghcr.io/statespace-tech/statespace:0.2.0"},
+                            {"name": "statespace-proxy", "image": "ghcr.io/statespace-tech/statespace:0.3.0"},
                             {
                                 "name": "app",
                                 "image": "ghcr.io/acme/shop:main",

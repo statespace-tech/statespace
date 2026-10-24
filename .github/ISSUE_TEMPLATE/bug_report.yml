@@ -24,7 +24,7 @@ body:
     id: version
     attributes:
       label: Version
-      placeholder: statespace 0.2.0
+      placeholder: statespace 0.3.0
     validations:
       required: true
   - type: input
