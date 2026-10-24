@@ -147,6 +147,8 @@ async fn proxy(api: Api, arguments: ProxyArgs, app: String) -> anyhow::Result<()
         }
     };
     let shared = Arc::new(Shared::new(
+        app.clone(),
+        arguments.overrides,
         upstreams,
         telemetry.clone(),
         Duration::from_secs(shared_arguments.stale_after),
@@ -177,7 +179,15 @@ async fn proxy(api: Api, arguments: ProxyArgs, app: String) -> anyhow::Result<()
     let listener = tokio::net::TcpListener::bind(&arguments.listen)
         .await
         .with_context(|| format!("could not listen on {}", arguments.listen))?;
-    eprintln!("[ssp] proxy {id} listening on {}", arguments.listen);
+    eprintln!(
+        "[ssp] proxy {id} listening on {}{}",
+        arguments.listen,
+        if arguments.overrides {
+            " · overrides on (?ssp_arm=<branch>, header ssp-arm)"
+        } else {
+            ""
+        }
+    );
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(server::serve(listener, shared.clone(), stopped));
 

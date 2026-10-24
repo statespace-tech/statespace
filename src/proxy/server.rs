@@ -25,7 +25,9 @@ use hyper_util::{
 use serde_json::json;
 
 use super::{
-    assign::{self, Decision, Key, Routing, SUBJECT_COOKIE, Target},
+    assign::{
+        self, Decision, Key, OVERRIDE, OVERRIDE_HEADER, Refused, Routing, SUBJECT_COOKIE, Target,
+    },
     docker::Supervisor,
     telemetry::{self, Telemetry},
 };
@@ -34,6 +36,8 @@ type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
 /// How long a remote arm that failed a request gets no traffic.
 const SUSPECT_FOR: Duration = Duration::from_secs(10);
+/// How long an override cookie lasts without a request. Each request renews it.
+const OVERRIDE_SECONDS: u32 = 3600;
 
 /// The routing a proxy has, and when it last heard from Statespace.
 pub struct Current {
@@ -90,6 +94,10 @@ impl Upstreams {
 }
 
 pub struct Shared {
+    /// The app, for the pages that name it.
+    pub app: String,
+    /// Whether requests may name their arm with `?ssp_arm=` or `ssp-arm`.
+    pub overrides: bool,
     pub current: RwLock<Current>,
     pub upstreams: Upstreams,
     pub telemetry: Arc<Telemetry>,
@@ -99,10 +107,18 @@ pub struct Shared {
 }
 
 impl Shared {
-    pub fn new(upstreams: Upstreams, telemetry: Arc<Telemetry>, stale_after: Duration) -> Self {
+    pub fn new(
+        app: String,
+        overrides: bool,
+        upstreams: Upstreams,
+        telemetry: Arc<Telemetry>,
+        stale_after: Duration,
+    ) -> Self {
         let mut connector = HttpConnector::new();
         connector.set_nodelay(true);
         Self {
+            app,
+            overrides,
             current: RwLock::new(Current {
                 routing: Routing::default(),
                 fetched: None,
@@ -117,22 +133,199 @@ impl Shared {
         }
     }
 
-    /// Decide who serves a request. A proxy without a recent configuration
-    /// sends every subject to the default.
-    fn decide(&self, request: &serde_json::Value) -> Decision {
+    /// The routing, while its configuration is recent.
+    fn routing<R>(&self, use_routing: impl FnOnce(Option<&Routing>) -> R) -> R {
         let current = self.current.read().expect("routing is never poisoned");
         let fresh = current
             .fetched
             .is_some_and(|fetched| fetched.elapsed() <= self.stale_after);
-        if !fresh {
-            return Decision {
+        use_routing(fresh.then_some(&current.routing))
+    }
+
+    fn ready(&self, key: &Key) -> bool {
+        self.upstreams.address(&Target::Arm(key.clone())).is_some()
+    }
+
+    /// Decide who serves a request. A proxy without a recent configuration
+    /// sends every subject to the default.
+    fn decide(&self, request: &serde_json::Value) -> Decision {
+        self.routing(|routing| match routing {
+            Some(routing) => assign::decide(routing, request, |key| self.ready(key)),
+            None => Decision {
                 serve: Target::Default,
                 assignment: None,
-            };
-        }
-        assign::decide(&current.routing, request, |key| {
-            self.upstreams.address(&Target::Arm(key.clone())).is_some()
+            },
         })
+    }
+
+    /// Serve a request on the running arm of `branch`.
+    fn override_arm(&self, request: &serde_json::Value, branch: &str) -> Result<Decision, Refused> {
+        if !valid_branch(branch) {
+            return Err(Refused::NotRunning);
+        }
+        self.routing(|routing| match routing {
+            Some(routing) => assign::override_arm(routing, request, branch, |key| self.ready(key)),
+            None => Err(Refused::NotRunning),
+        })
+    }
+
+    /// Why an override cannot be served, for the person who asked.
+    fn refusal(&self, branch: &str, refused: Refused) -> (StatusCode, String) {
+        if refused == Refused::NotReady {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "{branch} is starting on {}. Try again in a few seconds.",
+                    self.app
+                ),
+            );
+        }
+        let running = self.routing(|routing| routing.map(assign::running_branches));
+        let running = match running.unwrap_or_default() {
+            branches if branches.is_empty() => "No arms are running.".to_owned(),
+            branches => format!("Running arms: {}.", branches.join(", ")),
+        };
+        (
+            StatusCode::NOT_FOUND,
+            format!("{branch} is not running on {}. {running}", self.app),
+        )
+    }
+}
+
+/// What a request asked of the override, before the proxy removed it.
+#[derive(Debug, Default, PartialEq)]
+struct Requested {
+    /// `?ssp_arm=`: a branch, or empty to end the override.
+    parameter: Option<String>,
+    /// The `ssp-arm` header.
+    header: Option<String>,
+    /// The `ssp_arm` cookie.
+    cookie: Option<String>,
+}
+
+/// Remove the override parameter, header, and cookie from a request, so the
+/// app never sees them, and return what they held.
+fn take_override<B>(request: &mut Request<B>) -> Requested {
+    let mut requested = Requested::default();
+    if let Some(query) = request.uri().query() {
+        let mut kept = Vec::new();
+        for pair in query.split('&') {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            if assign::decode(name) == OVERRIDE {
+                requested.parameter = Some(assign::decode(value).trim().to_owned());
+            } else if !pair.is_empty() {
+                kept.push(pair);
+            }
+        }
+        if requested.parameter.is_some() {
+            let path = request.uri().path();
+            let path_and_query = match kept.is_empty() {
+                true => path.to_owned(),
+                false => format!("{path}?{}", kept.join("&")),
+            };
+            let mut parts = request.uri().clone().into_parts();
+            parts.path_and_query = path_and_query.parse().ok();
+            if let Ok(uri) = http::Uri::from_parts(parts) {
+                *request.uri_mut() = uri;
+            }
+        }
+    }
+    let headers = request.headers_mut();
+    requested.header = headers
+        .remove(OVERRIDE_HEADER)
+        .and_then(|value| value.to_str().ok().map(|value| value.trim().to_owned()));
+    let cookies: Vec<String> = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(str::to_owned))
+        .collect();
+    if cookies
+        .iter()
+        .any(|value| value.split(';').any(|pair| cookie_name(pair) == OVERRIDE))
+    {
+        headers.remove(header::COOKIE);
+        for value in cookies {
+            let kept: Vec<&str> = value
+                .split(';')
+                .map(str::trim)
+                .filter(|pair| {
+                    if cookie_name(pair) != OVERRIDE {
+                        return !pair.is_empty();
+                    }
+                    requested.cookie = pair.split_once('=').map(|(_, value)| value.to_owned());
+                    false
+                })
+                .collect();
+            if let Ok(value) = HeaderValue::from_str(&kept.join("; "))
+                && !kept.is_empty()
+            {
+                headers.append(header::COOKIE, value);
+            }
+        }
+    }
+    requested
+}
+
+fn cookie_name(pair: &str) -> &str {
+    pair.split_once('=').map_or(pair, |(name, _)| name).trim()
+}
+
+/// The request's path and query as a redirect target on this site. Leading
+/// slashes collapse, so `//evil.example/` cannot leave the site.
+fn same_site(uri: &http::Uri) -> String {
+    let path = uri.path_and_query().map_or("/", |path| path.as_str());
+    format!("/{}", path.trim_start_matches(['/', '\\']))
+}
+
+/// Whether `branch` can name an arm: an `exp/` branch of letters, numbers,
+/// dots, dashes, underscores, and slashes.
+fn valid_branch(branch: &str) -> bool {
+    branch.starts_with("exp/")
+        && branch.len() <= 255
+        && branch
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/'))
+}
+
+/// The `Set-Cookie` value that keeps an override for an hour, or ends it.
+fn override_cookie(branch: Option<&str>, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    match branch {
+        Some(branch) => format!(
+            "{OVERRIDE}={branch}; Path=/; Max-Age={OVERRIDE_SECONDS}; HttpOnly; SameSite=Lax{secure}"
+        ),
+        None => format!("{OVERRIDE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}"),
+    }
+}
+
+/// Mark a response that an arm served as private, so a shared cache never
+/// gives one person's arm to another.
+fn make_private(headers: &mut HeaderMap) {
+    let directives: Vec<String> = headers
+        .get_all(header::CACHE_CONTROL)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|directive| directive.trim().to_owned())
+        .filter(|directive| !directive.is_empty())
+        .collect();
+    let lower = |directive: &String| directive.to_ascii_lowercase();
+    if directives
+        .iter()
+        .any(|directive| matches!(lower(directive).as_str(), "no-store" | "private"))
+    {
+        return;
+    }
+    let mut kept: Vec<String> = directives
+        .into_iter()
+        .filter(|directive| {
+            let directive = lower(directive);
+            directive != "public" && !directive.starts_with("s-maxage")
+        })
+        .collect();
+    kept.insert(0, "private".into());
+    if let Ok(value) = HeaderValue::from_str(&kept.join(", ")) {
+        headers.insert(header::CACHE_CONTROL, value);
     }
 }
 
@@ -184,6 +377,7 @@ async fn forward(
     mut request: Request<Incoming>,
 ) -> Response<ProxyBody> {
     let started = Instant::now();
+    let requested = take_override(&mut request);
     let mut cookies = assign::cookies(request.headers());
     let new_subject = (!cookies.contains_key(SUBJECT_COOKIE)).then(|| telemetry::id("sid"));
     if let Some(subject) = &new_subject {
@@ -198,7 +392,72 @@ async fn forward(
         request.headers(),
         &cookies,
     );
-    let decision = shared.decide(&view);
+    let secure = view["headers"]["x-forwarded-proto"] == "https";
+    let subject_cookie = new_subject.as_ref().map(|subject| {
+        format!(
+            "{SUBJECT_COOKIE}={subject}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{}",
+            if secure { "; Secure" } else { "" }
+        )
+    });
+    // With --overrides, a request may name the arm that serves it.
+    let mut override_cookie_change = None;
+    let mut chosen = None;
+    if shared.overrides {
+        let navigation = matches!(method, Method::GET | Method::HEAD);
+        if let Some(branch) = &requested.parameter {
+            let location = same_site(request.uri());
+            if branch.is_empty() {
+                let cleared = override_cookie(None, secure);
+                if navigation {
+                    return redirect(&location, [Some(cleared), subject_cookie]);
+                }
+                override_cookie_change = Some(cleared);
+            } else {
+                match shared.override_arm(&view, branch) {
+                    Ok(decision) => {
+                        let kept = override_cookie(Some(branch), secure);
+                        if navigation {
+                            return redirect(&location, [Some(kept), subject_cookie]);
+                        }
+                        chosen = Some(decision);
+                    }
+                    Err(refused) => {
+                        let (status, message) = shared.refusal(branch, refused);
+                        return page(status, &message);
+                    }
+                }
+            }
+        } else if let Some(branch) = requested
+            .header
+            .as_deref()
+            .filter(|branch| !branch.is_empty())
+        {
+            match shared.override_arm(&view, branch) {
+                Ok(decision) => chosen = Some(decision),
+                Err(refused) => {
+                    let (status, message) = shared.refusal(branch, refused);
+                    return plain(status, message);
+                }
+            }
+        } else if let Some(branch) = requested
+            .cookie
+            .as_deref()
+            .filter(|branch| !branch.is_empty())
+        {
+            // An arm that stopped since ends its override quietly.
+            match shared.override_arm(&view, branch) {
+                Ok(decision) => {
+                    chosen = Some(decision);
+                    override_cookie_change = Some(override_cookie(Some(branch), secure));
+                }
+                Err(Refused::NotReady) => {}
+                Err(Refused::NotRunning) => {
+                    override_cookie_change = Some(override_cookie(None, secure))
+                }
+            }
+        }
+    }
+    let decision = chosen.unwrap_or_else(|| shared.decide(&view));
     if let Some(assignment) = &decision.assignment {
         shared.telemetry.run(assignment, method.as_str(), &path);
     }
@@ -290,15 +549,16 @@ async fn forward(
 
     let (mut parts, body) = response.into_parts();
     remove_hop_by_hop(&mut parts.headers);
-    if let Some(subject) = &new_subject {
-        let secure = view["headers"]["x-forwarded-proto"] == "https";
-        let cookie = format!(
-            "{SUBJECT_COOKIE}={subject}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Lax{}",
-            if secure { "; Secure" } else { "" }
-        );
+    for cookie in [subject_cookie, override_cookie_change]
+        .into_iter()
+        .flatten()
+    {
         if let Ok(value) = HeaderValue::from_str(&cookie) {
             parts.headers.append(header::SET_COOKIE, value);
         }
+    }
+    if serve != Target::Default {
+        make_private(&mut parts.headers);
     }
     let telemetry = shared.telemetry.clone();
     let request_bytes = view["headers"]["content-length"]
@@ -449,6 +709,65 @@ fn remove_hop_by_hop(headers: &mut HeaderMap) {
     headers.remove("keep-alive");
 }
 
+/// Send a browser back to the same URL without `?ssp_arm=`, with cookies.
+fn redirect<const N: usize>(location: &str, cookies: [Option<String>; N]) -> Response<ProxyBody> {
+    let mut response = text(StatusCode::FOUND, "");
+    let headers = response.headers_mut();
+    if let Ok(value) = HeaderValue::from_str(location) {
+        headers.insert(header::LOCATION, value);
+    }
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    for cookie in cookies.into_iter().flatten() {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            headers.append(header::SET_COOKIE, value);
+        }
+    }
+    response
+}
+
+/// A short page for a browser, about an override that cannot be served.
+fn page(status: StatusCode, message: &str) -> Response<ProxyBody> {
+    let escaped = message
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    let body = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Statespace</title>\
+         <p style=\"font-family:system-ui,sans-serif;margin:2rem\">{escaped}</p>\n"
+    );
+    let mut response = Response::new(
+        Full::new(Bytes::from(body))
+            .map_err(|never| match never {})
+            .boxed(),
+    );
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// The same message as plain text, for API clients.
+fn plain(status: StatusCode, message: String) -> Response<ProxyBody> {
+    let mut response = Response::new(
+        Full::new(Bytes::from(format!("{message}\n")))
+            .map_err(|never| match never {})
+            .boxed(),
+    );
+    *response.status_mut() = status;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
 fn text(status: StatusCode, message: &'static str) -> Response<ProxyBody> {
     let mut response = Response::new(
         Full::new(Bytes::from_static(message.as_bytes()))
@@ -548,6 +867,118 @@ mod tests {
             upstream_uri("http://shop-price-control.shop.svc:8000/", &uri).to_string(),
             "http://shop-price-control.shop.svc:8000/a/b?c=d"
         );
+    }
+
+    fn request(uri: &str, headers: &[(&str, &str)]) -> Request<()> {
+        let mut request = Request::builder().uri(uri);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.body(()).unwrap()
+    }
+
+    #[test]
+    fn removes_the_override_before_the_app_sees_it() {
+        let mut asked = request(
+            "/cart?a=1&ssp_arm=exp%2Fprice%2Flower&b=2",
+            &[
+                ("ssp-arm", "exp/price/higher"),
+                ("cookie", "ssp_sid=s1; ssp_arm=exp/price/lower; theme=dark"),
+            ],
+        );
+        assert_eq!(
+            take_override(&mut asked),
+            Requested {
+                parameter: Some("exp/price/lower".into()),
+                header: Some("exp/price/higher".into()),
+                cookie: Some("exp/price/lower".into()),
+            }
+        );
+        assert_eq!(asked.uri(), "/cart?a=1&b=2");
+        assert!(!asked.headers().contains_key("ssp-arm"));
+        assert_eq!(asked.headers()["cookie"], "ssp_sid=s1; theme=dark");
+
+        let mut alone = request("/?ssp_arm=", &[("cookie", "ssp_arm=exp/a/b")]);
+        let requested = take_override(&mut alone);
+        assert_eq!(requested.parameter.as_deref(), Some(""));
+        assert_eq!(alone.uri(), "/");
+        assert!(!alone.headers().contains_key("cookie"));
+
+        let mut plain = request("/search?q=ssp_arm", &[("cookie", "a=1")]);
+        assert_eq!(take_override(&mut plain), Requested::default());
+        assert_eq!(plain.uri(), "/search?q=ssp_arm");
+        assert_eq!(plain.headers()["cookie"], "a=1");
+    }
+
+    #[test]
+    fn redirects_stay_on_the_site() {
+        let target = |uri: &str| same_site(&uri.parse().unwrap());
+        assert_eq!(target("/cart?step=1"), "/cart?step=1");
+        assert_eq!(target("//evil.example/x"), "/evil.example/x");
+        assert_eq!(target("/\\evil.example"), "/evil.example");
+        assert_eq!(target("https://shop.example/a?b=1"), "/a?b=1");
+    }
+
+    #[test]
+    fn names_only_exp_branches() {
+        assert!(valid_branch("exp/price/lower"));
+        assert!(valid_branch("exp/pricing"));
+        assert!(!valid_branch("main"));
+        assert!(!valid_branch("exp/<script>"));
+        assert!(!valid_branch("exp/a\r\nset-cookie: x"));
+    }
+
+    #[test]
+    fn override_cookies_last_an_hour() {
+        assert_eq!(
+            override_cookie(Some("exp/price/lower"), true),
+            "ssp_arm=exp/price/lower; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax; Secure"
+        );
+        assert_eq!(
+            override_cookie(None, false),
+            "ssp_arm=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+        );
+    }
+
+    #[test]
+    fn arm_responses_are_private() {
+        let private = |value: Option<&str>| {
+            let mut headers = HeaderMap::new();
+            if let Some(value) = value {
+                headers.insert(header::CACHE_CONTROL, value.parse().unwrap());
+            }
+            make_private(&mut headers);
+            headers[header::CACHE_CONTROL].to_str().unwrap().to_owned()
+        };
+        assert_eq!(private(None), "private");
+        assert_eq!(
+            private(Some("public, max-age=600, s-maxage=3600")),
+            "private, max-age=600"
+        );
+        assert_eq!(private(Some("no-store")), "no-store");
+        assert_eq!(private(Some("private, max-age=60")), "private, max-age=60");
+    }
+
+    #[test]
+    fn pages_escape_the_branch() {
+        let response = page(StatusCode::NOT_FOUND, "exp/<b> is not running on web.");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let body = body_text(response);
+        assert!(
+            body.contains("exp/&lt;b&gt; is not running on web."),
+            "{body}"
+        );
+    }
+
+    fn body_text(response: Response<ProxyBody>) -> String {
+        let bytes = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(response.into_body().collect())
+            .unwrap()
+            .to_bytes();
+        String::from_utf8_lossy(&bytes).into_owned()
     }
 
     #[test]

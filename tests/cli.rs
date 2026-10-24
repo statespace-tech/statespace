@@ -608,6 +608,282 @@ fn docker_proxies_run_the_default_and_each_arm() {
     assert!(left.is_empty(), "containers left: {left}");
 }
 
+/// A small app that answers with its name and what it received.
+fn echo(name: &'static str) -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            if reader.read_line(&mut request_line).is_err() {
+                continue;
+            }
+            let mut headers = serde_json::Map::new();
+            let mut length = 0;
+            loop {
+                let mut header = String::new();
+                if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = header.split_once(':') {
+                    let name = name.trim().to_ascii_lowercase();
+                    if name == "content-length" {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    headers.insert(name, json!(value.trim()));
+                }
+            }
+            let mut body = vec![0; length];
+            let _ = reader.read_exact(&mut body);
+            let mut parts = request_line.split_whitespace();
+            let body = json!({
+                "arm": name,
+                "method": parts.next(),
+                "target": parts.next(),
+                "headers": headers,
+            })
+            .to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                 cache-control: public, max-age=60\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    port
+}
+
+/// A routing proxy with `--overrides` serves the running arm a request
+/// names, keeps it with a cookie, and records the visit as an override.
+#[test]
+fn overrides_name_the_arm_that_serves_a_request() {
+    let default = echo("default");
+    let lower = echo("lower");
+    let fake = Arc::new(Mutex::new(Fake::default()));
+    let api = format!("http://127.0.0.1:{}", serve(fake.clone()));
+    fake.lock().unwrap().config = json!({
+        "app": "web",
+        "salt": "salt",
+        "poll_interval_seconds": 1,
+        "experiments": [{
+            "name": "price",
+            "version": 2,
+            "subject": "request.cookies.ssp_sid",
+            "eligibility": "false",
+            "arms": [
+                {
+                    "kind": "variant",
+                    "name": "lower",
+                    "branch": "exp/price/lower",
+                    "commit": "a".repeat(40),
+                    "image": "web@sha256:1",
+                    "repo": "acme/web",
+                    "ranges": [[0.0, 0.05]],
+                    "address": format!("http://127.0.0.1:{lower}"),
+                    "ready": true,
+                },
+                {
+                    "kind": "control",
+                    "name": "control",
+                    "branch": null,
+                    "commit": "b".repeat(40),
+                    "image": "web@sha256:2",
+                    "repo": "acme/web",
+                    "ranges": [[0.05, 0.1]],
+                    "address": format!("http://127.0.0.1:{default}"),
+                    "ready": true,
+                },
+            ],
+        }],
+    });
+    let config = tempfile::tempdir().unwrap();
+    let start = |overrides: bool| {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut command = std::process::Command::new(cargo_bin("ssp"));
+        command
+            .env("STATESPACE_CONFIG", config.path().join("config.toml"))
+            .env("STATESPACE_URL", &api)
+            .env("SSP_TOKEN", "test")
+            .env_remove("STATESPACE_OVERRIDES")
+            .args(["proxy", "--app", "web", "--default"])
+            .arg(format!("http://127.0.0.1:{default}"))
+            .args(["--listen", &format!("127.0.0.1:{port}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if overrides {
+            command.arg("--overrides");
+        }
+        (Process(command.spawn().unwrap()), port)
+    };
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let send = |port: u16, method: &str, target: &str, headers: &[(&str, &str)]| {
+        let mut request = client.request(
+            method.parse().unwrap(),
+            format!("http://127.0.0.1:{port}{target}"),
+        );
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        request.send().ok()
+    };
+    let set_cookies = |response: &reqwest::blocking::Response| -> Vec<String> {
+        response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|value| value.to_str().unwrap().to_owned())
+            .collect()
+    };
+    let (_proxy, port) = start(true);
+    let named = [
+        ("ssp-arm", "exp/price/lower"),
+        ("cookie", "ssp_sid=sid_tester"),
+    ];
+    // Wait until the proxy listens and has the configuration.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(Instant::now() < deadline, "the proxy did not start");
+        if let Some(response) = send(port, "GET", "/", &named)
+            && response.status() == 200
+            && response.json::<Value>().unwrap()["arm"] == "lower"
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // The header serves the arm for one request: no cookie, no redirect.
+    let response = send(port, "GET", "/cart?step=1", &named).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .all(|c| !c.starts_with("ssp_arm"))
+    );
+    assert_eq!(response.headers()["cache-control"], "private, max-age=60");
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["arm"], "lower");
+    assert_eq!(body["target"], "/cart?step=1");
+    assert!(body["headers"].get("ssp-arm").is_none(), "{body}");
+
+    // A browser's parameter sets the cookie and returns to the clean URL.
+    let cookie = [("cookie", "ssp_sid=sid_tester")];
+    let response = send(port, "GET", "/cart?step=1&ssp_arm=exp/price/lower", &cookie).unwrap();
+    assert_eq!(response.status(), 302);
+    assert_eq!(response.headers()["location"], "/cart?step=1");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(
+        set_cookies(&response).contains(
+            &"ssp_arm=exp/price/lower; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax".into()
+        )
+    );
+
+    // The cookie keeps the arm, is renewed, and never reaches the app.
+    let kept = [("cookie", "ssp_sid=sid_tester; ssp_arm=exp/price/lower")];
+    let response = send(port, "GET", "/cart?step=1", &kept).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|c| c.starts_with("ssp_arm=exp/price/lower;"))
+    );
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["arm"], "lower");
+    assert_eq!(body["headers"]["cookie"], "ssp_sid=sid_tester");
+
+    // Other methods are served on the arm, without a redirect.
+    let response = send(port, "POST", "/orders?ssp_arm=exp/price/lower", &cookie).unwrap();
+    let body: Value = response.json().unwrap();
+    assert_eq!(
+        (body["arm"].as_str(), body["target"].as_str()),
+        (Some("lower"), Some("/orders"))
+    );
+
+    // An arm that does not run is refused, with the arms that do.
+    let response = send(port, "GET", "/?ssp_arm=exp/price/higher", &cookie).unwrap();
+    assert_eq!(response.status(), 404);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let page = response.text().unwrap();
+    assert!(
+        page.contains("exp/price/higher is not running on web. Running arms: exp/price/lower."),
+        "{page}"
+    );
+    let response = send(port, "GET", "/", &[("ssp-arm", "exp/price/higher")]).unwrap();
+    assert_eq!(response.status(), 404);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/plain")
+    );
+
+    // A cookie for an arm that stopped ends quietly with the normal split.
+    let stale = [("cookie", "ssp_sid=sid_tester; ssp_arm=exp/price/gone")];
+    let response = send(port, "GET", "/", &stale).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|c| c.starts_with("ssp_arm=; "))
+    );
+    assert_eq!(response.json::<Value>().unwrap()["arm"], "default");
+
+    // An empty parameter ends the override.
+    let response = send(port, "GET", "/?ssp_arm=", &kept).unwrap();
+    assert_eq!(response.status(), 302);
+    assert_eq!(response.headers()["location"], "/");
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|c| c.starts_with("ssp_arm=; "))
+    );
+
+    // The visits are recorded as runs with the reason `override`.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !fake.lock().unwrap().events.iter().any(|batch| {
+        batch["runs"].as_array().is_some_and(|runs| {
+            runs.iter().any(|run| {
+                run["reason"] == "override"
+                    && run["arm"] == "lower"
+                    && run["subject_id"] == "sid_tester"
+            })
+        })
+    }) {
+        assert!(Instant::now() < deadline, "no override run was recorded");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // Without --overrides, the proxy ignores the override but still
+    // removes it before the app sees it.
+    let (_plain, port) = start(false);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let body = loop {
+        assert!(Instant::now() < deadline, "the proxy did not start");
+        if let Some(response) = send(port, "GET", "/a?ssp_arm=exp/price/lower", &named)
+            && response.status() == 200
+        {
+            break response.json::<Value>().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(body["arm"], "default");
+    assert_eq!(body["target"], "/a");
+    assert!(body["headers"].get("ssp-arm").is_none(), "{body}");
+}
+
 fn rand_suffix() -> u32 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

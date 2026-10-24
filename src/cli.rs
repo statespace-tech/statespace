@@ -228,6 +228,16 @@ pub struct ProxyArgs {
     /// A CPU limit for each container, such as `1.5`. With `--image`.
     #[arg(long)]
     pub cpus: Option<String>,
+    /// Let a request name the running arm that serves it: a browser opens a
+    /// URL with `?ssp_arm=exp/price/lower`, which a cookie keeps for an hour,
+    /// and an API client sends the header `ssp-arm: exp/price/lower`. These
+    /// visits are recorded as overrides. Without this flag, both are ignored.
+    #[arg(
+        long,
+        env = "STATESPACE_OVERRIDES",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
+    pub overrides: bool,
 }
 
 #[derive(Args)]
@@ -295,6 +305,15 @@ mod tests {
             ],
             vec![
                 "ssp",
+                "proxy",
+                "--app",
+                "web",
+                "--default",
+                "http://localhost:8000",
+                "--overrides",
+            ],
+            vec![
+                "ssp",
                 "controller",
                 "kubernetes",
                 "--app",
@@ -321,6 +340,22 @@ mod tests {
             Cli::try_parse_from(&arguments)
                 .unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
         }
+    }
+
+    #[test]
+    fn overrides_are_off_unless_asked() {
+        let proxy = |arguments: &[&str]| {
+            let base = ["ssp", "proxy", "--default", "http://localhost:8000"];
+            let Command::Proxy(proxy) = Cli::try_parse_from(base.iter().chain(arguments))
+                .unwrap()
+                .command
+            else {
+                panic!("a proxy");
+            };
+            proxy.overrides
+        };
+        assert!(!proxy(&[]));
+        assert!(proxy(&["--overrides"]));
     }
 
     #[test]

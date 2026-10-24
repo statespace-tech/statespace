@@ -11,6 +11,10 @@ use sha2::{Digest, Sha256};
 
 /// The cookie the proxy sets so anonymous visitors keep their arm.
 pub const SUBJECT_COOKIE: &str = "ssp_sid";
+/// The query parameter and cookie that override the arm, with `--overrides`.
+pub const OVERRIDE: &str = "ssp_arm";
+/// The header that overrides the arm of one request, with `--overrides`.
+pub const OVERRIDE_HEADER: &str = "ssp-arm";
 
 /// An app's running configuration, as the API returns it.
 #[derive(Clone, Debug, Deserialize)]
@@ -34,6 +38,10 @@ pub struct ExperimentConfig {
 pub struct ArmConfig {
     /// A variant, or `control` for the control of a base commit.
     pub name: String,
+    /// The `exp/` branch of a variant, such as `exp/price/lower`. Controls
+    /// have none.
+    #[serde(default)]
+    pub branch: Option<String>,
     pub commit: String,
     /// The image by digest.
     pub image: String,
@@ -177,6 +185,8 @@ pub enum Reason {
     Ineligible,
     EligibilityError,
     ArmUnavailable,
+    /// The request named its arm with `?ssp_arm=` or `ssp-arm`.
+    Override,
 }
 
 impl Reason {
@@ -186,6 +196,7 @@ impl Reason {
             Self::Ineligible => "ineligible",
             Self::EligibilityError => "eligibility-error",
             Self::ArmUnavailable => "arm-unavailable",
+            Self::Override => "override",
         }
     }
 }
@@ -267,6 +278,63 @@ pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&Key) -> bool) 
         serve: Target::Arm(key.clone()),
         assignment: Some(assignment(Some(key), Reason::Assigned)),
     }
+}
+
+/// Why the arm a request names cannot serve it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// The branch runs, but its arm cannot take traffic yet.
+    NotReady,
+    /// No running arm has the branch.
+    NotRunning,
+}
+
+/// Serve `request` on the running arm of `branch`, without eligibility or
+/// the split. The subject is read as usual, so the run is recorded, with the
+/// reason `override`.
+pub fn override_arm(
+    routing: &Routing,
+    request: &Value,
+    branch: &str,
+    ready: impl Fn(&Key) -> bool,
+) -> Result<Decision, Refused> {
+    let Some((experiment, arm)) = routing.experiments.iter().find_map(|experiment| {
+        let arm = experiment
+            .config
+            .arms
+            .iter()
+            .find(|arm| arm.branch.as_deref() == Some(branch))?;
+        Some((experiment, arm))
+    }) else {
+        return Err(Refused::NotRunning);
+    };
+    let key = key(&experiment.config, arm);
+    if !ready(&key) {
+        return Err(Refused::NotReady);
+    }
+    let assignment = subject_of(&experiment.subject, request).map(|subject| Assignment {
+        experiment: experiment.config.name.clone(),
+        version: experiment.config.version,
+        subject,
+        assigned: Some(key.clone()),
+        reason: Reason::Override,
+    });
+    Ok(Decision {
+        serve: Target::Arm(key),
+        assignment,
+    })
+}
+
+/// The branches of the running arms, sorted.
+pub fn running_branches(routing: &Routing) -> Vec<String> {
+    let mut branches: Vec<String> = routing
+        .arms()
+        .into_iter()
+        .filter_map(|(_, arm)| arm.branch.clone())
+        .collect();
+    branches.sort();
+    branches.dedup();
+    branches
 }
 
 /// Whether a CEL rule compiles.
@@ -362,7 +430,7 @@ pub fn cookies(headers: &http::HeaderMap) -> Map<String, Value> {
 }
 
 /// Percent-decode a query component, treating `+` as a space.
-fn decode(value: &str) -> String {
+pub fn decode(value: &str) -> String {
     let bytes = value.as_bytes();
     let hex = |byte: u8| char::from(byte).to_digit(16).map(|digit| digit as u8);
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -396,6 +464,7 @@ mod tests {
     fn config(fast: [f64; 2], control: [f64; 2], eligibility: Option<&str>) -> HostConfig {
         let arm = |name: &str, commit: &str, range: [f64; 2]| ArmConfig {
             name: name.into(),
+            branch: (name != "control").then(|| format!("exp/checkout/{name}")),
             commit: commit.into(),
             image: String::new(),
             ranges: vec![range],
@@ -503,6 +572,43 @@ mod tests {
         );
         assert!((share(arms[0].1) - 0.05).abs() < 1e-12);
         assert_eq!(arms[1].0.arm, "control");
+    }
+
+    #[test]
+    fn overrides_serve_a_running_arm_without_the_split() {
+        // The subject is outside every slice and not eligible, yet the
+        // override serves the arm and records the run as an override.
+        let rule = Some("request.headers[\"cf-ipcountry\"] == \"US\"");
+        let (routing, _) = Routing::compile(&config([0.0, 0.0], [0.0, 0.0], rule));
+        let request = request(Some("u_1"), "FR");
+        let decision = override_arm(&routing, &request, "exp/checkout/fast", |_| true).unwrap();
+        let Target::Arm(key) = &decision.serve else {
+            panic!("an override is served by its arm");
+        };
+        assert_eq!(key.arm, "fast");
+        let assignment = decision.assignment.unwrap();
+        assert_eq!(assignment.reason, Reason::Override);
+        assert_eq!(assignment.reason.as_str(), "override");
+        assert_eq!(assignment.subject, "u_1");
+
+        assert_eq!(
+            override_arm(&routing, &request, "exp/checkout/slow", |_| true),
+            Err(Refused::NotRunning)
+        );
+        assert_eq!(
+            override_arm(&routing, &request, "control", |_| true),
+            Err(Refused::NotRunning)
+        );
+        assert_eq!(
+            override_arm(&routing, &request, "exp/checkout/fast", |_| false),
+            Err(Refused::NotReady)
+        );
+        assert_eq!(running_branches(&routing), ["exp/checkout/fast"]);
+
+        // Without a subject, the arm still serves, and no run is recorded.
+        let anonymous = request_value("GET", "/", None, &http::HeaderMap::new(), &Map::new());
+        let decision = override_arm(&routing, &anonymous, "exp/checkout/fast", |_| true).unwrap();
+        assert_eq!(decision.assignment, None);
     }
 
     #[test]
