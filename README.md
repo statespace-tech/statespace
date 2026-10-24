@@ -135,6 +135,7 @@ GitHub's own rules decide what runs:
 | Never could merge | Does not run |
 | Could merge, and then could not | Runs the last commit that could merge. A warning shows after 7 days |
 | Is a draft, or a reviewer requested changes | Stops |
+| Has a hold from `ssp stop` | Stops, until `ssp resume` |
 | Merged | The experiment ends. Its other arms run again after you update them with the default branch |
 | Closed | The arm is removed |
 
@@ -143,30 +144,74 @@ such as `Running at 10% (+10% control), 20% in the experiment`. It fails only
 when CI could not record a commit, so a wait never blocks a merge. While the arm
 runs, the check shows the evidence of the arm and its control: subjects,
 requests, errors, p90 latency, the events they printed, and whether the split
-matches the shares. To stop an arm, make its pull request a draft.
+matches the shares.
 
-In an emergency, stop arms at once. `ssp stop` makes their pull requests drafts
-as the Statespace App, and comments who stopped them. `ssp resume` marks ready
-only the drafts that a stop made. You can also select **Ready for review** on
-GitHub.
+### Stop and resume
+
+An arm runs when GitHub says that its pull request can merge, and no hold in
+Statespace covers it. In an emergency, `ssp stop` places a hold. The arms stop
+at once, and their subjects get the default. The pull requests do not change,
+and the stop does not need GitHub. A hold also covers the arms that start
+later, until `ssp resume` removes it.
 
 ```shell
-# The arm of the exp/ branch you are on
-ssp status
+# Every experiment of the app web
+ssp stop web --reason "checkout errors > 2%"
+# One experiment of the app
+ssp stop web/price
+# One arm, by its branch
+ssp stop exp/price/lower
 # The arms of one pull request
 ssp stop https://github.com/acme/web/pull/418
-# Every arm of the repository
-ssp stop https://github.com/acme/web
-# Every arm of the app in this folder
-ssp stop .
-# Run the arms of the pull request again
-ssp resume https://github.com/acme/web/pull/418
+# Show the arms and the holds
+ssp status
+# Remove the hold on the app, and only that hold
+ssp resume web
 ```
 
-If a stop or a resume cannot change a pull request, `ssp` names it and exits
-with status 1. On the dashboard, each arm, experiment, and app has **Stop** and
-**Resume**. A stop and a resume need the triage role on the repository, as on
-GitHub.
+`ssp resume` removes exactly the hold on its target. For example, at 02:00
+an alert stops `web`, and at 02:10 you stop `exp/price/lower`. At 03:00,
+`ssp resume web` runs the other arms again. `lower` stays stopped until
+`ssp resume exp/price/lower`.
+
+While a hold covers an arm, its `Statespace` check fails, such as
+`Stopped by safranchik with ssp stop · checkout errors > 2%`. If the
+repository requires the check, the pull request cannot merge until you resume
+it. A push does not remove a hold. A draft pull request still stops its arm:
+that is GitHub's "no".
+
+On the dashboard, each arm, experiment, and app has **Stop** and **Resume**.
+Scripts and alerts use `POST /v1/stop` and `POST /v1/resume` with a token that
+has the `experiments:write` scope. A person needs the triage role on the
+repository, as on GitHub. If a target fails, `ssp` names it and exits with
+status 1.
+
+### Open an arm yourself
+
+A proxy with `--overrides` lets a request name the running arm that serves
+it. Use it on staging, or on production to look at an arm.
+
+1. In a browser, add `?ssp_arm=<branch>` to any URL of the proxy, such as
+   `https://staging.acme.com/?ssp_arm=exp/price/lower`. The proxy keeps the
+   arm in a cookie for an hour, renewed on each request, and opens the URL
+   without the parameter.
+2. To end it, open a URL with `?ssp_arm=` and no value.
+3. An API client sends the header on each request:
+
+   ```shell
+   curl -X POST https://api.acme.com/orders \
+     -H 'ssp-arm: exp/price/lower'
+   ```
+
+Only running arms open. For another branch, the proxy shows the arms that
+run. Statespace records these visits as runs with the reason `override`. The
+subject counts and the split test of the check do not include them; the
+events that the arm prints do. Your app never sees the parameter, the header,
+or the cookie. Without `--overrides`, the proxy ignores them.
+
+Branch names of public repositories are public. With `--overrides`, anyone
+who can reach the proxy can open a running arm. Keep staging behind a VPN,
+basic auth, or an IP allowlist.
 
 Create a token that can read the app. Then compare the arms in SQL.
 
@@ -273,13 +318,15 @@ every app, pass `--app web`.
 | `--redact` | A regular expression. The proxy replaces its matches in recorded lines before they leave the machine |
 | `--port`, `--volume`, `--memory`, `--cpus` | Container settings, with `--image`. The default port is the `EXPOSE` port of the image |
 | `--stale-after` | How many seconds the proxy uses its last configuration when it cannot reach Statespace. Then all subjects get the default. The default is 300 |
+| `--overrides` | Let a request name its running arm with `?ssp_arm=<branch>` or the header `ssp-arm`. See [Open an arm yourself](#open-an-arm-yourself) |
 
 Containers get the environment of the proxy, without the settings of the proxy
 or the variables that describe the machine. They also get `PORT`,
 `STATESPACE_APP`, `STATESPACE_ARM`, `STATESPACE_COMMIT`, and
 `STATESPACE_EXPERIMENT`. Requests have the headers `x-statespace-subject`,
 `x-statespace-arm`, and `x-statespace-experiment`. Clients cannot set these
-headers.
+headers. Responses that an arm serves are `Cache-Control: private`, so a shared
+cache never gives one subject's arm to another.
 
 When an arm starts or fails, its subjects get the default. Arms record each line
 that they print, each request, lifecycle events, CPU and memory, and HTTP
@@ -329,15 +376,17 @@ curl -X DELETE -H "Authorization: Bearer $SSP_TOKEN" \
 | Command | Use |
 | --- | --- |
 | `ssp status [<target>...]` | Show what runs, and why, and each experiment's share of the app's subjects. Without a target: the arm of the `exp/` branch you are on, else the app or repository you are in |
-| `ssp stop <target>...` | Stop arms at once: make their pull requests drafts |
-| `ssp resume <target>...` | Mark the drafts that a stop made ready for review |
+| `ssp stop <target>... [--reason <text>]` | Stop arms at once with a hold in Statespace. Pull requests do not change |
+| `ssp resume <target>...` | Remove the hold on each target, and only that hold |
 | `ssp apply` | In CI: record the image of the job's commit. `statespace-tech/action` runs it. `--dry-run` checks `statespace.toml` anywhere |
 | `ssp token create`, `list`, `revoke` | Tokens for proxies, controllers, agents, and SQL |
 | `ssp login`, `logout`, `whoami` | Sign in with GitHub, and show your workspaces |
 | `ssp proxy`, `ssp controller kubernetes` | Run on your servers |
 
-A target is a pull request URL, a repository URL, or a path such as `.`: the
-app of the nearest `statespace.toml`. To delete an app, use the dashboard.
+A target is an app (`web`), an experiment (`web/price`), a branch
+(`exp/price/lower`), a pull request URL, a repository URL, or a path such as
+`.`: the app of the nearest `statespace.toml`. To delete an app, use the
+dashboard.
 
 ## Workspaces
 

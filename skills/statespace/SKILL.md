@@ -118,8 +118,22 @@ If the user did not give a task, stop after the setup. Then ask which change to 
    ssp status --json
    ```
 
+   To look at the arm yourself, find a URL of a proxy that runs with `--overrides`, such
+   as the team's staging site. Add `?ssp_arm=<branch>` to it, such as
+   `https://staging.acme.com/?ssp_arm=exp/price/lower`. A cookie keeps the arm for an
+   hour. For an API, send the header on each request:
+
+   ```shell
+   curl https://staging-api.acme.com/orders -H 'ssp-arm: exp/price/lower'
+   ```
+
+   Only running arms open; for another branch, the proxy lists the arms that run.
+   Statespace records these visits with the reason `override`. They do not count as
+   subjects, but the events that the arm prints do count, so do not send test purchases
+   to production.
+
 7. Wait for outcomes. Then compare each arm with its control, and make a decision: push a
-   fix, raise the share in `statespace.toml`, make the pull request a draft to stop, or
+   fix, raise the share in `statespace.toml`, make the pull request a draft to stop it, or
    ask to merge. Write the evidence in a pull request comment.
 
    ```shell
@@ -154,10 +168,17 @@ If the user did not give a task, stop after the setup. Then ask which change to 
   not trust the comparison. Find `arm-unavailable` runs, and read the `lifecycle` and
   `stderr` lines of the arm. Repair the arm before you read outcomes.
 - A rate such as errors needs a denominator. Divide by the rows of the arm in `requests`.
-- `ssp stop <pull request URL>` is for emergencies. It makes the pull request a draft as
-  the Statespace App, so its arms stop at once. Ask the user before you run it, unless the
-  arm harms users. `ssp resume <pull request URL>` runs them again. To stop an arm in the
-  normal way, run `gh pr ready <number> --undo`.
+- `ssp stop` is for emergencies. It places a hold in Statespace, and the arms stop at
+  once. The pull request does not change. Name what to hold: an arm by its branch
+  (`ssp stop exp/price/lower`), an experiment (`ssp stop <app>/price`), or an app
+  (`ssp stop <app>`). Give a reason: `--reason "checkout errors > 2%"`. Ask the user before
+  you run it, unless the arm harms users.
+- `ssp resume <target>` removes only the hold on that target. Other holds stay. Run
+  `ssp status --json` to see every hold, who placed it, and why. Do not remove a hold that
+  you did not place without asking the user.
+- While a hold covers an arm, its `Statespace` check fails, so the pull request cannot
+  merge where the check is required. A push does not remove the hold.
+- To stop an arm in the normal way, without an emergency, run `gh pr ready <number> --undo`.
 - Change settings with commits to `statespace.toml`. App settings, such as `max_traffic`,
   take effect when they merge to the default branch.
 - `ssp token revoke --all` needs `--yes`. You cannot undo it. Ask the user before you run

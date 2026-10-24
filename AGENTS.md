@@ -1,8 +1,8 @@
 # Contributor instructions
 
 Experiments run from pull requests of `exp/` branches. `ssp apply` records the image that
-CI built, `ssp status`, `ssp stop`, and `ssp resume` act on pull requests, and settings
-live in `statespace.toml`. `ssp proxy` is a reverse proxy that assigns each request's
+CI built, `ssp status` shows what runs, `ssp stop` and `ssp resume` place and remove holds
+in Statespace, and settings live in `statespace.toml`. `ssp proxy` is a reverse proxy that assigns each request's
 subject and forwards it to the app's default or an experiment's arm; on Docker it also
 runs them as containers. `ssp controller kubernetes` runs the arms on Kubernetes.
 

@@ -2,6 +2,35 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Added
+
+- `ssp proxy --overrides` lets a request name the running arm that serves it. A browser
+  opens a URL with `?ssp_arm=exp/price/lower`; a cookie keeps the arm for an hour, renewed
+  on each request, and `?ssp_arm=` ends it. An API client sends the header
+  `ssp-arm: exp/price/lower`. A branch that does not run gets a page that lists the
+  running arms. Statespace records these visits as runs with the reason `override`.
+- `ssp stop --reason <text>`. The check, `ssp status`, and the dashboard show it.
+- Targets name an app (`sandbox`), an experiment (`sandbox/price`), or an arm by its
+  branch (`exp/price/lower`).
+
+### Changed
+
+- `ssp stop` places a hold in Statespace instead of making pull requests drafts. Pull
+  requests do not change, and a stop does not need GitHub. A hold covers the arms that
+  start later too. `ssp resume` removes exactly the hold on each target.
+- `ssp status` marks the arms that a hold stops and lists every hold with who placed it,
+  when, and why. Its JSON is `{"arms": [...], "holds": [...]}`.
+- The proxy removes `?ssp_arm=`, the `ssp-arm` header, and the `ssp_arm` cookie before the
+  app gets a request, also without `--overrides`.
+- Responses that an arm serves are `Cache-Control: private`.
+
+### Security
+
+- Dependencies with RustSec advisories are updated: rustls, rustls-webpki,
+  webpki-roots, and tokio.
+
 ## 0.2.0 - 2026-10-22
 
 Experiments run from pull requests. A branch named `exp/<name>` is an experiment with one

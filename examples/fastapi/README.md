@@ -31,7 +31,8 @@ request. CI publishes each commit as a version of the arm. When GitHub says that
 the pull request can merge, 5% of the shop's subjects get the lower price and 5%
 get the control. The `Statespace` check on the pull request tells what runs.
 
-To stop the arm, make the pull request a draft. To ship it, merge it.
+To stop the arm, make the pull request a draft. In an emergency, run
+`ssp stop exp/<name>`, and `ssp resume exp/<name>` later. To ship it, merge it.
 
 Compare revenue per subject in SQL, with a token from `ssp token create --name
 sql --preset analyst --app shop`:

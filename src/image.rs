@@ -1,5 +1,5 @@
-//! Image references. A variant names its image by digest, such as
-//! `ghcr.io/acme/web@sha256:…`, so its signature covers exact bytes.
+//! Image references. An arm names its image by digest, such as
+//! `ghcr.io/acme/web@sha256:…`, so it runs exact bytes.
 
 use std::process::Command;
 
