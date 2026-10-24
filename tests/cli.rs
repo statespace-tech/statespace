@@ -275,7 +275,7 @@ fn answer(mut stream: TcpStream, fake: &Mutex<Fake>) {
             (200, json!({"holds": holds, "failed": []}))
         }
         ("POST", "/v1/resume") => {
-            let removed: Vec<Value> = fake.holds.drain(..).collect();
+            let removed: Vec<Value> = std::mem::take(&mut fake.holds);
             fake.changes.push(("resume".into(), body));
             (
                 200,
