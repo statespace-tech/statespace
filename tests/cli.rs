@@ -64,7 +64,8 @@ fn reports_errors_as_json() {
     assert!(error(&["stop", pull]).contains("ssp login"));
     assert!(error(&["resume", "https://github.com/acme/web"]).contains("ssp login"));
     assert!(error(&["stop", "https://gitlab.com/acme/web"]).contains("not a GitHub URL"));
-    assert!(error(&["stop", "no/such/folder"]).contains("not a directory"));
+    assert!(error(&["stop", "no/such/folder"]).contains("is not a target"));
+    assert!(error(&["stop", "sandbox/price", "--reason", "errors"]).contains("ssp login"));
     assert!(error(&["token", "revoke", "--all"]).contains("--yes"));
 }
 
@@ -196,6 +197,9 @@ struct Fake {
     config: Value,
     events: Vec<Value>,
     reports: Vec<Value>,
+    /// Stops and resumes, by path.
+    changes: Vec<(String, Value)>,
+    holds: Vec<Value>,
 }
 
 fn serve(fake: Arc<Mutex<Fake>>) -> u16 {
@@ -248,6 +252,41 @@ fn answer(mut stream: TcpStream, fake: &Mutex<Fake>) {
             fake.events.push(body);
             (202, json!({"accepted": 1}))
         }
+        ("POST", "/v1/stop") => {
+            let holds: Vec<Value> = body["targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|target| {
+                    json!({
+                        "app": target["app"],
+                        "experiment": target["experiment"],
+                        "arm": target["arm"],
+                        "reason": body["reason"],
+                        "actor": "safranchik",
+                        "actor_kind": "person",
+                        "via": "cli",
+                        "created_at": "2026-10-24T02:00:00Z",
+                    })
+                })
+                .collect();
+            fake.holds.extend(holds.clone());
+            fake.changes.push(("stop".into(), body));
+            (200, json!({"holds": holds, "failed": []}))
+        }
+        ("POST", "/v1/resume") => {
+            let removed: Vec<Value> = fake.holds.drain(..).collect();
+            fake.changes.push(("resume".into(), body));
+            (
+                200,
+                json!({
+                    "holds": removed,
+                    "failed": [{"target": {"app": "web"}, "error": "web has no hold"}],
+                }),
+            )
+        }
+        ("GET", "/v1/holds") => (200, json!(fake.holds)),
+        ("GET", "/v1/experiments" | "/v1/apps") => (200, json!([])),
         _ => (404, json!({"error": "not found"})),
     };
     let body = if response.is_null() {
@@ -606,6 +645,71 @@ fn docker_proxies_run_the_default_and_each_arm() {
         &format!("label=statespace.com/app={app}"),
     ]);
     assert!(left.is_empty(), "containers left: {left}");
+}
+
+/// `ssp stop` places holds with a reason, `ssp status` lists them, and
+/// `ssp resume` removes them and reports what it could not remove.
+#[test]
+fn stops_place_holds_that_resumes_remove() {
+    let fake = Arc::new(Mutex::new(Fake::default()));
+    let api = format!("http://127.0.0.1:{}", serve(fake.clone()));
+    let config = tempfile::tempdir().unwrap();
+    let ssp = |arguments: &[&str]| {
+        Command::cargo_bin("ssp")
+            .unwrap()
+            .env("STATESPACE_CONFIG", config.path().join("config.toml"))
+            .env("STATESPACE_URL", &api)
+            .env("SSP_TOKEN", "test")
+            .current_dir(config.path())
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+    let stopped = ssp(&["stop", "sandbox/price", "--reason", "checkout errors > 2%"]);
+    assert!(stopped.status.success(), "{stopped:?}");
+    let text = String::from_utf8_lossy(&stopped.stdout);
+    assert!(
+        text.contains("Stopped sandbox › price, by safranchik with ssp stop."),
+        "{text}"
+    );
+    assert!(
+        text.contains("To run them again: ssp resume sandbox/price"),
+        "{text}"
+    );
+    assert!(!text.contains("draft"), "{text}");
+    assert_eq!(
+        fake.lock().unwrap().changes[0],
+        (
+            "stop".to_owned(),
+            json!({
+                "targets": [{"app": "sandbox", "experiment": "price"}],
+                "reason": "checkout errors > 2%",
+            })
+        )
+    );
+
+    let status = ssp(&["--json", "status", "sandbox"]);
+    let document: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(document["arms"], json!([]));
+    assert_eq!(document["holds"][0]["experiment"], "price");
+    let status = String::from_utf8_lossy(&ssp(&["status"]).stdout).into_owned();
+    assert!(
+        status.contains(
+            "sandbox › price: stopped by safranchik with ssp stop at 2026-10-24 02:00 UTC \
+             · checkout errors > 2%"
+        ),
+        "{status}"
+    );
+
+    // A target with no hold fails the command, after the holds it removed.
+    let resumed = ssp(&["resume", "sandbox/price", "web"]);
+    assert!(!resumed.status.success());
+    assert!(
+        String::from_utf8_lossy(&resumed.stdout).contains("Removed the hold on sandbox › price.")
+    );
+    assert!(
+        String::from_utf8_lossy(&resumed.stderr).contains("could not resume web: web has no hold")
+    );
 }
 
 /// A small app that answers with its name and what it received.

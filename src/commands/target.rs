@@ -1,5 +1,6 @@
 //! Targets of `ssp status`, `ssp stop`, and `ssp resume`: a GitHub pull
-//! request or repository URL, or a path in a repository.
+//! request or repository URL, a path in a repository, an app, an experiment
+//! of an app, or an `exp/` branch.
 
 use std::{
     path::{Path, PathBuf},
@@ -10,6 +11,7 @@ use anyhow::{Context, bail};
 use serde_json::{Value, json};
 
 use crate::{
+    api::Api,
     cli::PROJECT_FILE,
     project::{Project, experiment_branch},
 };
@@ -22,7 +24,9 @@ pub enum Target {
     Repo(String),
     /// The arms of one app.
     App(String),
-    /// One arm, from the `exp/` branch checked out. `ssp status` only.
+    /// The arms of one experiment of an app.
+    Experiment { app: String, experiment: String },
+    /// One arm, named by its `exp/` branch.
     Arm {
         app: String,
         experiment: String,
@@ -32,30 +36,111 @@ pub enum Target {
 
 impl Target {
     /// What the API's `targets` takes.
-    pub fn json(&self) -> anyhow::Result<Value> {
-        Ok(match self {
+    pub fn json(&self) -> Value {
+        match self {
             Self::PullRequest { repo, number } => {
                 json!({ "pull_request": format!("https://github.com/{repo}/pull/{number}") })
             }
-            Self::Repo(repo) => json!({ "repo": repo }),
+            Self::Repo(repo) => json!({ "repo": format!("https://github.com/{repo}") }),
             Self::App(app) => json!({ "app": app }),
-            Self::Arm { .. } => bail!("an arm is stopped by its pull request URL"),
-        })
+            Self::Experiment { app, experiment } => json!({ "app": app, "experiment": experiment }),
+            Self::Arm {
+                app,
+                experiment,
+                arm,
+            } => json!({ "app": app, "experiment": experiment, "arm": arm }),
+        }
     }
 }
 
-/// A target from a URL or a path. In a path, the nearest `statespace.toml`
-/// names the app; without one, the target is the Git repository.
-pub fn resolve(value: &str) -> anyhow::Result<Target> {
+/// A target from what a person typed:
+///
+/// 1. A GitHub pull request or repository URL.
+/// 2. An `exp/` branch, such as `exp/price/lower`. The nearest
+///    `statespace.toml` names its app; without one, the only app that has
+///    the experiment.
+/// 3. A directory, such as `.`: the app of its nearest `statespace.toml`, or
+///    else its Git repository.
+/// 4. An experiment of an app, such as `sandbox/price`.
+/// 5. An app, such as `sandbox`.
+pub fn resolve(api: &Api, value: &str) -> anyhow::Result<Target> {
     if value.contains("://") {
         return url(value);
     }
-    let directory = PathBuf::from(value);
-    if !directory.is_dir() {
-        bail!(
-            "{value} is not a directory; pass a GitHub pull request or repository URL, or a path"
-        );
+    if let Some(names) = experiment_branch(value) {
+        let (experiment, arm) = names?;
+        let app = match project_app(Path::new("."))? {
+            Some(app) => app,
+            None => app_of_experiment(api, &experiment, value)?,
+        };
+        return Ok(Target::Arm {
+            app,
+            experiment,
+            arm,
+        });
     }
+    if Path::new(value).is_dir() {
+        return path(value);
+    }
+    let names: Vec<&str> = value.split('/').collect();
+    match names.as_slice() {
+        [app] if valid_name(app) => Ok(Target::App((*app).to_owned())),
+        [app, experiment] if valid_name(app) && valid_name(experiment) => Ok(Target::Experiment {
+            app: (*app).to_owned(),
+            experiment: (*experiment).to_owned(),
+        }),
+        _ => bail!(
+            "{value} is not a target; pass a GitHub pull request or repository URL, a path, \
+             an app such as sandbox, an experiment such as sandbox/price, or a branch such as \
+             exp/price/lower"
+        ),
+    }
+}
+
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 100
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// The app of the nearest `statespace.toml` from `directory`, in its Git
+/// repository.
+fn project_app(directory: &Path) -> anyhow::Result<Option<String>> {
+    let Ok(root) = git(directory, &["rev-parse", "--show-toplevel"]) else {
+        return Ok(None);
+    };
+    nearest_project(directory, Path::new(&root))
+        .map(|file| Project::load(&file).map(|project| project.app))
+        .transpose()
+}
+
+/// The one app that has `experiment`.
+fn app_of_experiment(api: &Api, experiment: &str, branch: &str) -> anyhow::Result<String> {
+    let experiments: Vec<Value> = api.get("/v1/experiments")?;
+    let mut apps: Vec<String> = experiments
+        .iter()
+        .filter(|candidate| candidate["name"] == experiment)
+        .filter_map(|candidate| candidate["app"].as_str().map(str::to_owned))
+        .collect();
+    apps.sort();
+    apps.dedup();
+    match apps.as_slice() {
+        [app] => Ok(app.clone()),
+        [] => bail!("no app has the experiment {experiment}, so {branch} names no arm"),
+        _ => bail!(
+            "the apps {} each have the experiment {experiment}; run the command in the app's \
+             folder, or name the pull request URL",
+            apps.join(", ")
+        ),
+    }
+}
+
+/// A target from a path. The nearest `statespace.toml` names the app;
+/// without one, the target is the Git repository.
+fn path(value: &str) -> anyhow::Result<Target> {
+    let directory = PathBuf::from(value);
     let root = git(&directory, &["rev-parse", "--show-toplevel"])
         .map(PathBuf::from)
         .with_context(|| {
@@ -80,7 +165,7 @@ pub fn here() -> anyhow::Result<Option<Target>> {
     if git(Path::new("."), &["rev-parse", "--show-toplevel"]).is_err() {
         return Ok(None);
     }
-    let target = resolve(".")?;
+    let target = path(".")?;
     if let Target::App(app) = &target
         && let Ok(branch) = git(Path::new("."), &["symbolic-ref", "--short", "HEAD"])
         && let Some(names) = experiment_branch(&branch)
@@ -96,8 +181,8 @@ pub fn here() -> anyhow::Result<Option<Target>> {
 }
 
 /// The GitHub owner of what `values` name: the owner in a URL, or of the
-/// origin remote of a path's repository. Without values, of the current
-/// directory. It names the workspace to act on.
+/// origin remote of a path's repository. For names, and without values, of
+/// the current directory. It names the workspace to act on.
 pub fn owner(values: &[String]) -> Option<String> {
     let first = values.first().map_or(".", String::as_str);
     let repo = if first.contains("://") {
@@ -106,7 +191,14 @@ pub fn owner(values: &[String]) -> Option<String> {
             _ => return None,
         }
     } else {
-        let remote = git(Path::new(first), &["remote", "get-url", "origin"]).ok()?;
+        // Names such as `sandbox/price` or `exp/price/lower` are read in the
+        // repository of the current directory.
+        let directory = if Path::new(first).is_dir() {
+            first
+        } else {
+            "."
+        };
+        let remote = git(Path::new(directory), &["remote", "get-url", "origin"]).ok()?;
         github_repository(&remote)?
     };
     repo.split_once('/').map(|(owner, _)| owner.to_owned())
@@ -196,6 +288,39 @@ mod tests {
             Some("globex")
         );
         assert_eq!(owner("https://gitlab.com/acme/atlas"), None);
+    }
+
+    fn resolve(value: &str) -> anyhow::Result<Target> {
+        // Port 9 refuses connections, so a lookup in the API fails.
+        let api = Api::new("http://127.0.0.1:9", None).unwrap();
+        super::resolve(&api, value)
+    }
+
+    #[test]
+    fn reads_names() {
+        assert_eq!(resolve("sandbox").unwrap(), Target::App("sandbox".into()));
+        assert_eq!(
+            resolve("sandbox/price").unwrap(),
+            Target::Experiment {
+                app: "sandbox".into(),
+                experiment: "price".into()
+            }
+        );
+        assert!(resolve("sandbox/price/lower").is_err());
+        assert!(resolve("sand box").is_err());
+        assert_eq!(
+            Target::Arm {
+                app: "sandbox".into(),
+                experiment: "price".into(),
+                arm: "lower".into()
+            }
+            .json(),
+            json!({"app": "sandbox", "experiment": "price", "arm": "lower"})
+        );
+        assert_eq!(
+            Target::Repo("acme/web".into()).json(),
+            json!({"repo": "https://github.com/acme/web"})
+        );
     }
 
     #[test]

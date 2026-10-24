@@ -59,24 +59,32 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Show what runs, and why. Without a target: the arm of the exp/ branch
-    /// checked out, else the app or repository you are in, else everything.
+    /// Show what runs, and why, and the holds that stop arms. Without a
+    /// target: the arm of the exp/ branch checked out, else the app or
+    /// repository you are in, else everything.
     Status {
-        /// A GitHub pull request or repository URL, or a path.
+        /// A pull request or repository URL, a path, an app (sandbox), an
+        /// experiment (sandbox/price), or a branch (exp/price/lower).
         targets: Vec<String>,
     },
-    /// Stop arms at once: their pull requests become drafts, and their
-    /// subjects get the default until the pull requests are ready again.
+    /// Stop arms at once with a hold in Statespace. Their subjects get the
+    /// default, and their pull requests do not change. A hold covers the
+    /// arms that start later too, until `ssp resume` removes it.
     Stop {
-        /// A GitHub pull request URL (its arms), a repository URL (every arm
-        /// of its apps), or a path such as `.` (the app of its statespace.toml).
+        /// What to hold: an app (sandbox), an experiment (sandbox/price), a
+        /// branch (exp/price/lower), a pull request URL (its arms), a
+        /// repository URL (its apps), or a path such as `.` (its app).
         #[arg(required = true)]
         targets: Vec<String>,
+        /// Why, such as "checkout errors > 2%". The pull request check, `ssp
+        /// status`, and the dashboard show it.
+        #[arg(long)]
+        reason: Option<String>,
     },
-    /// Mark the pull requests that a stop made drafts ready for review. Their
-    /// arms run again while they can merge.
+    /// Remove the hold on each target, and only that hold. Its arms run again
+    /// while their pull requests can merge, unless another hold covers them.
     Resume {
-        /// A GitHub pull request or repository URL, or a path.
+        /// The same kinds of target as `ssp stop`.
         #[arg(required = true)]
         targets: Vec<String>,
     },
@@ -282,6 +290,13 @@ mod tests {
             vec!["ssp", "status"],
             vec!["ssp", "status", "https://github.com/acme/web/pull/418"],
             vec!["ssp", "stop", "https://github.com/acme/web/pull/418", "."],
+            vec![
+                "ssp",
+                "stop",
+                "sandbox/price",
+                "--reason",
+                "checkout errors > 2%",
+            ],
             vec!["ssp", "resume", "https://github.com/acme/web"],
             vec![
                 "ssp",

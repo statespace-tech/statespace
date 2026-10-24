@@ -26,9 +26,9 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
         .unwrap_or_else(|| DEFAULT_ENDPOINT.into());
     // Commands about repositories act on the workspace of their owner.
     let workspace = cli.workspace.or_else(|| match &cli.command {
-        Command::Status { targets } | Command::Stop { targets } | Command::Resume { targets } => {
-            target::owner(targets)
-        }
+        Command::Status { targets }
+        | Command::Stop { targets, .. }
+        | Command::Resume { targets } => target::owner(targets),
         _ => None,
     });
     let api = Api::new(&endpoint, cli.token.or(settings.token))?.with_workspace(workspace);
@@ -42,7 +42,7 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
             dry_run,
         } => ci::apply(&api, &image, &file, dry_run),
         Command::Status { targets } => experiment::status(&api, &targets),
-        Command::Stop { targets } => experiment::stop(&api, &targets),
+        Command::Stop { targets, reason } => experiment::stop(&api, &targets, reason.as_deref()),
         Command::Resume { targets } => experiment::resume(&api, &targets),
         Command::Token(command) => token::run(&api, command),
         Command::Proxy(arguments) => proxy::run(api, *arguments),
