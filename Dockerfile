@@ -1,6 +1,5 @@
-# The ssp image, for `ssp proxy --default` beside an app and for
-# `ssp controller kubernetes`. The release workflow builds it from the musl binaries in
-# image/<arch>/ssp.
+# The ssp image, for `ssp proxy cloudrun` and `ssp proxy kubernetes`. The release
+# workflow builds it from the musl binaries in image/<arch>/ssp.
 FROM alpine:3.22
 ARG TARGETARCH
 RUN apk add --no-cache ca-certificates

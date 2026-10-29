@@ -1,27 +1,33 @@
 # Contributor instructions
 
-Experiments run from pull requests of `exp/` branches. `ssp apply` records the image that
-CI built, `ssp status` shows what runs, `ssp stop` and `ssp resume` place and remove holds
-in Statespace, and settings live in `statespace.toml`. `ssp proxy` is a reverse proxy that assigns each request's
-subject and forwards it to the app's default or an experiment's arm; on Docker it also
-runs them as containers. `ssp controller kubernetes` runs the arms on Kubernetes.
+An arm is a commit that runs on a share of an app's live traffic, beside a control: a
+copy of the image that live runs. `ssp app`, `ssp arm`, and `ssp token` call the
+Statespace API. `ssp init` writes a starter `statespace.toml`. `ssp proxy docker`,
+`ssp proxy cloudrun`, and `ssp proxy kubernetes` run a reverse proxy in front of the
+app's live service. Every proxy instance routes. Only the instance that holds the app's
+lease starts and stops the control and the arms, through the `Orchestrator` trait in
+`src/proxy/orchestrator`.
+
+`../design.md` is the source of truth for the model.
 
 ## Rules
 
-- Print text by default and exactly one JSON document with `--json`, except `ssp proxy`
-  and `ssp controller`. Send notes and warnings to standard error. Errors exit 1, as
-  `{"error": "..."}` with `--json`.
-- Change settings through commits to `statespace.toml`, not commands. Read data through
-  SQL. Add no command that only reads recorded data.
+- Use `ssp <noun> <verb> <object>`. The object is positional. `--app` names the app of an
+  arm or a token.
+- Print text by default and exactly one JSON document with `--json`, except `ssp proxy`.
+  Send notes and warnings to standard error. Errors exit 1, as `{"error": "..."}` with
+  `--json`.
+- Give `--note` (1 to 200 characters, one line) to every command that changes something.
+- Keep settings in `statespace.toml`. Add no proxy flag for a setting.
 - Keep commands noninteractive, except `ssp login`.
-- Print secrets only in the response that creates them.
-- Require `--yes` for irreversible commands.
-- `ssp proxy` must never block or slow the app: drop events rather than wait, and send a
-  subject to the default rather than fail its request.
-- Run only images that Statespace recorded from the repository's CI: arms of pull requests
-  that can merge, and controls whose image a proxy or controller ran as the default.
-- Never record the default.
-- Never change the bucket function: it would move subjects of running experiments.
+- Print secrets only in the response that creates them. Never pass `STATESPACE_*`
+  variables to the control, the arms, or live.
+- `ssp proxy` must never block or slow the app: drop rows rather than wait, and send a
+  request to live rather than fail it.
+- Never record live.
+- Never change the bucket function: it would move the subjects of running arms.
+- Keep no legacy: when the design changes, remove the old way.
+- Write docs, READMEs, and skills in Simplified Technical English. Never name customers.
 
 ## Checks
 
@@ -32,8 +38,11 @@ cargo test --locked
 sh -n install.sh && shellcheck install.sh
 # Needs Docker
 STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
+# Needs a kind cluster selected in kubectl
+STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 ```
 
 ## Commits
 
-Use Conventional Commits, such as `feat(proxy): restart arms with backoff`.
+Use Conventional Commits, such as `feat(proxy): restart units with backoff`. Add no AI
+attribution.

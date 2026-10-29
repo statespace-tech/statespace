@@ -1,28 +1,47 @@
 ---
 name: statespace
-description: A/B test versions of an app in production with Statespace, through pull requests. Use when asked to set up Statespace, test a code change on live traffic, compare a branch with production, roll out a change gradually, or read experiment results.
+description: Run a commit of an app on a share of live traffic beside a control with Statespace, and read the evidence. Use when asked to set up Statespace, test a code change on live traffic, compare a commit with production, or read arm results.
 ---
 
 # Statespace
 
-Statespace lets you A/B test multiple versions of an app in production. Experiments run
-from pull requests:
+Statespace runs a commit of an app on a small share of live traffic, beside a control,
+and records what happens.
 
-- A branch named `exp/<name>` is an experiment with one **arm**. To compare more arms,
-  name the branches `exp/<experiment>/<arm>`.
-- `statespace.toml` on the branch gives the arm's `share` of the app's subjects, and its
-  `subject` and `eligibility` rules.
-- The arm runs the latest commit while GitHub says that its pull request can merge.
-  GitHub's branch protection decides who must approve.
-- Each arm is compared with a **control**: the default that its branch started from. The
-  control gets the share of the largest arm with the same base.
-- All other subjects get the **default**, which is the deployed app.
-- `ssp proxy` sends each subject to its arm. Each arm records all lines that it prints.
+- An **app** is one running copy of a service, such as `shop-prod`. A proxy is in front
+  of it.
+- An **arm** is a commit. The commit is its ID. You add it with `ssp arm add`.
+- The **control** is a copy of the image that live runs now. It gets as many subjects
+  as the largest arm.
+- **Live** gets everyone else. Statespace never records live.
+- Settings are in `statespace.toml`. They change only by commits. The settings of the
+  build that live runs apply.
+- The evidence is on the arm's commit, as the commit status `statespace/<app>`, and in
+  `ssp arm show`.
 
-You cannot start an arm with a command. You push commits and open pull requests; people
-or review agents approve them. Use SQL to read data. Add `--json` to each `ssp` command
-to get one JSON document. With `--json`, an error is `{"error": "..."}` on standard
-error, with exit status 1.
+Statespace never starts an arm by itself. A person or an agent with permission on the
+GitHub repository adds it. Add `--json` to each `ssp` command to get one JSON document.
+With `--json`, an error is `{"error": "..."}` on standard error, with exit status 1. No
+command asks a question, except `ssp login`.
+
+## Credentials
+
+The CLI uses the first credential that it finds:
+
+1. `STATESPACE_TOKEN`.
+2. The session of `ssp login`.
+3. A GitHub user token in `GH_TOKEN` or `GITHUB_TOKEN` (`gho_`, `ghp_`, `ghu_`,
+   `github_pat_`).
+4. In GitHub Actions, the job's OIDC token. The job needs `permissions: id-token: write`.
+
+Check the credential first:
+
+```shell
+ssp whoami --json
+```
+
+If it fails and you have no GitHub token, ask the user to run `ssp login`. This command
+opens a browser, so the user must run it.
 
 ## Set up
 
@@ -32,154 +51,115 @@ error, with exit status 1.
    curl -fsSL https://statespace.com/install.sh | bash
    ```
 
-2. Check the sign-in. If `ssp whoami` fails, ask the user to run `ssp login`. This
-   command opens a browser, so the user must run it.
+2. Ask the user to install the Statespace GitHub App on the repository from
+   https://statespace.com.
+
+3. In the app's folder, write `statespace.toml` and get the CI step. The command fails
+   when the file exists. It changes only the working copy.
 
    ```shell
-   ssp whoami --json
+   ssp init --json
    ```
 
-3. If the repository has no `statespace.toml`, ask the user to select **Connect GitHub**
-   on https://statespace.com and install the Statespace GitHub App on the repository.
-   The App opens a "Set up Statespace" pull request with `statespace.toml` and the `exp/`
-   workflow. Review it with the user. If the repository has no `Dockerfile`, complete the
-   build step of the workflow. Then ask the user to merge it, to add this step after the
-   build in the workflow that builds production, and to require one approval in branch
-   protection.
+4. Add the step after the image build, in the workflow that builds every commit that can
+   become an arm. Give the image by digest. Commit the workflow and `statespace.toml`.
 
    ```yaml
    - uses: statespace-tech/action@v1
      with:
        image: <registry>/<image>@${{ steps.build.outputs.digest }}
+       path: <folder of statespace.toml>
    ```
 
-4. Get a database URL to read the data. The token secret shows only once. Do not write it
-   to files that Git tracks.
+5. Add an app for each running copy. In the app's folder, the command reads the
+   repository and the folder. Read what it detected.
 
    ```shell
-   ssp token create --name agent-analyst --preset analyst --app <app> --json
-   export DATABASE_URL='<database_url from the output>'
+   ssp app add <app> --note "<what this copy is>" --json
    ```
 
-If the user did not give a task, stop after the setup. Then ask which change to test.
-
-## The loop
-
-1. Before you change code, read what other experiments tested and found.
+6. Ask the user to add a runtime token and to run `ssp proxy` in front of the app. The
+   token shows only once. Do not write it to files that Git tracks.
 
    ```shell
-   ssp status --json
-   gh pr list --search "head:exp/" --state all --limit 20
-   psql "$DATABASE_URL" -c "
-     SELECT data->>'event' AS event, count(*) FROM <app>.output
-     WHERE data IS NOT NULL
-     GROUP BY 1 ORDER BY 2 DESC LIMIT 20"
+   ssp token add --app <app> --note "<where the proxy runs>" --json
    ```
 
-2. Start a branch from the latest default branch. Make one change. To measure a new
-   outcome, print a JSON line where it occurs. Add the subject from the
-   `x-statespace-subject` request header:
-   `{"event": "<what occurred>", "subject": "<subject id>", ...fields}`.
+7. Check that a proxy reports and that the app has a live commit:
 
    ```shell
-   git switch -c exp/<name> origin/main
+   ssp app show <app> --json
    ```
 
-3. Set the share in `statespace.toml`. Start small, such as `share = 0.02`. Check the
-   file and see the plan with an image that is in the registry, such as the production
-   image. Nothing is recorded.
+## Test a change
+
+1. Make the change in a commit. Push it, so that CI builds it and records the build.
+2. Add the commit as an arm. The command prints the build that it chose.
 
    ```shell
-   ssp apply --dry-run --image <registry>/<image>:<tag> --json
+   ssp arm add <commit> --app <app> --share 0.05 --note "<hypothesis>" --json
    ```
 
-4. Make sure that the image starts and answers requests.
+   If it fails with "No build of <commit>", wait for CI, then try again.
+3. Read the arm's state, the reason when it waits, and the evidence:
 
    ```shell
-   docker build -t <app>:mine . && docker run --rm -p 8000:8000 <app>:mine
+   ssp arm show <commit> --app <app> --json
    ```
 
-5. Push, and open a pull request. In the description, give the hypothesis: why the change
-   can move the outcome. CI records each commit with `ssp apply`.
+   - `state` is `starting`, `running`, `waiting`, `stopped`, or `removed`.
+   - `totals` has `subjects`, `requests`, `errors`, `p50_ms`, and `p90_ms` for the arm
+     and the control. `metrics` has each `[[metric]]` for both sides.
+   - `split` tells whether the subjects match the shares. Do not trust evidence when
+     `split.ok` is false.
+   - `ahead` and `behind` give the distance from the live commit.
+4. Decide with the user. Statespace gives evidence, not verdicts.
+5. End the arm. Statespace keeps its evidence.
 
    ```shell
-   git push -u origin exp/<name>
-   gh pr create --fill
+   ssp arm remove <commit> --app <app> --note "<decision>" --json
    ```
 
-6. Read the `Statespace` check. It tells whether the arm runs, and why it waits: for
-   approval, for a check, for a deploy of its base, or for traffic. Do not try to go
-   around a wait. If the check failed, CI could not record the commit; read why, and fix
-   it. While the arm runs, the check shows the subjects, requests, errors, latency, and
-   events of each arm and control, and whether the split matches the shares.
+## Stop in an emergency
 
-   ```shell
-   gh pr checks
-   ssp status --json
-   ```
+A stop places a hold. The arm leaves traffic in seconds.
 
-   To look at the arm yourself, find a URL of a proxy that runs with `--overrides`, such
-   as the team's staging site. Add `?ssp_arm=<branch>` to it, such as
-   `https://staging.acme.com/?ssp_arm=exp/price/lower`. A cookie keeps the arm for an
-   hour. For an API, send the header on each request:
+```shell
+ssp arm stop <commit> --app <app> --note "<why>" --json
+ssp app stop <app> --note "<why>" --json
+```
 
-   ```shell
-   curl https://staging-api.acme.com/orders -H 'ssp-arm: exp/price/lower'
-   ```
+`ssp arm resume` and `ssp app resume` remove exactly the hold that they name.
 
-   Only running arms open; for another branch, the proxy lists the arms that run.
-   Statespace records these visits with the reason `override`. They do not count as
-   subjects, but the events that the arm prints do count, so do not send test purchases
-   to production.
+## Events and metrics
 
-7. Wait for outcomes. Then compare each arm with its control, and make a decision: push a
-   fix, raise the share in `statespace.toml`, make the pull request a draft to stop it, or
-   ask to merge. Write the evidence in a pull request comment.
+Add events and metrics to `statespace.toml` in a commit. They take effect when that
+commit's build runs as live.
 
-   ```shell
-   psql "$DATABASE_URL" -c "
-     SELECT * FROM <app>.sample_ratio
-     WHERE experiment = '<experiment>'"
-   psql "$DATABASE_URL" -c "
-     SELECT arm, commit,
-            count(DISTINCT subject_id) AS subjects,
-            count(DISTINCT subject_id)
-              FILTER (WHERE data->>'event' = '<event>') AS converted
-     FROM <app>.logs
-     WHERE experiment = '<experiment>'
-     GROUP BY arm, commit"
-   ```
+```toml
+[[event]]
+name = "signup"
+match = 'request.method == "POST" && request.path == "/signup" && request.status < 300'
+
+[[event]]
+name = "fatal"
+match = 'stderr.text.contains("FATAL")'
+
+[[metric]]
+label = "signup rate %"
+value = '100.0 * events["signup"].subjects / subjects'
+```
+
+- Each `match` uses one source: `request`, `stdout`, or `stderr`.
+- `request` has `method`, `path`, `query`, `headers`, `cookies`, `status`, and `ms`.
+- `stdout` and `stderr` have `text` and `json` (the line as a JSON object, or `{}`).
+- A missing field is no match.
+- Output events have `.lines` only. Request events have `.lines` and `.subjects`.
 
 ## Rules
 
-- Put one idea in each arm. Then a result shows its cause.
-- Compare an arm with the control of its base. In `<app>.arms`, that control's `commit`
-  is the arm's `base_commit`. Do not compare an arm with the default.
-- Each new commit needs approval again before it runs, unless the repository says
-  otherwise. Push only commits that you want users to see.
-- Arms of one experiment must use the same `subject` and `eligibility`. To test another
-  audience, use another experiment name.
-- Merging an arm ends its experiment. The other arms run again only after you update
-  them with the default branch.
-- Each arm uses the same database and services as the default. Do not change the database
-  schema in an arm. Put migrations in the deployed code first.
-- Compare the arms before you raise the share. A difference within noise is not evidence.
-- If `sample_ratio` shows a mismatch, the subjects did not split as the shares tell. Do
-  not trust the comparison. Find `arm-unavailable` runs, and read the `lifecycle` and
-  `stderr` lines of the arm. Repair the arm before you read outcomes.
-- A rate such as errors needs a denominator. Divide by the rows of the arm in `requests`.
-- `ssp stop` is for emergencies. It places a hold in Statespace, and the arms stop at
-  once. The pull request does not change. Name what to hold: an arm by its branch
-  (`ssp stop exp/price/lower`), an experiment (`ssp stop <app>/price`), or an app
-  (`ssp stop <app>`). Give a reason: `--reason "checkout errors > 2%"`. Ask the user before
-  you run it, unless the arm harms users.
-- `ssp resume <target>` removes only the hold on that target. Other holds stay. Run
-  `ssp status --json` to see every hold, who placed it, and why. Do not remove a hold that
-  you did not place without asking the user.
-- While a hold covers an arm, its `Statespace` check fails, so the pull request cannot
-  merge where the check is required. A push does not remove the hold.
-- To stop an arm in the normal way, without an emergency, run `gh pr ready <number> --undo`.
-- Change settings with commits to `statespace.toml`. App settings, such as `max_traffic`,
-  take effect when they merge to the default branch.
-- `ssp token revoke --all` needs `--yes`. You cannot undo it. Ask the user before you run
-  it.
+- Do not add an arm without the user's consent.
+- Use `--note` on each command that changes something.
+- Never put a token in a file that Git tracks.
+- Read the reason when an arm waits. Do not add arms to work around `max_arms` or
+  `max_traffic`.

@@ -18,17 +18,28 @@ cargo test --locked
 sh -n install.sh && shellcheck install.sh
 ```
 
-The Docker test runs `ssp proxy` with real containers, a local registry, and a stand-in
-for Statespace. It needs Docker.
+The Docker test runs `ssp proxy docker` with real containers, a local registry, and a
+stand-in for Statespace. It needs Docker.
 
 ```shell
 STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
 ```
 
+The Kubernetes test runs `ssp proxy kubernetes` against a kind cluster. Select the
+cluster in kubectl first.
+
+```shell
+kind create cluster --name ssp-test
+STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
+```
+
+The Cloud Run tests use stand-ins for the Admin API, the metadata server, and Cloud
+Logging. They run with `cargo test`.
+
 Run the CLI against a local service by setting its URL.
 
 ```shell
-STATESPACE_URL=http://localhost:8080 cargo run -- experiment list
+STATESPACE_API=http://localhost:8080 cargo run -- app list
 ```
 
 ## Pull requests
