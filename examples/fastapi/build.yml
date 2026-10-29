@@ -1,15 +1,17 @@
-# Build the shop's default from main, record it, and deploy it. Copy this file
-# to .github/workflows/production.yml, and replace the deploy step with yours.
-name: Production
+# Build the shop's image for every pushed commit and record the build, so any
+# commit can become an arm. Copy this file to .github/workflows/build.yml in
+# the shop's repository. Deploy live in your own workflow, as before.
+name: Build
 on:
   push:
-    branches: [main]
+    branches: ["**"]
 permissions:
   contents: read
   packages: write
+  # The Statespace action proves the repository and the commit with an OIDC token.
   id-token: write
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -23,11 +25,7 @@ jobs:
         with:
           push: true
           tags: ghcr.io/acme/shop:${{ github.sha }}
-      # Arms based on this commit start once a proxy runs this image.
       - uses: statespace-tech/action@v1
         with:
           image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
-      - name: Deploy
-        run: |
-          image=ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
-          echo "Write $image to /etc/shop/image on each machine, then run systemctl reload shop"
+          path: .

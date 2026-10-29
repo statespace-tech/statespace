@@ -1,9 +1,8 @@
 """A small shop for trying Statespace with FastAPI.
 
-Run it behind `ssp proxy`. It reads the subject from the `x-statespace-subject`
-header and prints a JSON line for each signup and purchase; Statespace records
-every line the arms print. An arm is an exp/ branch of this file, built into an
-image and signed in CI.
+Run it behind `ssp proxy`. It prints a JSON line for each signup and purchase.
+The `[[event]]` rules in statespace.toml count them for the control and each arm.
+An arm is a commit of this file, built into an image in CI.
 """
 
 import json
@@ -13,7 +12,7 @@ import os
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-# The change an arm tests. A branch might lower the price or rewrite checkout.
+# The change an arm tests. A commit might lower the price or rewrite checkout.
 PRICE = 40
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -22,7 +21,7 @@ app = FastAPI()
 
 
 def event(name: str, subject: str | None, **data: object) -> None:
-    """Print one JSON line. Its `subject` ties it to the subject's arm in SQL."""
+    """Print one JSON line, which an `[[event]]` rule can match."""
     print(json.dumps({"event": name, "subject": subject, **data}), flush=True)
 
 
@@ -41,7 +40,7 @@ def health() -> dict[str, str]:
 
 @app.get("/")
 def home() -> dict[str, object]:
-    return {"arm": os.environ.get("STATESPACE_ARM", "default"), "price": PRICE}
+    return {"price": PRICE}
 
 
 @app.post("/signup")
@@ -56,7 +55,7 @@ def checkout(body: Order, subject: str | None = Header(None, alias="x-statespace
     if body.quantity < 1:
         raise HTTPException(422, "quantity must be at least 1")
     amount = PRICE * body.quantity
-    # Logs can hold secrets. `ssp proxy --redact` removes them before they leave the machine.
+    # Logs can hold secrets. `redact` in statespace.toml removes them before they leave.
     log.info("charged %s with key %s", amount, os.environ.get("PAYMENT_KEY", "sk_test_local"))
     event("purchase", subject, amount=amount, quantity=body.quantity)
     return {"amount": amount}

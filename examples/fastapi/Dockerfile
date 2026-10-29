@@ -1,5 +1,4 @@
-# The shop's image. The default and every arm are images built from this
-# file: the default from main, each arm from an exp/ branch.
+# The shop's image. CI builds it for every commit, so any commit can be an arm.
 FROM python:3.12-slim
 
 WORKDIR /app

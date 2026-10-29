@@ -1,4 +1,27 @@
-# Copy to the root of the shop's repository. Each exp/ branch reads its own copy.
-app = "shop"
-# The share of all the shop's subjects that an arm gets. Its control gets as many.
-share = 0.05
+# The shop's settings. Copy this file to the root of the shop's repository.
+# The settings of the build that live runs apply.
+max_traffic = 0.2
+max_arms = 3
+# Logs can hold payment keys. Remove them before lines leave the machine.
+redact = ['sk_live_\w+']
+
+[[event]]
+name = "signup"
+match = 'request.method == "POST" && request.path == "/signup" && request.status < 300'
+
+[[event]]
+name = "purchase"
+match = 'stdout.json.event == "purchase"'
+
+[[metric]]
+label = "signup rate %"
+value = '100.0 * events["signup"].subjects / subjects'
+
+[[metric]]
+label = "purchases per request"
+value = 'events["purchase"].lines / requests'
+
+# The staging copy: all traffic may go to arms, and testers may pick one.
+[app.shop-dev]
+max_traffic = 1.0
+overrides = true
