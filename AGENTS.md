@@ -1,19 +1,19 @@
 # Contributor instructions
 
-An arm is a commit that runs on a share of an app's live traffic, beside a control: a
-copy of the image that live runs. `ssp app`, `ssp arm`, and `ssp token` call the
-Statespace API. `ssp init` writes a starter `statespace.toml`. `ssp proxy docker`,
-`ssp proxy cloudrun`, and `ssp proxy kubernetes` run a reverse proxy in front of the
-app's live service. Every proxy instance routes. Only the instance that holds the app's
-lease starts and stops the control and the arms, through the `Orchestrator` trait in
-`src/proxy/orchestrator`.
+An experiment compares commits of one app. Each arm is one commit with an exact share
+of the app's subjects. `ssp app`, `ssp experiment`, and `ssp token` call the Statespace
+API. `ssp proxy docker`, `ssp proxy cloudrun`, and `ssp proxy kubernetes` run a reverse
+proxy in front of the app's live service. Every proxy instance routes requests to the
+arms of running experiments, in the order of `statespace.toml`. Only the instance that
+holds the app's lease starts and stops units, one for each arm of each starting or
+running experiment, through the `Orchestrator` trait in `src/proxy/orchestrator`.
 
 `../design.md` is the source of truth for the model.
 
 ## Rules
 
 - Use `ssp <noun> <verb> <object>`. The object is positional. `--app` names the app of an
-  arm or a token.
+  experiment or a token. Leave it optional where the folder can tell the app.
 - Print text by default and exactly one JSON document with `--json`, except `ssp proxy`.
   Send notes and warnings to standard error. Errors exit 1, as `{"error": "..."}` with
   `--json`.
@@ -21,12 +21,14 @@ lease starts and stops the control and the arms, through the `Orchestrator` trai
 - Keep settings in `statespace.toml`. Add no proxy flag for a setting.
 - Keep commands noninteractive, except `ssp login`.
 - Print secrets only in the response that creates them. Never pass `STATESPACE_*`
-  variables to the control, the arms, or live.
+  variables to units or live.
 - `ssp proxy` must never block or slow the app: drop rows rather than wait, and send a
   request to live rather than fail it.
 - Never record live.
-- Never change the bucket function: it would move the subjects of running arms.
+- Never change the bucket function: it would move the subjects of running experiments.
 - Keep no legacy: when the design changes, remove the old way.
+- Keep the starter `statespace.toml` and the CI step in `skills/statespace/SKILL.md`
+  current. There is no `ssp init`.
 - Write docs, READMEs, and skills in Simplified Technical English. Never name customers.
 
 ## Checks

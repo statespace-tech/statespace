@@ -1,28 +1,35 @@
 ---
 name: statespace
-description: Run a commit of an app on a share of live traffic beside a control with Statespace, and read the evidence. Use when asked to set up Statespace, test a code change on live traffic, compare a commit with production, or read arm results.
+description: Run commits of an app as arms of an experiment on shares of live traffic with Statespace, and read the evidence. Use when asked to set up Statespace, test a code change on live traffic, compare a commit with production, or read experiment results.
 ---
 
 # Statespace
 
-Statespace runs a commit of an app on a small share of live traffic, beside a control,
-and records what happens.
+Statespace runs commits of an app on small shares of live traffic and records
+what happens.
 
-- An **app** is one running copy of a service, such as `shop-prod`. A proxy is in front
-  of it.
-- An **arm** is a commit. The commit is its ID. You add it with `ssp arm add`.
-- The **control** is a copy of the image that live runs now. It gets as many subjects
-  as the largest arm.
-- **Live** gets everyone else. Statespace never records live.
-- Settings are in `statespace.toml`. They change only by commits. The settings of the
-  build that live runs apply.
-- The evidence is on the arm's commit, as the commit status `statespace/<app>`, and in
-  `ssp arm show`.
+- An **app** is one running copy of a service, such as `shop-prod`. A proxy is
+  in front of it.
+- An **experiment** compares commits in one app. Its table in
+  `statespace.toml` defines it, such as `[experiment.checkout]`.
+- An **arm** is one commit in one experiment, with an exact share of the
+  app's subjects, such as `a1b2c3d=0.05`. The commit is the arm's ID.
+- The **reference** is the arm that you added first. Evidence compares each
+  arm with it. To compare a change with what runs now, add the live commit as
+  an arm.
+- **Live** gets every request that no experiment takes. Statespace never
+  records live.
+- Each `start` begins a new **version**. Evidence is per version.
+- Settings and experiment definitions are in `statespace.toml`. They change
+  only by commits. The file in the build that live runs applies.
+- The evidence is on each arm's commit, as the commit status
+  `statespace/<app>/<experiment>`, and in `ssp experiment show`.
 
-Statespace never starts an arm by itself. A person or an agent with permission on the
-GitHub repository adds it. Add `--json` to each `ssp` command to get one JSON document.
-With `--json`, an error is `{"error": "..."}` on standard error, with exit status 1. No
-command asks a question, except `ssp login`.
+Statespace never starts an experiment by itself. A person or an agent with
+permission on the GitHub repository starts it. Add `--json` to each `ssp`
+command to get one JSON document. With `--json`, an error is
+`{"error": "..."}` on standard error, with exit status 1. No command asks a
+question, except `ssp login`.
 
 ## Credentials
 
@@ -30,9 +37,10 @@ The CLI uses the first credential that it finds:
 
 1. `STATESPACE_TOKEN`.
 2. The session of `ssp login`.
-3. A GitHub user token in `GH_TOKEN` or `GITHUB_TOKEN` (`gho_`, `ghp_`, `ghu_`,
-   `github_pat_`).
-4. In GitHub Actions, the job's OIDC token. The job needs `permissions: id-token: write`.
+3. A GitHub user token in `GH_TOKEN` or `GITHUB_TOKEN` (`gho_`, `ghp_`,
+   `ghu_`, `github_pat_`).
+4. In GitHub Actions, the job's OIDC token. The job needs
+   `permissions: id-token: write`.
 
 Check the credential first:
 
@@ -40,8 +48,8 @@ Check the credential first:
 ssp whoami --json
 ```
 
-If it fails and you have no GitHub token, ask the user to run `ssp login`. This command
-opens a browser, so the user must run it.
+If it fails and you have no GitHub token, ask the user to run `ssp login`.
+This command opens a browser, so the user must run it.
 
 ## Set up
 
@@ -53,113 +61,210 @@ opens a browser, so the user must run it.
 
 2. Ask the user to install the Statespace GitHub App on the repository from
    https://statespace.com.
-
-3. In the app's folder, write `statespace.toml` and get the CI step. The command fails
-   when the file exists. It changes only the working copy.
-
-   ```shell
-   ssp init --json
-   ```
-
-4. Add the step after the image build, in the workflow that builds every commit that can
-   become an arm. Give the image by digest. Commit the workflow and `statespace.toml`.
-
-   ```yaml
-   - uses: statespace-tech/action@v1
-     with:
-       image: <registry>/<image>@${{ steps.build.outputs.digest }}
-       path: <folder of statespace.toml>
-   ```
-
-5. Add an app for each running copy. In the app's folder, the command reads the
-   repository and the folder. Read what it detected.
+3. Write `statespace.toml` in the app's folder. Start from the file in
+   [Starter statespace.toml](#starter-statespacetoml). Change the event
+   rules and the metric to match the app.
+4. Add the step of `statespace-tech/action@v1` after the image build, in the
+   workflow that builds every commit that can become an arm. See
+   [CI step](#ci-step).
+5. Commit `statespace.toml` and the workflow, and push.
+6. Add an app for each running copy. In the app's folder, the command reads
+   the repository and the folder. Read what it detected.
 
    ```shell
    ssp app add <app> --note "<what this copy is>" --json
    ```
 
-6. Ask the user to add a runtime token and to run `ssp proxy` in front of the app. The
-   token shows only once. Do not write it to files that Git tracks.
+7. Ask the user to add a runtime token and to run `ssp proxy` in front of the
+   app. The token shows only once. Do not write it to files that Git tracks.
 
    ```shell
    ssp token add --app <app> --note "<where the proxy runs>" --json
    ```
 
-7. Check that a proxy reports and that the app has a live commit:
+8. Make sure that a proxy reports and that the app has a live commit:
 
    ```shell
    ssp app show <app> --json
    ```
 
+## Starter statespace.toml
+
+Put this file in the folder of the app's code. It has one experiment, one
+shared event, and one metric. Keep the comments.
+
+```toml
+# Statespace settings for every app built from this folder.
+# A change applies when the build of its commit runs as live.
+# Reference: https://docs.statespace.com
+
+# Let testers pick an arm with ?ssp_arm=<experiment>:<commit>.
+overrides = false
+
+# Regular expressions. The proxy replaces each match with
+# [redacted] before output leaves the machine.
+redact = []
+
+# A shared event: it counts in every experiment. Each rule
+# uses one source: request, stdout, or stderr.
+[[event]]
+name = "signup"
+match = '''
+request.method == "POST"
+  && request.path == "/signup"
+  && request.status < 300
+'''
+
+# A shared metric: a formula over the totals of one arm.
+# The first metric is the headline.
+[[metric]]
+label = "signup rate %"
+value = '100.0 * events["signup"].subjects / subjects'
+
+# An experiment. The order of the experiment tables is
+# their priority. Set its arms with:
+#   ssp experiment update signup --arm <commit>=<share>
+[experiment.signup]
+# The subject ID. The default is the visitor cookie that
+# the proxy sets.
+# subject = 'request.headers["x-user-id"]'
+# Who may enter. The default is everyone.
+# eligibility = 'request.headers["cf-ipcountry"] == "US"'
+# The most that the shares of its arms add up to.
+max_share = 0.2
+
+# Settings for one app replace the shared settings.
+# [app.shop-dev]
+# overrides = true
+#
+# [app.shop-dev.experiment.signup]
+# max_share = 1.0
+```
+
+- Experiment names have 1 to 40 lowercase letters, digits, and `-`.
+- `[[experiment.<name>.event]]` and `[[experiment.<name>.metric]]` add events
+  and metrics for one experiment only.
+- CI checks the file when it records a build. A wrong key or a CEL error
+  fails the step.
+
+## CI step
+
+Add this step after the image build. Give the image by digest. The job needs
+`permissions: id-token: write`.
+
+```yaml
+- uses: statespace-tech/action@v1
+  with:
+    image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
+    path: .          # the folder of statespace.toml
+    # app: shop-prod # optional: a build for one app only
+```
+
 ## Test a change
 
-1. Make the change in a commit. Push it, so that CI builds it and records the build.
-2. Add the commit as an arm. The command prints the build that it chose.
+1. Make the change in a commit. Push it, so that CI builds it and records the
+   build.
+2. Get the live commit:
 
    ```shell
-   ssp arm add <commit> --app <app> --share 0.05 --note "<hypothesis>" --json
+   ssp app show <app> --json
    ```
 
-   If it fails with "No build of <commit>", wait for CI, then try again.
-3. Read the arm's state, the reason when it waits, and the evidence:
+3. Set the arms of the experiment: the live commit first, so that it is the
+   reference, then the new commit. A share is a fraction, such as `0.05`.
+   Never write `5` or `5%`.
 
    ```shell
-   ssp arm show <commit> --app <app> --json
+   ssp experiment update <experiment> --app <app> \
+     --arm <live commit>=0.05 --arm <commit>=0.05 --json
    ```
 
-   - `state` is `starting`, `running`, `waiting`, `stopped`, or `removed`.
-   - `totals` has `subjects`, `requests`, `errors`, `p50_ms`, and `p90_ms` for the arm
-     and the control. `metrics` has each `[[metric]]` for both sides.
-   - `split` tells whether the subjects match the shares. Do not trust evidence when
-     `split.ok` is false.
-   - `ahead` and `behind` give the distance from the live commit.
-4. Decide with the user. Statespace gives evidence, not verdicts.
-5. End the arm. Statespace keeps its evidence.
+   - The command prints what changed and the full list of arms.
+   - It fails with "No build of <commit>" when CI did not record the build
+     yet. Wait for CI, then try again.
+   - `--arm <commit>=0` removes an arm. Arms that you do not name do not
+     change.
+4. Start the experiment. The command waits until each arm is ready. When an
+   arm is not ready in 5 minutes, nothing starts, and the command gives the
+   reason for each arm.
 
    ```shell
-   ssp arm remove <commit> --app <app> --note "<decision>" --json
+   ssp experiment start <experiment> --app <app> \
+     --note "<hypothesis>" --json
    ```
+
+5. Read the evidence:
+
+   ```shell
+   ssp experiment show <experiment> --app <app> --json
+   ```
+
+   - `totals` has `subjects`, `requests`, `errors`, `p50_ms`, and `p90_ms`
+     for each arm, by commit.
+   - `metrics` has each metric for each arm.
+   - `split` tells whether the subjects match the shares. Do not trust
+     evidence when `split.ok` is false.
+   - `drift.live_commit` tells that live changed since the start.
+6. Decide with the user. Statespace gives evidence, not verdicts.
+7. Stop the experiment. Statespace keeps its evidence.
+
+   ```shell
+   ssp experiment stop <experiment> --app <app> \
+     --note "<decision>" --json
+   ```
+
+You can leave out `--app` when the current folder has exactly one app.
+
+## Change a running experiment
+
+You cannot change the arms of a running experiment. Do these steps:
+
+1. `ssp experiment stop <experiment>`.
+2. `ssp experiment update <experiment> --arm <commit>=<share>`.
+3. `ssp experiment start <experiment>`. A new version starts.
 
 ## Stop in an emergency
 
-A stop places a hold. The arm leaves traffic in seconds.
+The arms leave traffic in seconds.
 
 ```shell
-ssp arm stop <commit> --app <app> --note "<why>" --json
-ssp app stop <app> --note "<why>" --json
+ssp experiment stop <experiment> --app <app> --note "<why>" --json
 ```
 
-`ssp arm resume` and `ssp app resume` remove exactly the hold that they name.
+To stop each experiment of an app, get the names, then stop them all:
+
+```shell
+ssp experiment list --app <app> --running --json
+ssp experiment stop <name> <name> --app <app> --note "<why>"
+```
 
 ## Events and metrics
 
-Add events and metrics to `statespace.toml` in a commit. They take effect when that
-commit's build runs as live.
-
 ```toml
-[[event]]
-name = "signup"
-match = 'request.method == "POST" && request.path == "/signup" && request.status < 300'
-
 [[event]]
 name = "fatal"
 match = 'stderr.text.contains("FATAL")'
 
-[[metric]]
-label = "signup rate %"
-value = '100.0 * events["signup"].subjects / subjects'
+[[experiment.checkout.event]]
+name = "coupon"
+match = 'request.path == "/checkout/coupon"'
 ```
 
 - Each `match` uses one source: `request`, `stdout`, or `stderr`.
-- `request` has `method`, `path`, `query`, `headers`, `cookies`, `status`, and `ms`.
-- `stdout` and `stderr` have `text` and `json` (the line as a JSON object, or `{}`).
+- `request` has `method`, `path`, `query`, `headers`, `cookies`, `status`,
+  and `ms`.
+- `stdout` and `stderr` have `text` and `json` (the line as a JSON object, or
+  `{}`).
 - A missing field is no match.
-- Output events have `.lines` only. Request events have `.lines` and `.subjects`.
+- Output events have `.lines` only. Request events have `.lines` and
+  `.subjects`.
+- A release that changes a shared event, or the event, `subject`,
+  `eligibility`, or `max_share` of an experiment, stops the experiment. A
+  change of a metric stops nothing.
 
 ## Rules
 
-- Do not add an arm without the user's consent.
+- Do not start an experiment without the user's consent.
 - Use `--note` on each command that changes something.
 - Never put a token in a file that Git tracks.
-- Read the reason when an arm waits. Do not add arms to work around `max_arms` or
-  `max_traffic`.
+- Read the reason when an experiment stops or an arm is not ready.

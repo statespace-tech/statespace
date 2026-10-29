@@ -19,8 +19,8 @@
 
 </div>
 
-Statespace runs a commit of your app on a small share of live traffic,
-beside a control, and records what happens.
+Statespace runs commits of your app on small shares of live traffic, as the
+arms of an experiment, and records what happens.
 
 ---
 
@@ -45,42 +45,44 @@ Read https://statespace.com/skill.md and follow it.
 
 ## How it works
 
-An arm is a commit. You add it with the CLI. Statespace runs the image of that
-commit for a share of the app's subjects. It runs a control beside it: a copy
-of the image that live runs now. Everyone else gets live, which Statespace
-never records.
+An experiment compares commits of one app. Each arm is one commit with an
+exact share of the app's subjects. The proxy runs the image of each arm
+beside live. Everyone else gets live, which Statespace never records.
 
 ```text
-                    ┌─► live service   (90%)  untouched, never recorded
-visitors ─► proxy ──┼─► control copy   ( 5%)  image of live, recorded
-                    └─► arm a1b2c3d    ( 5%)  image of a1b2c3d, recorded
+                    ┌─► live service        (85%)  untouched, never recorded
+visitors ─► proxy ──┼─► checkout:c0ffee1    ( 5%)  recorded
+                    ├─► checkout:a1b2c3d    ( 5%)  recorded
+                    └─► us-landing:b2c3d4e  ( 5%)  recorded
 ```
 
-- An **app** is one running copy of a service, such as `shop-prod`. One proxy
-  is in front of it.
+- An **app** is one running copy of a service, such as `shop-prod`. One
+  proxy is in front of it.
 - A **build** is a record "commit → image digest". Your CI makes it with
   `statespace-tech/action@v1`.
 - The **live commit** is the commit of the build that live runs.
-- The **control** and each **arm** are **units**. The proxy runs them on
-  Docker, Cloud Run, or Kubernetes.
+- An **experiment** is a table in `statespace.toml`, such as
+  `[experiment.checkout]`. You set its arms with the CLI.
+- The **reference** is the arm that you added first. To compare a change
+  with what runs now, add the live commit as an arm.
+- A **unit** is one running copy of one arm. The proxy runs units on Docker,
+  Cloud Run, or Kubernetes.
 
-Statespace posts the evidence on the arm's commit as the commit status
-`statespace/<app>`. The status tells where the arm is, never whether it is
-good. People and agents decide.
+Statespace posts the evidence on the commit of each arm as the commit status
+`statespace/<app>/<experiment>`. The status tells where the arm is, never
+whether it is good. People and agents decide.
 
 ## Set up
 
-1. On [statespace.com](https://statespace.com), install the Statespace GitHub
-   App. It reads code and metadata, reads members, and writes commit
+1. On [statespace.com](https://statespace.com), install the Statespace
+   GitHub App. It reads code and metadata, reads members, and writes commit
    statuses.
-2. In the folder of the app, write `statespace.toml` and get the CI step:
-
-   ```shell
-   ssp init
-   ```
-
+2. In the folder of the app, write `statespace.toml`. Start from the file in
+   [`skills/statespace/SKILL.md`](skills/statespace/SKILL.md). A coding
+   agent can do this step.
 3. Add the step after the image build, in the workflow that builds every
-   commit that can become an arm. The job needs `permissions: id-token: write`.
+   commit that can become an arm. The job needs
+   `permissions: id-token: write`.
 
    ```yaml
    - uses: statespace-tech/action@v1
@@ -91,8 +93,8 @@ good. People and agents decide.
    ```
 
 4. Add an app for each running copy of the service. Run the command in the
-   app's folder. It reads the repository from the Git remote `origin` and the
-   folder from the nearest `statespace.toml`, and prints what it found.
+   app's folder. It reads the repository from the Git remote `origin` and
+   the folder from the nearest `statespace.toml`, and prints what it found.
 
    ```shell
    ssp app add shop-prod --note "shop, all traffic"
@@ -104,102 +106,146 @@ good. People and agents decide.
    ssp token add --app shop-prod --note "Cloud Run proxy"
    ```
 
-6. Add an arm:
+6. Set the arms of an experiment, and start it:
 
    ```shell
-   ssp arm add a1b2c3d --app shop-prod --share 0.05 --note "green button"
+   ssp experiment update checkout \
+     --arm c0ffee1=0.05 --arm a1b2c3d=0.05
+   ssp experiment start checkout --note "one-page checkout"
    ```
 
-## Arms
-
-- The commit is the arm's ID. Use a full SHA or a prefix of 7 or more
-  characters.
-- `ssp arm add` finds the build of the commit for the app and prints the
-  build it chose. Without a build, it fails. Push the commit so that CI
-  builds it.
-- `--share` is 0.05 when you do not give it. Add an arm again to change its
-  share. A new version starts.
-- `ssp arm remove` ends the arm. Statespace keeps its evidence.
-- An arm waits when `max_traffic` or `max_arms` is full, when the app has no
-  live commit, or when a hold covers it. `ssp arm show` tells why.
-- A new version of an arm starts when its share, the live commit, the
-  settings, or a hold changes. Evidence restarts with each version.
-
-## Stop and resume
-
-A stop places a hold. The arm leaves traffic in a few seconds. A resume
-removes exactly the hold it names.
+## Experiments
 
 ```shell
-ssp app stop shop-prod --note "checkout errors > 2%"
-ssp arm stop a1b2c3d --app shop-prod
-ssp app resume shop-prod
-ssp arm resume a1b2c3d --app shop-prod --note "fixed in b2c3d4e"
+ssp experiment update checkout --arm e5f6a7b=0.04    # add
+ssp experiment update checkout --arm c0ffee1=0.06    # change a share
+ssp experiment update checkout --arm e5f6a7b=0       # remove
+ssp experiment start checkout --note "one-page checkout"
+ssp experiment show checkout
+ssp experiment stop checkout --note "enough data"
 ```
 
-When a hold on the app and a hold on the arm both cover an arm, `ssp app
-resume` keeps the arm's hold and tells you. A resume never brings back a
-removed arm.
+`update` prints the change and the full list of arms:
+
+```text
+checkout · shop-prod · stopped
+  − a1b2c3d   0.05
+  + f6a7b8c   0.05
+    c0ffee1   0.06   (reference)
+  total 0.11 of max_share 0.2
+```
+
+- `--arm <commit>=<share>` changes only the arm that it names. The commit is
+  a full SHA or a prefix of 7 or more characters. The share is a fraction,
+  such as `0.05`. `5` and `5%` fail.
+- `=0` removes an arm. Statespace keeps its evidence.
+- Without `--arm`, `update` prints the arms.
+- A commit needs a build for the app. Push the commit so that CI builds it.
+- The shares of an experiment add up to `max_share` or less. The shares of
+  all running experiments of an app add up to 1 or less.
+- You cannot change a running experiment. Stop it, update it, and start it
+  again.
+
+`start` begins a new version. The command waits until each arm is ready and
+prints each one. When an arm is not ready in 5 minutes, nothing changes, and
+the command prints the reason:
+
+```text
+starting checkout on shop-prod
+  c0ffee1   ready
+  a1b2c3d   not ready: the container exits at start (exit 1)
+checkout did not start. Nothing changed.
+```
+
+`stop` takes one or more names. The arms leave traffic in seconds. To stop
+every experiment of an app, get the names with
+`ssp experiment list --running`, then stop them.
+
+A release that changes the `subject`, `eligibility`, `max_share`, or events
+of a running experiment, or a shared event, stops the experiment. A change
+of the code or of a metric stops nothing. `ssp experiment show` tells when
+live changed since the start.
 
 ## statespace.toml
 
 The file is in the folder of the app's code. The settings that apply to an
-app come from the `statespace.toml` in the build of its live commit. A change
-takes effect when that build runs as live. The proxy has no flags for
+app come from the `statespace.toml` in the build of its live commit. A
+change takes effect when that build runs as live. The proxy has no flags for
 settings.
 
 ```toml
-subject = 'request.cookies.ssp_sid'
-eligibility = 'request.headers["cf-ipcountry"] == "US"'
-max_traffic = 0.2
-max_arms = 5
-arm_role = "write"
 overrides = false
 redact = ['\b\d{16}\b']
 
+# Shared events and metrics: in every experiment.
 [[event]]
-name = "signup"
-match = 'request.method == "POST" && request.path == "/signup" && request.status < 300'
-
-[[event]]
-name = "fatal"
-match = 'stderr.text.contains("FATAL")'
+name = "purchase"
+match = '''
+request.method == "POST"
+  && request.path == "/checkout"
+  && request.status < 300
+'''
 
 [[metric]]
-label = "signup rate %"
-value = '100.0 * events["signup"].subjects / subjects'
+label = "purchase rate %"
+value = '100.0 * events["purchase"].subjects / subjects'
 
+# Experiments, in priority order.
+[experiment.checkout]
+subject = 'request.headers["x-user-id"]'
+max_share = 0.2
+
+[[experiment.checkout.event]]
+name = "coupon"
+match = 'request.path == "/checkout/coupon"'
+
+[experiment.us-landing]
+eligibility = 'request.headers["cf-ipcountry"] == "US"'
+max_share = 0.15
+
+# Per-app sections replace and extend the shared settings.
 [app.shop-dev]
-max_traffic = 1.0
 overrides = true
+
+[app.shop-dev.experiment.checkout]
+max_share = 1.0
 ```
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `subject` | `request.cookies.ssp_sid` | CEL that gives the subject ID. Without a string, the request goes to live |
-| `eligibility` | everyone | CEL that tells who may enter. An error sends the request to live |
-| `max_traffic` | `0.2` | The largest share of subjects in the arms and the control together |
-| `max_arms` | `5` | The most arms that run at the same time. The control does not count |
-| `arm_role` | `write` | The GitHub level needed to add and remove arms: `write`, `maintain`, or `admin` |
-| `overrides` | `false` | Let testers pick a running arm. See [Overrides](#overrides) |
+| `overrides` | `false` | Let testers pick an arm. See [Overrides](#overrides) |
 | `redact` | none | Regular expressions. The proxy replaces matches with `[redacted]` before data leaves the machine |
-| `[[event]]` | none | A named count. See [Events](#events) |
-| `[[metric]]` | none | A CEL formula over the totals of one side. The first metric is the headline |
+| `[[event]]` | none | A shared event. See [Events](#events) |
+| `[[metric]]` | none | A shared metric: a CEL formula over the totals of one arm |
+| `[experiment.<name>]` | none | An experiment. Names have 1 to 40 lowercase letters, digits, and `-` |
+| `[app.<name>]` | none | Settings for one app |
 
-A section `[app.<name>]` changes the settings of one app.
+Keys of an experiment:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `subject` | `request.cookies.ssp_sid` | CEL that gives the subject ID. Without a string, the experiment skips the request |
+| `eligibility` | everyone | CEL that tells who may enter. An error skips the request and counts an eligibility error |
+| `max_share` | `0.2` | The most that the shares of its arms add up to |
+| `[[experiment.<name>.event]]` | none | Events of this experiment only |
+| `[[experiment.<name>.metric]]` | none | Metrics of this experiment only |
+
+The headline is the first metric of the experiment, or the first shared
+metric when it has none.
 
 ## Events
 
-Each `[[event]]` matches one source:
+Each event matches one source:
 
 | Source | Fields |
 | --- | --- |
 | `request` | `method`, `path`, `query`, `headers`, `cookies`, `status`, `ms` |
 | `stdout`, `stderr` | `text`, and `json`: the line as a JSON object, or `{}` |
 
-The proxy checks the rules for the control and the arms only. It checks a
-request rule after the response, and an output rule for each line. A missing
-field is no match. A request event has the subject; an output event has none.
+The proxy checks the rules for the units only. A unit gets the shared events
+and the events of its experiment. The proxy checks a request rule after the
+response, and an output rule for each line. A missing field is no match. A
+request event has the subject; an output event has none.
 
 ## The proxy
 
@@ -222,21 +268,29 @@ For each request, the proxy:
 
 1. Removes the headers `x-statespace-*` and `ssp-arm`, the parameter
    `ssp_arm`, and the cookie `ssp_arm`. The app never sees them.
-2. Reads the subject, checks `eligibility`, and finds the subject's side:
-   the first 53 bits of `SHA-256(salt:subject)` give a point in `[0, 1)`.
-   Each arm and the control hold ranges of that space.
-3. Sends the request to live, the control, or the arm. A unit that is not
-   ready sends the request to live.
-4. Adds `x-statespace-subject`. For the control and the arms, it also adds
-   `x-statespace-side` (`control` or `arm`). For an arm, it adds
-   `x-statespace-arm` with the full commit.
-5. Marks the responses of the control and the arms `Cache-Control: private`.
+2. Checks the running experiments in the order of `statespace.toml`. For
+   each one, it reads the subject and finds the subject's point: the first
+   53 bits of `SHA-256(salt:subject)`, in `[0, 1)`. When the point is in the
+   range of one of its arms and the subject is eligible, that arm gets the
+   request. Else the proxy checks the next experiment.
+3. Sends the request to live when no experiment takes it. A unit that is not
+   ready also sends the request to live.
+4. Adds `x-statespace-subject`. For an arm, it also adds
+   `x-statespace-experiment` and `x-statespace-arm` with the full commit.
+5. Marks the responses of units `Cache-Control: private`.
 
-With the default `subject`, every response sets the visitor cookie. It lasts
-90 days and works in iframes on other sites:
+The arms of all running experiments of an app hold different ranges. Thus
+experiments with the same subject never share a subject. Experiments with
+different subjects can claim the same request: the first in
+`statespace.toml` gets it. Different apps have different salts, so their
+splits are independent.
+
+While a running experiment uses the default `subject`, every response sets
+the visitor cookie. It lasts 90 days and works in iframes on other sites:
 
 ```text
-ssp_sid=<id>; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=None; Partitioned
+ssp_sid=<id>; Path=/; Max-Age=7776000; HttpOnly; Secure;
+  SameSite=None; Partitioned
 ```
 
 The proxy uses `SameSite=Lax` without `Secure` and `Partitioned` when
@@ -245,16 +299,25 @@ The proxy uses `SameSite=Lax` without `Secure` and `Partitioned` when
 ### Many instances
 
 Every instance of the proxy routes. Only the instance that holds the app's
-lease starts and stops units and reads their output. The instance renews the
-lease every 10 seconds. When it stops, another instance gets the lease in 30
-seconds or less.
+lease starts and stops units and reads their output. It starts the units of
+starting and running experiments. Only running experiments get requests.
+The instance renews the lease every 10 seconds. When it stops, another
+instance gets the lease in 30 seconds or less.
+
+### Units
+
+A unit is one arm: an experiment, a commit, and the image of the commit's
+build. One commit in two experiments runs as two units. The name of a unit
+has the experiment and the commit. When a platform limit makes a name too
+long, the name is cut and ends with a short hash. The labels keep the full
+experiment and commit.
 
 ### Docker
 
-`ssp proxy docker` runs live, the control, and the arms as containers on the
-machine. `--image-file` holds the image of live. When the file changes, the
-proxy starts the new image, sends traffic to it when it is ready, and stops
-the old container.
+`ssp proxy docker` runs live and the units as containers on the machine.
+`--image-file` holds the image of live. When the file changes, the proxy
+starts the new image, sends traffic to it when it is ready, and stops the
+old container.
 
 | Flag | Meaning |
 | --- | --- |
@@ -265,16 +328,18 @@ the old container.
 
 Containers get the proxy's environment, but never the variables that start
 with `STATESPACE_` or `SSP_`. They also get `PORT`. The proxy labels each
-container. After a crash, a new proxy adopts the containers that still run.
-When the proxy stops, it stops all its containers.
+container with `statespace.com/experiment` and `statespace.com/commit`.
+After a crash, a new proxy adopts the containers that still run. When the
+proxy stops, it stops all its containers.
 
 ### Cloud Run
 
-`ssp proxy cloudrun` runs as its own Cloud Run service in front of the app's
-service. The control and each arm are revisions of the app's service with 0%
-traffic and a tag: `ssp-control` or `ssp-<first 12 characters of the
-commit>`. A new revision copies the service's template and changes only the
-image. Live is the image of the revision with the most traffic.
+`ssp proxy cloudrun` runs as its own Cloud Run service in front of the
+app's service. Each unit is a revision of the app's service with 0% traffic
+and the tag `ssp-<experiment>-<commit 12>`. The tag and the service name
+together have at most 46 characters. A new revision copies the service's
+template and changes only the image. Live is the image of the revision with
+the most traffic.
 
 | Flag | Meaning |
 | --- | --- |
@@ -282,11 +347,11 @@ image. Live is the image of the revision with the most traffic.
 | `--region` | The region of the service |
 | `--project` | The project. The default is the project of the proxy |
 
-The proxy uses the service account of its own service. Give that account the
-role Cloud Run Developer on the app's service, and the role Service Account
-User on the app's runtime service account. To read output, give it Logs
-Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so give
-it Cloud Run Invoker on the app's service too.
+The proxy uses the service account of its own service. Give that account
+the role Cloud Run Developer on the app's service, and the role Service
+Account User on the app's runtime service account. To read output, give it
+Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
+give it Cloud Run Invoker on the app's service too.
 
 The first unit pins the service's traffic to the revision that has it now,
 so that new revisions of units get no traffic. After you deploy a new live,
@@ -299,13 +364,14 @@ gcloud run services update-traffic shop --to-latest
 
 ### Kubernetes
 
-`ssp proxy kubernetes` runs as its own Deployment in front of the app. Live is
-the app's Deployment and its Service. The control and each arm are copies of
-the Deployment's pod spec with another image, named
-`<deployment>-ssp-control` and `<deployment>-ssp-<commit 12>`. Each copy has a
-Service and the label `statespace.com/app`. Its replicas are live's replicas
-times its share, at least one. Kubernetes joins standard output and standard
-error, so the proxy records all lines as `stdout`.
+`ssp proxy kubernetes` runs as its own Deployment in front of the app. Live
+is the app's Deployment and its Service. Each unit is a copy of the
+Deployment's pod spec with another image, named
+`<deployment>-ssp-<experiment>-<commit 12>`, at most 63 characters. Each
+copy has a Service and the labels `statespace.com/app`,
+`statespace.com/experiment`, and `statespace.com/commit`. Its replicas are
+live's replicas times its share, at least one. Kubernetes joins standard
+output and standard error, so the proxy records all lines as `stdout`.
 
 | Flag | Meaning |
 | --- | --- |
@@ -318,34 +384,45 @@ error, so the proxy records all lines as `stdout`.
 
 ## Overrides
 
-With `overrides = true` for an app, a tester can open a running arm:
+With `overrides = true` for an app, a tester can open an arm of a running
+experiment:
 
-1. In a browser, add `?ssp_arm=<commit>` to a URL, such as
-   `https://shop.example.com/?ssp_arm=a1b2c3d`. The proxy keeps the arm in the
-   cookie `ssp_arm` for an hour, renewed on each request. A `GET` goes back to
-   the same URL without the parameter.
+1. In a browser, add `?ssp_arm=<experiment>:<commit>` to a URL, such as
+   `https://shop.example.com/?ssp_arm=checkout:a1b2c3d`. The proxy keeps the
+   arm in the cookie `ssp_arm` for an hour, renewed on each request. A `GET`
+   goes back to the same URL without the parameter.
 2. To end it, open a URL with `?ssp_arm=` and no value.
-3. An API client sends the header `ssp-arm: a1b2c3d` on each request.
+3. An API client sends the header `ssp-arm: checkout:a1b2c3d` on each
+   request.
 
-The value is a full commit or a prefix of 7 or more characters that matches
-one running arm. For another value, the proxy shows a short page with the
-running arms. Statespace records these visits with the reason `override`.
-They do not count as subjects.
+The commit is full or a prefix of 7 or more characters. It must match one
+arm of a running experiment. For another value, the proxy shows a short
+page:
+
+```text
+checkout:a1b2c3d is not running on shop-prod. Running: checkout:c0ffee1,
+checkout:f6a7b8c, us-landing:b2c3d4e
+```
+
+Statespace records these visits with the reason `override`. They count for
+the experiment: subjects, events, and metrics. Only the split check leaves
+them out. `ssp experiment show` prints the override link of each arm.
 
 ## Recording
 
-The proxy records the control and the arms, never live:
+The proxy records the units, never live:
 
 | Rows | One row per |
 | --- | --- |
-| `runs` | subject, version, and reason: `assigned`, `ineligible`, `eligibility-error`, `arm-unavailable`, or `override` |
+| `runs` | subject, experiment, version, and reason: `assigned`, `arm-unavailable`, `override`, or `eligibility-error` |
 | `requests` | request: method, path, query, status, time. Never headers or bodies |
 | `stdout`, `stderr` | output line |
-| `events` | match of an `[[event]]` |
+| `events` | match of an event |
 | `lifecycle` | start, ready, stop, or failure of a unit |
 
-The proxy applies `redact` before rows leave the machine. It buffers rows and
-drops them before it slows the app.
+Each row has the experiment, the arm, and the version. The proxy applies
+`redact` before rows leave the machine. It buffers rows and drops them
+before it slows the app.
 
 ## Credentials
 
@@ -363,29 +440,31 @@ from GitHub:
 
 | Level | Allows | GitHub |
 | --- | --- | --- |
-| `read` | see apps, arms, and evidence | read |
-| `write` | stop and resume; add and remove arms when `arm_role = "write"` | write (triage: stop and resume only) |
-| `maintain` | add and remove arms when `arm_role = "maintain"` | maintain |
+| `read` | see apps, experiments, and evidence | read, triage |
+| `write` | update, start, and stop experiments | write, maintain |
 | `admin` | add and remove apps and runtime tokens | admin |
 
+A workflow's OIDC token of the app's repository counts as `write`.
+
 Runtime tokens are the only Statespace tokens. A runtime token is for one
-app. It can read the app's runtime configuration, report, hold the lease, and
-send rows. It cannot change arms or read evidence.
+app. It can read the app's runtime configuration, report, hold the lease,
+and send rows. It cannot change experiments or read evidence.
 
 ## Commands
 
 ```text
-ssp app    add | remove | list | show | stop | resume
-ssp arm    add | remove | list | show | stop | resume   (--app)
-ssp token  add | remove | list                         (--app)
-ssp proxy  docker | cloudrun | kubernetes              (--app)
-ssp init
+ssp app         add | remove | list | show
+ssp experiment  list | show | update | start | stop        (--app)
+ssp token       add | remove | list                         (--app)
+ssp proxy       docker | cloudrun | kubernetes              (--app)
 ssp login | logout | whoami
 ```
 
-- The object comes first: `ssp arm stop a1b2c3d --app shop-prod`.
-- Each command that changes something takes `--note`: 1 to 200 characters on
-  one line.
+- The object comes first: `ssp experiment stop checkout --app shop-prod`.
+- You can leave out `--app` when the current folder has exactly one app.
+  The command tells which app it used. `ssp proxy` always needs `--app`.
+- Each command that changes something takes `--note`: 1 to 200 characters
+  on one line.
 - With `--json`, each command prints one JSON document, except `ssp proxy`.
   Notes and warnings go to standard error. An error exits with status 1, as
   `{"error": "..."}` on standard error.
