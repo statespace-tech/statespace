@@ -4,10 +4,56 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
-### Fixed
+Arms are commits. This release replaces the `exp/` branch model. Nothing of the old
+model stays.
 
-- `ssp status` prints one blank line, not two, before the holds.
-- `ssp stop` and `ssp resume` messages are correct for one target.
+### Added
+
+- `ssp app add | remove | list | show | stop | resume <name>`. `ssp app add` reads the
+  repository from the Git remote `origin` and the folder from the nearest
+  `statespace.toml`, or takes `--repo` and `--path`, and prints what it detected.
+- `ssp arm add | remove | list | show | stop | resume <commit> --app <app>`, with
+  `--share`. `ssp arm add` prints the build it chose.
+- `ssp token add | remove | list` for runtime tokens, one app each.
+- `ssp init` writes a starter `statespace.toml` and prints the CI step that records
+  builds.
+- `--note` (1 to 200 characters, one line) on every command that changes something.
+- Credentials: `STATESPACE_TOKEN`, then the `ssp login` session, then a GitHub user
+  token in `GH_TOKEN` or `GITHUB_TOKEN`, then the OIDC token of a GitHub Actions job.
+  `ssp whoami` shows which one the CLI uses.
+- `ssp proxy docker`, `ssp proxy cloudrun`, and `ssp proxy kubernetes`. One
+  `Orchestrator` trait runs the control and the arms. Every instance routes; the
+  instance that holds the app's lease orchestrates.
+- Cloud Run: the control and the arms run as tagged revisions with 0% traffic. The
+  proxy sends an ID token, and reads output from Cloud Logging.
+- Kubernetes: the proxy runs as its own Deployment. The control and the arms run as
+  copies of the app's Deployment, each with a Service.
+- `[[event]]` rules from `statespace.toml`, checked in the proxy on requests, standard
+  output, and standard error.
+- The proxy records `runs`, `requests`, `stdout`, `stderr`, `events`, and `lifecycle`
+  rows for the control and the arms.
+
+### Changed
+
+- The control is a copy of the image that live runs, not a build of the arm's base.
+- All settings come from `statespace.toml` through the runtime configuration. The
+  proxy has no flags for settings.
+- Overrides name the arm by its commit: `?ssp_arm=a1b2c3d` or `ssp-arm: a1b2c3d`.
+- The visitor cookie lasts 90 days, renews on every response, and works in iframes:
+  `SameSite=None; Secure; Partitioned` over `https`.
+- The proxy sends `x-statespace-subject`, `x-statespace-side`, and, for an arm,
+  `x-statespace-arm` with the full commit.
+- Environment variables: `STATESPACE_TOKEN` replaces `SSP_TOKEN`, and
+  `STATESPACE_API` replaces `STATESPACE_URL`.
+
+### Removed
+
+- `ssp apply`, `ssp status`, `ssp stop`, `ssp resume`, and their targets: pull
+  request and repository URLs, paths, experiments, and `exp/` branches.
+- `ssp controller kubernetes`. `ssp proxy kubernetes` replaces it.
+- `ssp token create` and `revoke`, presets, and scopes.
+- The proxy flags `--overrides`, `--redact`, `--max-arms`, `--arm-env`,
+  `--stale-after`, `--image`, and `--default`, and the global `--workspace`.
 
 ## 0.3.0 - 2026-10-24
 
