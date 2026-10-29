@@ -4,44 +4,64 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
-Arms are commits. This release replaces the `exp/` branch model. Nothing of the old
-model stays.
+Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of
+the old model stays.
 
 ### Added
 
-- `ssp app add | remove | list | show | stop | resume <name>`. `ssp app add` reads the
-  repository from the Git remote `origin` and the folder from the nearest
-  `statespace.toml`, or takes `--repo` and `--path`, and prints what it detected.
-- `ssp arm add | remove | list | show | stop | resume <commit> --app <app>`, with
-  `--share`. `ssp arm add` prints the build it chose.
+- `ssp app add | remove | list | show <name>`. `ssp app add` reads the repository from
+  the Git remote `origin` and the folder from the nearest `statespace.toml`, or takes
+  `--repo` and `--path`, and prints what it detected.
+- `ssp experiment list | show | update | start | stop`. An experiment is an
+  `[experiment.<name>]` table in `statespace.toml`, with `subject`, `eligibility`,
+  `max_share`, and its own events and metrics.
+- `ssp experiment update <name> --arm <commit>=<share>` changes only the arms that it
+  names. `=0` removes an arm. Shares are fractions: `5` and `5%` fail. It prints the
+  change, the full list with the reference, and the total of `max_share`.
+- `ssp experiment start` begins a new version, waits until each arm is ready, and prints
+  each arm, or the reason per arm when one is not ready. It tells which running
+  experiments can claim the same requests.
+- `ssp experiment stop` takes one or more names.
+- `ssp experiment list --running` and `--all`. `ssp experiment show` prints the
+  definition, the arms, the evidence per arm, the versions, the history, the drift from
+  live, and the override links.
+- `--app` is optional when the current folder is linked to exactly one app.
 - `ssp token add | remove | list` for runtime tokens, one app each.
-- `ssp init` writes a starter `statespace.toml` and prints the CI step that records
-  builds.
 - `--note` (1 to 200 characters, one line) on every command that changes something.
 - Credentials: `STATESPACE_TOKEN`, then the `ssp login` session, then a GitHub user
   token in `GH_TOKEN` or `GITHUB_TOKEN`, then the OIDC token of a GitHub Actions job.
   `ssp whoami` shows which one the CLI uses.
 - `ssp proxy docker`, `ssp proxy cloudrun`, and `ssp proxy kubernetes`. One
-  `Orchestrator` trait runs the control and the arms. Every instance routes; the
-  instance that holds the app's lease orchestrates.
-- Cloud Run: the control and the arms run as tagged revisions with 0% traffic. The
-  proxy sends an ID token, and reads output from Cloud Logging.
-- Kubernetes: the proxy runs as its own Deployment. The control and the arms run as
-  copies of the app's Deployment, each with a Service.
+  `Orchestrator` trait runs the units: one for each arm of each starting or running
+  experiment. Every instance routes; the instance that holds the app's lease
+  orchestrates.
+- The proxy checks the running experiments in the order of `statespace.toml`. Each
+  experiment reads its own subject. The first experiment whose arm range holds the
+  subject's point takes the request. Else live serves it.
+- Cloud Run: units run as revisions with 0% traffic and the tag
+  `ssp-<experiment>-<commit 12>`. The proxy sends an ID token, and reads output from
+  Cloud Logging.
+- Kubernetes: the proxy runs as its own Deployment. Units run as copies of the app's
+  Deployment, `<deployment>-ssp-<experiment>-<commit 12>`, each with a Service.
+- Unit names that pass a platform limit end with a short hash. Labels keep the full
+  experiment and commit.
 - `[[event]]` rules from `statespace.toml`, checked in the proxy on requests, standard
-  output, and standard error.
+  output, and standard error. A unit gets the shared events and the events of its
+  experiment.
 - The proxy records `runs`, `requests`, `stdout`, `stderr`, `events`, and `lifecycle`
-  rows for the control and the arms.
+  rows for units. Each row has the experiment, the arm, and the version.
+- The starter `statespace.toml` and the CI step are in `skills/statespace/SKILL.md`.
 
 ### Changed
 
-- The control is a copy of the image that live runs, not a build of the arm's base.
-- All settings come from `statespace.toml` through the runtime configuration. The
-  proxy has no flags for settings.
-- Overrides name the arm by its commit: `?ssp_arm=a1b2c3d` or `ssp-arm: a1b2c3d`.
+- All settings come from `statespace.toml` through the runtime configuration. The proxy
+  has no flags for settings.
+- Overrides name the experiment and the commit: `?ssp_arm=checkout:a1b2c3d` or
+  `ssp-arm: checkout:a1b2c3d`. Override visits count for the experiment.
 - The visitor cookie lasts 90 days, renews on every response, and works in iframes:
-  `SameSite=None; Secure; Partitioned` over `https`.
-- The proxy sends `x-statespace-subject`, `x-statespace-side`, and, for an arm,
+  `SameSite=None; Secure; Partitioned` over `https`. The proxy sets it only while a
+  running experiment uses the default subject.
+- The proxy sends `x-statespace-subject` and, for an arm, `x-statespace-experiment` and
   `x-statespace-arm` with the full commit.
 - Environment variables: `STATESPACE_TOKEN` replaces `SSP_TOKEN`, and
   `STATESPACE_API` replaces `STATESPACE_URL`.
@@ -49,7 +69,13 @@ model stays.
 ### Removed
 
 - `ssp apply`, `ssp status`, `ssp stop`, `ssp resume`, and their targets: pull
-  request and repository URLs, paths, experiments, and `exp/` branches.
+  request and repository URLs, paths, and `exp/` branches.
+- Holds: `ssp app stop` and `resume`, `ssp arm stop` and `resume`.
+- `ssp arm`. `ssp experiment update` sets the arms.
+- `ssp init`. A person or a coding agent writes `statespace.toml` from the starter.
+- The shared control, the `live` keyword, and the header `x-statespace-side`.
+- The settings `max_traffic`, `max_arms`, and `arm_role`, and the app-wide `subject`
+  and `eligibility`.
 - `ssp controller kubernetes`. `ssp proxy kubernetes` replaces it.
 - `ssp token create` and `revoke`, presets, and scopes.
 - The proxy flags `--overrides`, `--redact`, `--max-arms`, `--arm-env`,
