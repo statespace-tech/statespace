@@ -8,7 +8,7 @@ into an image.
 | --- | --- |
 | `main.py` | The app |
 | `Dockerfile` | The shop's image. CI builds it for every commit |
-| `statespace.toml` | The settings, the events, and the metrics |
+| `statespace.toml` | The settings, the events, the metrics, and the experiment `price` |
 | `build.yml` | A GitHub Actions workflow that builds every commit and records the build |
 | `ssp-proxy.service` | `ssp proxy docker` under systemd, on a machine with Docker |
 
@@ -33,27 +33,39 @@ For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
 ## Test a change
 
 1. Commit a change that lowers `PRICE`, and push it. CI builds and records it.
-2. Add the commit as an arm:
+2. Get the live commit, and put it and the new commit in the experiment `price`:
 
    ```shell
-   ssp arm add <commit> --app shop-prod --share 0.05 --note "lower price"
+   ssp app show shop-prod
+   ssp experiment update price --app shop-prod \
+     --arm <live commit>=0.05 --arm <new commit>=0.05
    ```
 
-   5% of the shop's subjects get the lower price, and 5% get the control.
-3. Read the evidence: the commit status `statespace/shop-prod`, or
+   The live commit is the reference. 5% of the shop's subjects get it, and 5% get
+   the lower price. Everyone else gets live.
+3. Start the experiment. The command waits until both arms are ready.
 
    ```shell
-   ssp arm show <commit> --app shop-prod
+   ssp experiment start price --app shop-prod --note "lower price"
    ```
 
-4. In an emergency, stop it with `ssp arm stop <commit> --app shop-prod`. When you
-   decide, end it with `ssp arm remove <commit> --app shop-prod`.
+4. Read the evidence: the commit status `statespace/shop-prod/price`, or
+
+   ```shell
+   ssp experiment show price --app shop-prod
+   ```
+
+5. Stop the experiment when you decide, or at once in an emergency:
+
+   ```shell
+   ssp experiment stop price --app shop-prod --note "enough data"
+   ```
 
 ## Deploy
 
 To deploy a new live, write its image to `/etc/shop/image`. The proxy starts the new
-image, sends it traffic once `/health` answers, and stops the old container. The
-control follows: the proxy replaces it with a copy of the new live image.
+image, sends it traffic once `/health` answers, and stops the old container. The arms
+do not change: they are fixed commits.
 
-Each machine runs live, the control, and up to `max_arms` arms. Size machines for that
-many copies of the shop, or lower `max_arms` in `statespace.toml`.
+Each machine runs live and one container for each arm of each running experiment.
+Size machines for that many copies of the shop, or keep few arms.

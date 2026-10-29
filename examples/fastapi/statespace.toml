@@ -1,13 +1,17 @@
 # The shop's settings. Copy this file to the root of the shop's repository.
 # The settings of the build that live runs apply.
-max_traffic = 0.2
-max_arms = 3
+
 # Logs can hold payment keys. Remove them before lines leave the machine.
 redact = ['sk_live_\w+']
 
+# Shared events and metrics: in every experiment.
 [[event]]
 name = "signup"
-match = 'request.method == "POST" && request.path == "/signup" && request.status < 300'
+match = '''
+request.method == "POST"
+  && request.path == "/signup"
+  && request.status < 300
+'''
 
 [[event]]
 name = "purchase"
@@ -21,7 +25,14 @@ value = '100.0 * events["signup"].subjects / subjects'
 label = "purchases per request"
 value = 'events["purchase"].lines / requests'
 
+# Experiments, in priority order. Set the arms with
+# ssp experiment update price --arm <commit>=<share>.
+[experiment.price]
+max_share = 0.2
+
 # The staging copy: all traffic may go to arms, and testers may pick one.
 [app.shop-dev]
-max_traffic = 1.0
 overrides = true
+
+[app.shop-dev.experiment.price]
+max_share = 1.0

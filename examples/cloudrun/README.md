@@ -1,8 +1,8 @@
 # Cloud Run
 
-Run the shop's arms on Cloud Run. `ssp proxy cloudrun` runs as its own Cloud Run
-service in front of the service `shop`. The control and each arm are revisions of
-`shop` with 0% traffic and a tag.
+Run the arms of the shop's experiments on Cloud Run. `ssp proxy cloudrun` runs as its
+own Cloud Run service in front of the service `shop`. Each arm is a revision of `shop`
+with 0% traffic and a tag.
 
 ## Set up
 
@@ -21,7 +21,7 @@ service in front of the service `shop`. The control and each arm are revisions o
    gcloud iam service-accounts add-iam-policy-binding \
      shop@acme.iam.gserviceaccount.com \
      --member "serviceAccount:$proxy" --role roles/iam.serviceAccountUser
-   # Read the output of the control and the arms.
+   # Read the output of the arms.
    gcloud projects add-iam-policy-binding acme \
      --member "serviceAccount:$proxy" --role roles/logging.viewer
    ```
@@ -51,21 +51,26 @@ service in front of the service `shop`. The control and each arm are revisions o
 ## What the proxy does
 
 - Live is the image of the revision of `shop` that gets the most traffic.
-- For a unit, the proxy copies the template of `shop`, changes only the image, and
-  makes a revision with the tag `ssp-control` or `ssp-<commit 12>` and 0% traffic.
-  The first time, it pins the traffic of `shop` to the revision that has it now, so a
-  new revision gets none.
+- For each arm of a starting or running experiment, the proxy copies the template of
+  `shop`, changes only the image, and makes a revision with 0% traffic and the tag
+  `ssp-<experiment>-<commit 12>`, such as `ssp-checkout-a1b2c3d4e5f6`.
+- The tag and the service name together have at most 46 characters. A longer tag
+  is cut and ends with a short hash. The labels `statespace-experiment` and
+  `statespace-commit` of the revision keep the full values.
+- The first time, the proxy pins the traffic of `shop` to the revision that has it
+  now, so a new revision gets none.
 - The proxy sends each request to the tag URL, with an ID token in the header
   `X-Serverless-Authorization`. The app keeps its own `Authorization` header.
-- The proxy reads the output of the control and the arms from Cloud Logging.
-- When an arm ends, the proxy removes its tag and deletes its revision.
+- The proxy reads the output of the arms from Cloud Logging.
+- When an experiment stops, the proxy removes the tags of its arms and deletes their
+  revisions.
 
 Because the traffic of `shop` is pinned, a deploy does not move traffic by itself.
-Deploy a new live, then send the traffic to it. The tags of the units stay.
+Deploy a new live, then send the traffic to it. The tags of the arms stay.
 
 ```shell
 gcloud run deploy shop --region us-east1 --image ghcr.io/acme/shop@sha256:3333…
 gcloud run services update-traffic shop --region us-east1 --to-latest
 ```
 
-The proxy then replaces the control with a copy of the new image.
+The arms are fixed commits. A new live does not change them.

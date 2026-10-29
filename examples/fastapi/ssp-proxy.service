@@ -1,5 +1,5 @@
 # Run the shop behind `ssp proxy docker` on a machine with Docker. The proxy
-# runs live, the control, and the arms as containers, and listens on port 8080.
+# runs live and the arms of experiments as containers, and listens on port 8080.
 #
 #   sudo install -d /etc/shop
 #   echo ghcr.io/acme/shop:main | sudo tee /etc/shop/image

@@ -1,5 +1,5 @@
 # `ssp proxy kubernetes` in front of the shop: its own Deployment and Service,
-# with a Role that manages the control and the arms in this namespace. Point
+# with a Role that manages the copies of the arms in this namespace. Point
 # your Ingress or load balancer at the Service statespace-proxy instead of
 # the Service shop.
 apiVersion: v1

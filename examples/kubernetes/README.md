@@ -1,8 +1,8 @@
 # Kubernetes
 
-Run the shop's arms on Kubernetes (GKE, EKS, AKS, or any other cluster). `ssp proxy
-kubernetes` runs as its own Deployment in front of the shop. The shop's Deployment and
-Service do not change.
+Run the arms of the shop's experiments on Kubernetes (GKE, EKS, AKS, or any other
+cluster). `ssp proxy kubernetes` runs as its own Deployment in front of the shop. The
+shop's Deployment and Service do not change.
 
 | File | Purpose |
 | --- | --- |
@@ -28,24 +28,29 @@ Service do not change.
 
 ## What the proxy makes
 
-When you add an arm, the proxy that holds the lease makes the control and the arm:
+When you start an experiment, the proxy that holds the lease makes one copy of the
+shop for each arm:
 
 ```shell
-kubectl get deployments -l statespace.com/app=shop-prod
+kubectl get deployments -l statespace.com/experiment=checkout
 ```
 
-- `shop-ssp-control` runs a copy of live's image. `shop-ssp-<commit 12>` runs the
-  image of the arm's build.
+- The name of a copy is `shop-ssp-<experiment>-<commit 12>`, such as
+  `shop-ssp-checkout-a1b2c3d4e5f6`. A name has at most 63 characters. A longer name
+  is cut and ends with a short hash.
+- Each copy runs the image of its arm's build.
 - Each copy has the shop's pod spec: its environment, Secrets, service account,
   resources, probes, and volumes. Only the image changes.
-- The copies' pods carry only the labels `statespace.com/app` and
-  `statespace.com/unit`, so the Service `shop` never sends them traffic.
+- The copies' pods carry only the labels `statespace.com/app`,
+  `statespace.com/unit`, `statespace.com/experiment`, and `statespace.com/commit`.
+  Thus the Service `shop` never sends them traffic.
 - Each copy gets the shop's replicas times its share, at least one, and a Service of
   its own.
+- One commit in two experiments runs as two copies.
 - The proxy reads live's image digest from the status of the shop's ready pods.
 
-When an arm ends, the proxy deletes its Deployment and its Service. When live changes,
-the proxy changes the control to the new image.
+When an experiment stops, the proxy deletes the Deployments and Services of its
+arms.
 
 Kubernetes joins a container's standard output and standard error, so the proxy records
 every line of a copy as `stdout`.

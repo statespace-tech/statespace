@@ -1,7 +1,7 @@
 """A small shop for trying Statespace with FastAPI.
 
 Run it behind `ssp proxy`. It prints a JSON line for each signup and purchase.
-The `[[event]]` rules in statespace.toml count them for the control and each arm.
+The `[[event]]` rules in statespace.toml count them for each arm of an experiment.
 An arm is a commit of this file, built into an image in CI.
 """
 
