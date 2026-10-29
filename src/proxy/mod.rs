@@ -27,7 +27,9 @@ use tokio::task::JoinHandle;
 use self::{
     assign::Routing,
     lease::Lease,
-    orchestrator::{Orchestrator, Running, Side, Unit, UnitKey, docker::Docker},
+    orchestrator::{
+        Orchestrator, Running, Side, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
+    },
     recorder::{Origin, Recorder},
     remote::{ConfigError, Remote},
 };
@@ -56,6 +58,10 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                     let orchestrator = Docker::new(&common.app, &common.listen, docker).await?;
                     orchestrator.wait_for_live(Duration::from_secs(180)).await;
                     serve(Arc::new(orchestrator), common, remote).await
+                }
+                ProxyCommand::Cloudrun { common, cloudrun } => {
+                    let remote = connect(endpoint, &common).await?;
+                    serve(Arc::new(CloudRun::new(cloudrun).await?), common, remote).await
                 }
             }
         })

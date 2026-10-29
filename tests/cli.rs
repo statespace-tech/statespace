@@ -97,6 +97,22 @@ fn answer(mut stream: TcpStream, handler: &dyn Fn(&Received) -> Answer) {
     );
 }
 
+/// A small app that answers with its name and what it received.
+fn echo(name: &'static str) -> u16 {
+    serve(move |received| {
+        json_answer(
+            200,
+            &json!({
+                "name": name,
+                "method": received.method,
+                "path": received.path,
+                "query": received.query,
+                "headers": received.headers,
+            }),
+        )
+    })
+}
+
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .unwrap()
@@ -277,6 +293,44 @@ impl Drop for Process {
     }
 }
 
+/// Start a proxy that listens on a port of its choice, and return it with
+/// the port it printed. Its other output is dropped.
+fn spawn_proxy(mut command: std::process::Command) -> (Process, u16) {
+    let mut child = command
+        .args(["--listen", "127.0.0.1:0"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if std::env::var_os("SSP_TEST_LOGS").is_some() {
+                eprintln!("{line}");
+            }
+            if let Some(port) = line
+                .split_once("listening on 127.0.0.1:")
+                .and_then(|(_, port)| port.trim().parse::<u16>().ok())
+            {
+                let _ = sender.send(port);
+            }
+        }
+    });
+    let process = Process(child);
+    let port = receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the proxy listens");
+    (process, port)
+}
+
+fn digest(character: char) -> String {
+    format!(
+        "ghcr.io/acme/shop@sha256:{}",
+        character.to_string().repeat(64)
+    )
+}
+
 fn client() -> reqwest::blocking::Client {
     reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -299,6 +353,15 @@ fn send(
         request = request.header(*name, *value);
     }
     request.send().ok()
+}
+
+fn set_cookies(response: &reqwest::blocking::Response) -> Vec<String> {
+    response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_owned())
+        .collect()
 }
 
 /// A subject whose point falls in `[start, end)` with the salt `salt-1`.
@@ -669,6 +732,598 @@ fn proxies_fail_for_an_app_that_does_not_exist() {
         &["proxy", "docker", "--app", "shop-prod", "--image-file", "x"],
     );
     assert!(!ok && stderr.contains("--token"), "{stderr}");
+}
+
+// ---------------------------------------------------------------------------
+// The proxy on Cloud Run, against stand-ins for the Admin API, the metadata
+// server, and Cloud Logging.
+
+/// The state of the Cloud Run service `shop`.
+struct Google {
+    service: Value,
+    revisions: HashMap<String, Value>,
+    /// Where each side's tag URL points.
+    control: String,
+    arm: String,
+    patches: Vec<Value>,
+    id_tokens: Vec<String>,
+}
+
+const SERVICE: &str = "projects/acme/locations/us-east1/services/shop";
+
+fn google(state: Arc<Mutex<Google>>) -> String {
+    let port = serve(move |received| {
+        let mut google = state.lock().unwrap();
+        let path = received.path.as_str();
+        if path.starts_with("/computeMetadata/") {
+            assert_eq!(received.headers["metadata-flavor"], "Google");
+        } else if path.starts_with("/v2/") {
+            assert_eq!(received.headers["authorization"], "Bearer access-1");
+        }
+        match (received.method.as_str(), path) {
+            ("GET", "/computeMetadata/v1/project/project-id") => (200, "text/plain", "acme".into()),
+            ("GET", "/computeMetadata/v1/instance/service-accounts/default/token") => json_answer(
+                200,
+                &json!({"access_token": "access-1", "expires_in": 3600}),
+            ),
+            ("GET", "/computeMetadata/v1/instance/service-accounts/default/identity") => {
+                let audience = received
+                    .query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("audience="))
+                    .unwrap_or_default()
+                    .replace("%3A", ":")
+                    .replace("%2F", "/");
+                google.id_tokens.push(audience.clone());
+                (200, "text/plain", format!("id-for-{audience}"))
+            }
+            ("GET", path) if path == format!("/v2/{SERVICE}") => json_answer(200, &google.service),
+            ("PATCH", path) if path == format!("/v2/{SERVICE}") => {
+                let body = received.body.clone();
+                google.patches.push(body.clone());
+                let template = &body["template"];
+                if let Some(name) = template["revision"].as_str()
+                    && !google.revisions.contains_key(name)
+                {
+                    google.revisions.insert(
+                        name.to_owned(),
+                        json!({
+                            "name": format!("{SERVICE}/revisions/{name}"),
+                            "labels": template["labels"],
+                            "containers": template["containers"],
+                            "conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}],
+                        }),
+                    );
+                }
+                let statuses: Vec<Value> = body["traffic"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|target| {
+                        let mut status = target.clone();
+                        if let Some(tag) = target["tag"].as_str() {
+                            status["uri"] = json!(if tag == "ssp-control" {
+                                google.control.clone()
+                            } else {
+                                google.arm.clone()
+                            });
+                        }
+                        status
+                    })
+                    .collect();
+                google.service["traffic"] = body["traffic"].clone();
+                google.service["template"] = body["template"].clone();
+                google.service["trafficStatuses"] = json!(statuses);
+                json_answer(200, &json!({"name": "operations/1"}))
+            }
+            ("GET", path) if path.starts_with(&format!("/v2/{SERVICE}/revisions/")) => {
+                let name = path.rsplit('/').next().unwrap();
+                match google.revisions.get(name) {
+                    Some(revision) => json_answer(200, revision),
+                    None => json_answer(404, &json!({"error": {"message": "no revision"}})),
+                }
+            }
+            ("DELETE", _) => json_answer(200, &json!({})),
+            ("POST", "/v2/entries:list") => {
+                assert_eq!(received.headers["authorization"], "Bearer access-1");
+                let filter = received.body["filter"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let revision = filter
+                    .split("revision_name=\"")
+                    .nth(1)
+                    .and_then(|rest| rest.split('"').next())
+                    .unwrap_or_default()
+                    .to_owned();
+                let log =
+                    |stream: &str| format!("projects/acme/logs/run.googleapis.com%2F{stream}");
+                json_answer(
+                    200,
+                    &json!({"entries": [
+                        {"insertId": format!("{revision}-1"), "timestamp": "2099-01-01T00:00:00Z",
+                         "logName": log("stdout"), "jsonPayload": {"event": "signup", "card": "4242424242424242"}},
+                        {"insertId": format!("{revision}-2"), "timestamp": "2099-01-01T00:00:01Z",
+                         "logName": log("stderr"), "textPayload": "FATAL out of memory"},
+                    ]}),
+                )
+            }
+            _ => json_answer(
+                404,
+                &json!({"error": {"message": format!("no route {path}")}}),
+            ),
+        }
+    });
+    format!("127.0.0.1:{port}")
+}
+
+struct CloudRunTest {
+    statespace: Arc<Mutex<Statespace>>,
+    google: Arc<Mutex<Google>>,
+    port: u16,
+    _proxy: Process,
+    _directory: tempfile::TempDir,
+}
+
+fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
+    let live = echo("live");
+    let control = echo("control");
+    let arm = echo("arm");
+    let google_state = Arc::new(Mutex::new(Google {
+        service: json!({
+            "name": SERVICE,
+            "uri": format!("http://127.0.0.1:{live}"),
+            "latestReadyRevision": format!("{SERVICE}/revisions/shop-00001-abc"),
+            "labels": {"team": "web"},
+            "template": {"containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
+                                         "ports": [{"containerPort": 8080}]}]},
+            "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
+            "trafficStatuses": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100,
+                                 "revision": "shop-00001-abc"}],
+        }),
+        revisions: HashMap::from([(
+            "shop-00001-abc".to_owned(),
+            json!({"name": format!("{SERVICE}/revisions/shop-00001-abc"),
+                   "containers": [{"image": digest('1'), "ports": [{"containerPort": 8080}]}]}),
+        )]),
+        control: format!("http://127.0.0.1:{control}"),
+        arm: format!("http://127.0.0.1:{arm}"),
+        patches: Vec::new(),
+        id_tokens: Vec::new(),
+    }));
+    let google_host = google(google_state.clone());
+    let state = Arc::new(Mutex::new(Statespace {
+        lease,
+        config: json!({
+            "app": "shop-prod",
+            "salt": "salt-1",
+            "settings_hash": "settings-1",
+            "settings": {"subject": "request.cookies.ssp_sid", "eligibility": null,
+                         "overrides": overrides, "redact": ["\\b\\d{16}\\b"], "max_arms": 5},
+            "events": [
+                {"name": "checkout", "source": "request",
+                 "match": "request.path == \"/checkout\" && request.status == 200"},
+                {"name": "signup", "source": "stdout", "match": "stdout.json.event == \"signup\""},
+                {"name": "fatal", "source": "stderr", "match": "stderr.text.contains(\"FATAL\")"},
+            ],
+            "live": {"commit": LIVE, "image": digest('1')},
+            "control": {"image": digest('1'), "ranges": [[0.0, 0.4]]},
+            "arms": [{"commit": ARM, "image": digest('2'), "version": 3, "ranges": [[0.4, 0.8]]}],
+            "lease": null,
+            "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("STATESPACE_CLOUDRUN_API", format!("http://{google_host}"))
+        .env("STATESPACE_LOGGING_API", format!("http://{google_host}"))
+        .env("GCE_METADATA_HOST", &google_host)
+        .args(["proxy", "cloudrun", "--app", "shop-prod"])
+        .args(["--service", "shop", "--region", "us-east1"]);
+    let (proxy, port) = spawn_proxy(command);
+    CloudRunTest {
+        statespace: state,
+        google: google_state,
+        port,
+        _proxy: proxy,
+        _directory: directory,
+    }
+}
+
+#[test]
+fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
+    let test = cloudrun_proxy(false, true);
+    let control_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+    let get = |subject: &str, path: &str| -> Option<(Value, reqwest::header::HeaderMap)> {
+        let cookie = format!("ssp_sid={subject}");
+        let response = send(
+            test.port,
+            "GET",
+            path,
+            &[
+                ("cookie", &cookie),
+                ("x-statespace-arm", "spoofed"),
+                ("x-forwarded-proto", "https"),
+                ("authorization", "Bearer the-app's-own"),
+            ],
+        )?;
+        let headers = response.headers().clone();
+        let body: Value = response.json().ok()?;
+        Some((body, headers))
+    };
+    wait_until(60, "the arm and the control serve", || {
+        get(&arm_subject, "/").is_some_and(|(body, _)| body["name"] == "arm")
+            && get(&control_subject, "/").is_some_and(|(body, _)| body["name"] == "control")
+    });
+
+    // The lease holder made one tagged revision for each unit, with 0% traffic,
+    // and pinned live's traffic to the revision it has.
+    let patches = test.google.lock().unwrap().patches.clone();
+    let last = patches.last().unwrap();
+    let traffic = last["traffic"].as_array().unwrap();
+    assert!(
+        traffic.contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+                                     "revision": "shop-00001-abc", "percent": 100})),
+        "{traffic:?}"
+    );
+    let tags: Vec<&str> = traffic
+        .iter()
+        .filter_map(|target| target["tag"].as_str())
+        .collect();
+    assert!(
+        tags.contains(&"ssp-control") && tags.contains(&"ssp-a1b2c3d4e5f6"),
+        "{tags:?}"
+    );
+    assert!(
+        traffic
+            .iter()
+            .filter(|target| target["tag"].is_string())
+            .all(|target| target["percent"] == 0)
+    );
+    assert_eq!(
+        last["labels"]["team"], "web",
+        "the service keeps its own settings"
+    );
+
+    // The arm gets the arm's headers and a Google ID token for its URL; the
+    // app keeps its own Authorization header.
+    let (arm_body, arm_response) = get(&arm_subject, "/checkout").unwrap();
+    let headers = &arm_body["headers"];
+    assert_eq!(headers["x-statespace-side"], "arm");
+    assert_eq!(headers["x-statespace-arm"], ARM);
+    assert_eq!(headers["x-statespace-subject"], arm_subject.as_str());
+    assert_eq!(headers["authorization"], "Bearer the-app's-own");
+    let arm_url = test.google.lock().unwrap().arm.clone();
+    assert_eq!(
+        headers["x-serverless-authorization"],
+        format!("Bearer id-for-{arm_url}")
+    );
+    assert_eq!(arm_response["cache-control"], "private, max-age=60");
+    let (control_body, _) = get(&control_subject, "/").unwrap();
+    assert_eq!(control_body["headers"]["x-statespace-side"], "control");
+    assert!(control_body["headers"].get("x-statespace-arm").is_none());
+
+    // Live is untouched: no side, no private cache, no recording.
+    let (live_body, live_response) = get(&live_subject, "/").unwrap();
+    assert_eq!(live_body["name"], "live");
+    assert!(live_body["headers"].get("x-statespace-side").is_none());
+    assert_eq!(live_response["cache-control"], "public, max-age=60");
+    assert_eq!(
+        live_body["headers"]["x-statespace-subject"],
+        live_subject.as_str()
+    );
+
+    // Every response renews the visitor cookie; a new visitor gets one.
+    let cookies = live_response
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cookies,
+        [format!(
+            "ssp_sid={live_subject}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=None; Partitioned"
+        )]
+    );
+    let fresh = send(test.port, "GET", "/", &[]).unwrap();
+    let cookie = set_cookies(&fresh).pop().unwrap();
+    assert!(
+        cookie.starts_with("ssp_sid=sid_")
+            && cookie.ends_with("; Path=/; Max-Age=7776000; HttpOnly; SameSite=Lax"),
+        "{cookie}"
+    );
+
+    // Rows arrive for the control and the arm only, with the agreed fields.
+    wait_until(30, "rows of every table", || {
+        let state = test.statespace.lock().unwrap();
+        [
+            "runs",
+            "requests",
+            "stdout",
+            "stderr",
+            "events",
+            "lifecycle",
+        ]
+        .iter()
+        .all(|table| !state.rows(table).is_empty())
+            && state
+                .rows("events")
+                .iter()
+                .any(|row| row["name"] == "fatal")
+            && state
+                .rows("events")
+                .iter()
+                .any(|row| row["name"] == "checkout")
+    });
+    let state = test.statespace.lock().unwrap();
+    let runs = state.rows("runs");
+    assert!(runs.iter().any(|run| run["side"] == "control"
+        && run["arm"].is_null()
+        && run["version"].is_null()
+        && run["live"] == LIVE
+        && run["subject"] == control_subject.as_str()
+        && run["reason"] == "assigned"));
+    assert!(
+        runs.iter()
+            .any(|run| run["side"] == "arm" && run["arm"] == ARM && run["version"] == 3)
+    );
+    assert!(
+        runs.iter()
+            .all(|run| run["subject"] != live_subject.as_str())
+    );
+    let requests = state.rows("requests");
+    assert!(
+        requests
+            .iter()
+            .all(|row| row["side"] == "arm" || row["side"] == "control")
+    );
+    let checkout = requests
+        .iter()
+        .find(|row| row["path"] == "/checkout")
+        .unwrap();
+    assert_eq!(checkout["status"], 200);
+    assert_eq!(checkout["override"], false);
+    assert_eq!(checkout["subject"], arm_subject.as_str());
+    assert!(
+        checkout["ms"].as_f64().is_some()
+            && checkout["id"].is_string()
+            && checkout["timestamp"].is_string()
+    );
+    let events = state.rows("events");
+    let event = events.iter().find(|row| row["name"] == "checkout").unwrap();
+    assert_eq!(
+        (&event["side"], &event["subject"]),
+        (&json!("arm"), &json!(arm_subject))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|row| row["name"] == "signup" && row["subject"].is_null())
+    );
+    // Output is redacted before it leaves.
+    let stdout = state.rows("stdout");
+    assert!(
+        stdout
+            .iter()
+            .all(|row| !row["text"].as_str().unwrap().contains("4242424242424242"))
+    );
+    assert!(
+        stdout
+            .iter()
+            .any(|row| row["text"].as_str().unwrap().contains("[redacted]"))
+    );
+    assert!(
+        state
+            .rows("stderr")
+            .iter()
+            .any(|row| row["text"] == "FATAL out of memory")
+    );
+    assert!(
+        state
+            .rows("lifecycle")
+            .iter()
+            .any(|row| row["event"] == "started")
+    );
+    // Batches carry every table.
+    let batch = state
+        .received
+        .iter()
+        .find(|received| received.path == "/v1/events")
+        .unwrap();
+    for table in [
+        "app",
+        "runs",
+        "requests",
+        "stdout",
+        "stderr",
+        "events",
+        "lifecycle",
+    ] {
+        assert!(batch.body.get(table).is_some(), "{table}");
+    }
+    assert_eq!(batch.body["app"], "shop-prod");
+    drop(state);
+    // Reports name the orchestrator and live image; the holder adds its units.
+    wait_until(30, "a report with units", || {
+        test.statespace
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report.get("units").is_some())
+    });
+    let state = test.statespace.lock().unwrap();
+    let reports = state.reports();
+    let report = reports
+        .iter()
+        .rev()
+        .find(|report| report.get("units").is_some())
+        .unwrap();
+    assert_eq!(report["orchestrator"], "cloudrun");
+    assert_eq!(report["live_image"], digest('1'));
+    assert_eq!(report["settings_hash"], "settings-1");
+    assert!(
+        report["units"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|unit| unit["side"] == "arm" && unit["ready"] == true)
+    );
+    drop(state);
+
+    // When the arm leaves the configuration, the holder removes its tag.
+    test.statespace.lock().unwrap().config["arms"] = json!([]);
+    wait_until(30, "the arm's tag is removed", || {
+        let google = test.google.lock().unwrap();
+        google.service["traffic"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|target| target["tag"] != "ssp-a1b2c3d4e5f6")
+    });
+    let (body, _) = get(&arm_subject, "/").unwrap();
+    assert_eq!(body["name"], "live");
+}
+
+#[test]
+fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
+    let test = cloudrun_proxy(false, false);
+    wait_until(30, "the proxy reports", || {
+        test.statespace.lock().unwrap().reports().len() >= 2
+    });
+    let response = send(test.port, "GET", "/", &[]).unwrap();
+    assert_eq!(response.json::<Value>().unwrap()["name"], "live");
+    std::thread::sleep(Duration::from_secs(3));
+    assert!(test.google.lock().unwrap().patches.is_empty());
+    let state = test.statespace.lock().unwrap();
+    assert!(
+        state
+            .reports()
+            .iter()
+            .all(|report| report.get("units").is_none())
+    );
+    assert!(
+        state
+            .reports()
+            .iter()
+            .all(|report| report["live_image"] == digest('1'))
+    );
+}
+
+#[test]
+fn overrides_name_a_running_arm_by_commit() {
+    let test = cloudrun_proxy(true, true);
+    let live_subject = subject_in(0.8, 1.0);
+    let cookie = format!("ssp_sid={live_subject}");
+    let named = [("ssp-arm", "a1b2c3d"), ("cookie", cookie.as_str())];
+    wait_until(60, "the arm serves overrides", || {
+        send(test.port, "GET", "/", &named).is_some_and(|response| {
+            response.status() == 200 && response.json::<Value>().unwrap()["name"] == "arm"
+        })
+    });
+
+    // The header serves the arm for one request; the app never sees it.
+    let response = send(test.port, "GET", "/cart?step=1", &named).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .all(|cookie| !cookie.starts_with("ssp_arm"))
+    );
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["name"], "arm");
+    assert!(body["headers"].get("ssp-arm").is_none());
+
+    // A browser's parameter sets the cookie and returns to the clean URL.
+    let plain_cookie = [("cookie", cookie.as_str())];
+    let response = send(
+        test.port,
+        "GET",
+        "/cart?step=1&ssp_arm=a1b2c3d",
+        &plain_cookie,
+    )
+    .unwrap();
+    assert_eq!(response.status(), 302);
+    assert_eq!(response.headers()["location"], "/cart?step=1");
+    assert!(set_cookies(&response).contains(&format!(
+        "ssp_arm={ARM}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
+    )));
+
+    // The cookie keeps the arm and never reaches the app.
+    let kept_cookie = format!("{cookie}; ssp_arm={ARM}");
+    let kept = [("cookie", kept_cookie.as_str())];
+    let response = send(test.port, "GET", "/", &kept).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|cookie| cookie.starts_with(&format!("ssp_arm={ARM};")))
+    );
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["name"], "arm");
+    assert_eq!(body["headers"]["cookie"], cookie.as_str());
+
+    // A prefix that matches no running arm gets a short page.
+    let response = send(test.port, "GET", "/?ssp_arm=b2c3d4e5", &plain_cookie).unwrap();
+    assert_eq!(response.status(), 404);
+    assert!(
+        response
+            .text()
+            .unwrap()
+            .contains("b2c3d4e5 is not running on shop-prod. Running arms: a1b2c3d.")
+    );
+    let response = send(test.port, "GET", "/", &[("ssp-arm", "a1b2c3")]).unwrap();
+    assert_eq!(response.status(), 404);
+
+    // An empty parameter ends the override.
+    let response = send(test.port, "GET", "/?ssp_arm=", &kept).unwrap();
+    assert_eq!(response.status(), 302);
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|cookie| cookie.starts_with("ssp_arm=; "))
+    );
+
+    wait_until(30, "an override run and request", || {
+        let state = test.statespace.lock().unwrap();
+        state
+            .rows("runs")
+            .iter()
+            .any(|run| run["reason"] == "override" && run["subject"] == live_subject.as_str())
+            && state
+                .rows("requests")
+                .iter()
+                .any(|row| row["override"] == true)
+    });
+}
+
+#[test]
+fn proxies_without_overrides_still_remove_them() {
+    let test = cloudrun_proxy(false, true);
+    wait_until(60, "the proxy listens", || {
+        send(test.port, "GET", "/", &[]).is_some()
+    });
+    let live_subject = subject_in(0.8, 1.0);
+    let cookie = format!("ssp_sid={live_subject}; ssp_arm={ARM}");
+    let response = send(
+        test.port,
+        "GET",
+        "/a?ssp_arm=a1b2c3d",
+        &[("ssp-arm", "a1b2c3d"), ("cookie", &cookie)],
+    )
+    .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["name"], "live");
+    assert_eq!(body["query"], "");
+    assert!(body["headers"].get("ssp-arm").is_none());
+    assert_eq!(body["headers"]["cookie"], format!("ssp_sid={live_subject}"));
 }
 
 // ---------------------------------------------------------------------------

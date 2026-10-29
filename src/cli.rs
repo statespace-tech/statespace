@@ -275,6 +275,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         docker: DockerArgs,
     },
+    /// Run the control and the arms as tagged revisions of a Cloud Run service.
+    Cloudrun {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        cloudrun: CloudRunArgs,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -300,6 +307,43 @@ pub struct DockerArgs {
     /// A CPU limit for each container, such as `1.5`.
     #[arg(long)]
     pub cpus: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct CloudRunArgs {
+    /// The Cloud Run service that runs live.
+    #[arg(long)]
+    pub service: String,
+    /// The region of the service, such as `us-east1`.
+    #[arg(long)]
+    pub region: String,
+    /// The Google Cloud project. Defaults to the project of the proxy.
+    #[arg(long)]
+    pub project: Option<String>,
+    /// The Cloud Run Admin API. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_CLOUDRUN_API",
+        hide = true,
+        default_value = "https://run.googleapis.com"
+    )]
+    pub run_api: String,
+    /// The Cloud Logging API. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_LOGGING_API",
+        hide = true,
+        default_value = "https://logging.googleapis.com"
+    )]
+    pub logging_api: String,
+    /// The metadata server that gives credentials. For tests.
+    #[arg(
+        long,
+        env = "GCE_METADATA_HOST",
+        hide = true,
+        default_value = "metadata.google.internal"
+    )]
+    pub metadata_host: String,
 }
 
 #[cfg(test)]
@@ -399,6 +443,19 @@ mod tests {
                 "t",
                 "--image-file",
                 "/etc/shop/image",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "cloudrun",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--service",
+                "shop",
+                "--region",
+                "us-east1",
             ],
         ] {
             Cli::try_parse_from(&arguments)

@@ -2,6 +2,7 @@
 //! Run, or Kubernetes. A new orchestrator is a new module and a new
 //! subcommand of `ssp proxy`.
 
+pub mod cloudrun;
 pub mod docker;
 
 use std::future::Future;
