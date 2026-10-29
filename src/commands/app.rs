@@ -7,7 +7,6 @@ use anyhow::{Context, bail};
 use reqwest::Method;
 use serde_json::{Value, json};
 
-use super::arm::arm_rows;
 use crate::{
     api::{Api, segment},
     cli::AppCommand,
@@ -32,7 +31,8 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
             emit(&deleted, || {
                 let app = &deleted["deleted"];
                 format!(
-                    "Removed app {name} ({} {}) and all its data: runs, requests, output, events, and holds.",
+                    "Removed app {name} ({} {}) and all its data: experiments, versions, runs, \
+                     requests, output, and events.",
                     text(&app["repo"]),
                     text(&app["path"]),
                 )
@@ -51,8 +51,7 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
                             text(&app["repo"]),
                             text(&app["path"]),
                             live(&app["live"]),
-                            text(&app["arms"]),
-                            holds_summary(&app["holds"]),
+                            text(&app["experiments"]),
                         ]
                     })
                     .collect::<Vec<_>>();
@@ -60,39 +59,54 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
                     return "No apps. Add one with `ssp app add <name>` in the app's folder."
                         .into();
                 }
-                table(&["NAME", "REPO", "FOLDER", "LIVE", "ARMS", "HOLDS"], rows)
+                table(&["NAME", "REPO", "FOLDER", "LIVE", "RUNNING"], rows)
             })
         }
         AppCommand::Show { name } => {
             let app: Value = api.get(&app_path(&name))?;
             emit(&app, || show(&app))
         }
-        AppCommand::Stop { name, note } => {
-            let hold: Value = api.send(
-                Method::POST,
-                &format!("{}/stop", app_path(&name)),
-                &json!({ "note": note.note }),
-            )?;
-            emit(&hold, || {
-                format!(
-                    "Stopped every arm of {name}, now and added later. {}\nTo run them again: ssp app resume {name}",
-                    hold_line(&hold)
-                )
-            })
+    }
+}
+
+/// The app of `--app`, else the only app of the repository and folder here.
+/// It prints the app it chose.
+pub fn resolve(api: &Api, flag: Option<String>) -> anyhow::Result<String> {
+    if let Some(app) = flag {
+        return Ok(app);
+    }
+    let here = Path::new(".");
+    let (repository, folder) = repo::root(here)
+        .and_then(|root| Ok((repo::repository(&root)?, repo::folder(here, &root)?)))
+        .context("pass --app, or run the command in the folder of an app")?;
+    let apps: Value = api.get("/v1/apps")?;
+    let linked: Vec<String> = apps["apps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|app| {
+            app["repo"]
+                .as_str()
+                .is_some_and(|repo| repo.eq_ignore_ascii_case(&repository))
+                && app["path"] == folder.as_str()
+        })
+        .filter_map(|app| app["name"].as_str().map(str::to_owned))
+        .collect();
+    match linked.as_slice() {
+        [app] => {
+            note(&format!(
+                "Using app {app}, the only app of {repository} in folder {folder}."
+            ));
+            Ok(app.clone())
         }
-        AppCommand::Resume { name, note } => {
-            let hold: Value = api.send(
-                Method::POST,
-                &format!("{}/resume", app_path(&name)),
-                &json!({ "note": note.note }),
-            )?;
-            emit(&hold, || {
-                format!(
-                    "Removed the hold on {name}. Arms with a hold of their own stay stopped; \
-                     see ssp arm list --app {name}."
-                )
-            })
-        }
+        [] => bail!(
+            "no app is linked to {repository} in folder {folder}; pass --app, or add one with ssp app add <name>"
+        ),
+        apps => bail!(
+            "{repository} in folder {folder} has {} apps: {}; pass --app",
+            apps.len(),
+            apps.join(", ")
+        ),
     }
 }
 
@@ -174,40 +188,12 @@ fn normalize_folder(folder: &str) -> anyhow::Result<String> {
     })
 }
 
-/// `9f1ce8a` with its image, or why there is no live commit.
+/// `9f1ce8a`, or `-` without a live commit.
 fn live(live: &Value) -> String {
     match live["commit"].as_str() {
         Some(commit) => short(commit),
         None => "-".into(),
     }
-}
-
-fn holds_summary(holds: &Value) -> String {
-    match holds {
-        Value::Array(holds) if holds.is_empty() => "-".into(),
-        Value::Array(holds) => holds.len().to_string(),
-        Value::Number(count) => count.to_string(),
-        other => text(other),
-    }
-}
-
-/// "Stopped by octo with ssp app stop at … · note".
-pub fn hold_line(hold: &Value) -> String {
-    let via = match hold["via"].as_str() {
-        Some("dashboard") => "in the dashboard".to_owned(),
-        Some("api") => "through the API".to_owned(),
-        _ => "with the CLI".to_owned(),
-    };
-    let mut line = format!(
-        "Held by {} {via} at {}",
-        text(&hold["actor"]),
-        time(&hold["created_at"])
-    );
-    if let Some(note) = hold["note"].as_str().filter(|note| !note.is_empty()) {
-        line.push_str(&format!(" · {note}"));
-    }
-    line.push('.');
-    line
 }
 
 fn show(app: &Value) -> String {
@@ -222,37 +208,67 @@ fn show(app: &Value) -> String {
     rows.push((
         "Live",
         match app["live"]["commit"].as_str() {
-            Some(commit) => format!("{} ({})", short(commit), text(&app["live"]["image"])),
+            Some(commit) => format!(
+                "{} ({}, built {})",
+                short(commit),
+                text(&app["live"]["image"]),
+                time(&app["live"]["built_at"])
+            ),
             None => "no live commit".into(),
         },
     ));
-    if !app["control"].is_null() {
-        let control = &app["control"];
+    if !app["orchestrator"].is_null() {
+        rows.push(("Orchestrator", text(&app["orchestrator"])));
+    }
+    if !app["lease"].is_null() {
+        let lease = &app["lease"];
         rows.push((
-            "Control",
-            match control["state"].as_str() {
-                Some(state) => format!("{state} ({})", text(&control["image"])),
-                None => text(control),
+            "Lease holder",
+            match lease["holder"].as_str() {
+                Some(holder) => format!("{holder} (until {})", time(&lease["expires_at"])),
+                None => "none".into(),
             },
         ));
     }
-    for (label, key) in [("Orchestrator", "orchestrator"), ("Lease holder", "lease")] {
-        let value = &app[key];
-        if !value.is_null() {
-            let shown = value.get("holder").map_or_else(|| text(value), text);
-            rows.push((label, shown));
+    let mut out = fields(&rows);
+    if let Some(problem) = app["problem"]
+        .as_str()
+        .filter(|problem| !problem.is_empty())
+    {
+        out.push_str(&format!("! {problem}\n"));
+    }
+    if let Some(experiments) = app["experiments"].as_array() {
+        out.push_str("\nExperiments:\n");
+        if experiments.is_empty() {
+            out.push_str("  none\n");
+        } else {
+            let rows = experiments
+                .iter()
+                .map(|experiment| {
+                    vec![
+                        text(&experiment["name"]),
+                        text(&experiment["state"]),
+                        text(&experiment["version"]),
+                        text(&experiment["reason"]),
+                    ]
+                })
+                .collect();
+            out.push_str(&indent(&table(
+                &["NAME", "STATE", "VERSION", "REASON"],
+                rows,
+            )));
         }
     }
-    let mut out = fields(&rows);
-    for problem in ["problems", "warnings", "reasons"]
-        .iter()
-        .filter_map(|key| app[*key].as_array())
-        .flatten()
-    {
-        out.push_str(&format!("! {}\n", text(problem)));
-    }
     if let Some(settings) = app["settings"].as_object() {
-        out.push_str("\nSettings:\n");
+        out.push_str("\nSettings");
+        if let Some(commit) = app["source"]["commit"].as_str() {
+            out.push_str(&format!(
+                " (from {} in {})",
+                short(commit),
+                text(&app["source"]["path"])
+            ));
+        }
+        out.push_str(":\n");
         let rows: Vec<(&str, String)> = settings
             .iter()
             .map(|(key, value)| (key.as_str(), compact(value)))
@@ -286,23 +302,6 @@ fn show(app: &Value) -> String {
             rows,
         )));
     }
-    if let Some(arms) = app["arms"].as_array() {
-        out.push_str("\nArms:\n");
-        if arms.is_empty() {
-            out.push_str("  none\n");
-        } else {
-            out.push_str(&indent(&arm_rows(arms)));
-        }
-    }
-    if let Some(holds) = app["holds"].as_array().filter(|list| !list.is_empty()) {
-        out.push_str("\nHolds:\n");
-        for hold in holds {
-            let target = hold["arm"]
-                .as_str()
-                .map_or_else(|| "app".to_owned(), |arm| format!("arm {}", short(arm)));
-            out.push_str(&format!("  {target}: {}\n", hold_line(hold)));
-        }
-    }
     out
 }
 
@@ -310,6 +309,18 @@ fn compact(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => "-".into(),
+        Value::Array(items) if items.is_empty() => "none".into(),
+        // Events and metrics, by name or label.
+        Value::Array(items) => items
+            .iter()
+            .map(
+                |item| match item.get("name").or_else(|| item.get("label")) {
+                    Some(name) => text(name),
+                    None => compact(item),
+                },
+            )
+            .collect::<Vec<_>>()
+            .join(", "),
         other => other.to_string(),
     }
 }
@@ -332,14 +343,12 @@ mod tests {
     }
 
     #[test]
-    fn describes_holds() {
-        let hold = json!({
-            "actor": "octo", "via": "cli", "note": "errors > 2%",
-            "created_at": "2026-10-28T10:00:00Z",
-        });
+    fn shows_settings_compactly() {
+        assert_eq!(compact(&json!([])), "none");
         assert_eq!(
-            hold_line(&hold),
-            "Held by octo with the CLI at 2026-10-28 10:00 UTC · errors > 2%."
+            compact(&json!([{"name": "purchase", "match": "x"}, {"label": "rate %"}])),
+            "purchase, rate %"
         );
+        assert_eq!(compact(&json!(false)), "false");
     }
 }

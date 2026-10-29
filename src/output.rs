@@ -98,12 +98,6 @@ pub fn list(value: &Value) -> String {
     }
 }
 
-/// A share of subjects as a percentage, such as `5%` or `12.5%`.
-pub fn share(share: f64) -> String {
-    let percent = format!("{:.2}", share * 100.0);
-    format!("{}%", percent.trim_end_matches('0').trim_end_matches('.'))
-}
-
 /// A timestamp in UTC to the minute, such as `2026-10-15 17:40 UTC`.
 pub fn time(value: &Value) -> String {
     value
@@ -131,9 +125,6 @@ mod tests {
 
     #[test]
     fn formats_values() {
-        assert_eq!(share(0.05), "5%");
-        assert_eq!(share(0.125), "12.5%");
-        assert_eq!(share(1.0 / 3.0), "33.33%");
         assert_eq!(
             time(&json!("2026-10-15T17:40:12.5+00:00")),
             "2026-10-15 17:40 UTC"

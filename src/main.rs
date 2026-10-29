@@ -1,4 +1,4 @@
-//! `ssp`: run commits as arms on a share of live traffic, beside a control.
+//! `ssp`: run commits as arms of experiments on shares of live traffic.
 //!
 //! Every command except `ssp proxy` prints text, or one JSON document with
 //! `--json`. Errors print on standard error, as `{"error": "..."}` with

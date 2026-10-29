@@ -139,6 +139,25 @@ struct Statespace {
     /// Whether reports get the lease.
     lease: bool,
     received: Vec<Received>,
+    /// How often each experiment was read since its start.
+    polls: HashMap<String, usize>,
+}
+
+/// An experiment of `shop-prod`, as the API returns it.
+fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)]) -> Value {
+    json!({
+        "name": name, "app": "shop-prod", "state": state, "reason": null, "version": 3,
+        "definition": {
+            "subject": if name == "us-landing" { json!("request.headers[\"x-user-id\"]") } else { Value::Null },
+            "eligibility": null, "max_share": 0.2,
+        },
+        "reference": LIVE,
+        "headline": {"label": "purchase rate %", "values": {LIVE: 2.8, ARM: 3.4}},
+        "arms": arms.iter().map(|(commit, share, ready, reason)| json!({
+            "commit": commit, "share": share, "image": digest('2'), "ready": ready,
+            "reason": reason, "ahead": 1, "behind": 0, "live_contains": false,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 impl Statespace {
@@ -188,28 +207,114 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
             ),
             ("GET", "/v1/apps") => json_answer(
                 200,
-                &json!({"apps": [{
-                    "name": "shop-prod", "repo": "acme/shop", "path": "shop",
-                    "live": {"commit": LIVE, "image": "ghcr.io/acme/shop@sha256:1"},
-                    "arms": 1, "holds": [],
-                }]}),
+                &json!({"apps": [
+                    {"name": "shop-prod", "repo": "acme/shop", "path": "shop",
+                     "live": {"commit": LIVE, "image": "ghcr.io/acme/shop@sha256:1"},
+                     "experiments": 1},
+                    {"name": "shop-dev", "repo": "acme/shop", "path": "dev",
+                     "live": null, "experiments": 0},
+                    {"name": "shop-staging", "repo": "acme/shop", "path": "dev",
+                     "live": null, "experiments": 0},
+                ]}),
             ),
-            ("POST", "/v1/apps/shop-prod/arms") => json_answer(
-                201,
-                &json!({
-                    "commit": ARM, "app": "shop-prod", "share": 0.1, "previous_share": 0.05,
-                    "state": "starting", "reason": null, "version": 2,
-                    "build": {"image": "ghcr.io/acme/shop@sha256:2", "app": null},
-                }),
+            ("GET", "/v1/apps/shop-prod/experiments") => {
+                let mut experiments = vec![
+                    experiment(
+                        "checkout",
+                        "running",
+                        &[(LIVE, 0.05, true, None), (ARM, 0.05, true, None)],
+                    ),
+                    experiment("us-landing", "stopped", &[]),
+                ];
+                if received.query == "all=true" {
+                    experiments.push(experiment("pricing", "gone", &[]));
+                }
+                json_answer(200, &json!({"experiments": experiments}))
+            }
+            ("GET", "/v1/apps/shop-prod/experiments/checkout") => json_answer(
+                200,
+                &experiment(
+                    "checkout",
+                    "stopped",
+                    &[(LIVE, 0.05, false, None), (ARM, 0.05, false, None)],
+                ),
             ),
-            ("POST", "/v1/apps/shop-prod/stop") => json_answer(
+            ("PATCH", "/v1/apps/shop-prod/experiments/checkout/arms") => json_answer(
                 200,
                 &json!({
-                    "app": "shop-prod", "arm": null, "actor": "octo", "actor_kind": "person",
-                    "via": "cli", "note": received.body["note"],
-                    "created_at": "2026-10-28T10:00:00Z",
+                    "experiment": experiment("checkout", "stopped",
+                        &[(LIVE, 0.06, false, None), (LANDING, 0.05, false, None)]),
+                    "added": [LANDING], "changed": [LIVE], "removed": [ARM],
                 }),
             ),
+            ("POST", "/v1/apps/shop-prod/experiments/us-landing/start") => {
+                state.polls.insert("us-landing".into(), 0);
+                json_answer(
+                    200,
+                    &experiment(
+                        "us-landing",
+                        "starting",
+                        &[(LIVE, 0.05, false, None), (ARM, 0.05, false, None)],
+                    ),
+                )
+            }
+            ("GET", "/v1/apps/shop-prod/experiments/us-landing") => {
+                let polls = state.polls.entry("us-landing".into()).or_default();
+                *polls += 1;
+                json_answer(
+                    200,
+                    &match *polls {
+                        1 => experiment(
+                            "us-landing",
+                            "starting",
+                            &[(LIVE, 0.05, true, None), (ARM, 0.05, false, None)],
+                        ),
+                        _ => experiment(
+                            "us-landing",
+                            "running",
+                            &[(LIVE, 0.05, true, None), (ARM, 0.05, true, None)],
+                        ),
+                    },
+                )
+            }
+            ("POST", "/v1/apps/shop-prod/experiments/pricing/start") => json_answer(
+                200,
+                &experiment(
+                    "pricing",
+                    "starting",
+                    &[(LIVE, 0.05, false, None), (ARM, 0.05, false, None)],
+                ),
+            ),
+            ("GET", "/v1/apps/shop-prod/experiments/pricing") => {
+                let mut stopped = experiment(
+                    "pricing",
+                    "stopped",
+                    &[
+                        (LIVE, 0.05, true, None),
+                        (
+                            ARM,
+                            0.05,
+                            false,
+                            Some("the container exits at start (exit 1)"),
+                        ),
+                    ],
+                );
+                stopped["reason"] = json!("an arm was not ready in 5 minutes");
+                json_answer(200, &stopped)
+            }
+            ("POST", path)
+                if path.starts_with("/v1/apps/shop-prod/experiments/")
+                    && path.ends_with("/stop") =>
+            {
+                let name = path.split('/').nth(5).unwrap();
+                json_answer(
+                    200,
+                    &experiment(name, "stopped", &[(LIVE, 0.05, false, None)]),
+                )
+            }
+            ("GET", "/v1/apps/shop-prod/experiments/us-landing-x") => {
+                json_answer(404, &json!({"error": "no experiment us-landing-x"}))
+            }
             ("POST", "/v1/tokens") => json_answer(
                 201,
                 &json!({"id": "tok_1", "app": received.body["app"], "token": "ssp_rt_secret"}),
@@ -398,9 +503,26 @@ fn errors_exit_1_as_text_or_one_json_document() {
     assert!(stderr.starts_with("error: no credential"), "{stderr}");
     for arguments in [
         vec!["--json", "app", "list"],
-        vec!["--json", "arm", "add", "zzz", "--app", "shop-prod"],
-        vec!["--json", "app", "stop", "shop-prod", "--note", ""],
+        vec![
+            "--json",
+            "experiment",
+            "update",
+            "checkout",
+            "--arm",
+            "zzz=0.1",
+        ],
+        vec![
+            "--json",
+            "experiment",
+            "update",
+            "checkout",
+            "--arm",
+            "a1b2c3d=5",
+        ],
+        vec!["--json", "app", "remove", "shop-prod", "--note", ""],
         vec!["--json", "status"],
+        vec!["--json", "init"],
+        vec!["--json", "arm", "list"],
     ] {
         let output = Command::cargo_bin("ssp")
             .unwrap()
@@ -462,7 +584,11 @@ fn app_add_detects_the_repository_and_folder() {
     );
     let folder = root.join("services/shop");
     std::fs::create_dir_all(folder.join("src")).unwrap();
-    std::fs::write(folder.join("statespace.toml"), "max_traffic = 0.2\n").unwrap();
+    std::fs::write(
+        folder.join("statespace.toml"),
+        "[experiment.checkout]\nmax_share = 0.2\n",
+    )
+    .unwrap();
     let state = Arc::new(Mutex::new(Statespace::default()));
     let api = statespace(state.clone());
     let token = [("STATESPACE_TOKEN", "ssp_admin")];
@@ -532,87 +658,221 @@ fn app_add_detects_the_repository_and_folder() {
     );
     // Without statespace.toml, it fails.
     let (ok, _, stderr) = ssp(root, &api, &token, &["app", "add", "shop-dev"]);
-    assert!(!ok && stderr.contains("ssp init"), "{stderr}");
+    assert!(
+        !ok && stderr.contains("no statespace.toml here") && stderr.contains("skill.md"),
+        "{stderr}"
+    );
+}
+
+/// A repository `acme/shop` with the app's folder `shop`, linked to
+/// `shop-prod`, and the folder `dev`, linked to two apps.
+fn shop_repository() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    git(root, &["init", "--quiet"]);
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.com/acme/shop.git",
+        ],
+    );
+    for folder in ["shop", "dev"] {
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("statespace.toml"), "").unwrap();
+    }
+    directory
 }
 
 #[test]
 fn commands_print_what_they_chose_and_changed() {
-    let directory = tempfile::tempdir().unwrap();
-    let here = directory.path();
+    let directory = shop_repository();
+    let shop = directory.path().join("shop");
     let state = Arc::new(Mutex::new(Statespace::default()));
     let api = statespace(state.clone());
     let token = [("STATESPACE_TOKEN", "t")];
 
-    let (ok, stdout, stderr) = ssp(
-        here,
-        &api,
-        &token,
-        &[
-            "arm",
-            "add",
-            "A1B2C3D",
-            "--app",
-            "shop-prod",
-            "--share",
-            "0.1",
-            "--note",
-            "green button",
-        ],
-    );
-    assert!(ok, "{stderr}");
-    assert!(stdout.contains("Build: ghcr.io/acme/shop@sha256:2 (for every app of the folder)"));
-    assert!(
-        stdout.contains("Changed the share of arm a1b2c3d on shop-prod from 5% to 10%."),
-        "{stdout}"
-    );
-    assert_eq!(
-        state.lock().unwrap().received.last().unwrap().body,
-        json!({"commit": "a1b2c3d", "share": 0.1, "note": "green button"})
-    );
-    let (ok, stdout, stderr) = ssp(
-        here,
-        &api,
-        &token,
-        &["--json", "arm", "add", "a1b2c3d", "--app", "shop-prod"],
-    );
-    assert!(ok && stderr.is_empty());
-    assert_eq!(
-        parse(&stdout)["build"]["image"],
-        "ghcr.io/acme/shop@sha256:2"
-    );
-    assert_eq!(
-        state.lock().unwrap().received.last().unwrap().body["share"],
-        Value::Null
-    );
-
-    let (ok, stdout, _) = ssp(
-        here,
-        &api,
-        &token,
-        &["app", "stop", "shop-prod", "--note", "errors > 2%"],
-    );
-    assert!(ok);
-    assert!(
-        stdout.contains("Held by octo with the CLI at 2026-10-28 10:00 UTC · errors > 2%."),
-        "{stdout}"
-    );
-    assert!(stdout.contains("ssp app resume shop-prod"));
-
-    let (ok, stdout, _) = ssp(here, &api, &token, &["app", "list"]);
+    let (ok, stdout, _) = ssp(&shop, &api, &token, &["app", "list"]);
     assert!(ok);
     assert!(stdout.starts_with("NAME"), "{stdout}");
-    assert!(stdout.contains("shop-prod  acme/shop  shop"), "{stdout}");
+    assert!(stdout.contains("shop-prod     acme/shop  shop"), "{stdout}");
 
+    // In the app's folder, --app is the only app linked to it.
     let (ok, stdout, stderr) = ssp(
-        here,
+        &shop,
         &api,
         &token,
-        &["--json", "token", "add", "--app", "shop-prod"],
+        &["--json", "token", "add", "--note", "proxy"],
     );
-    assert!(ok && stderr.is_empty());
+    assert!(ok && stderr.is_empty(), "{stderr}");
     assert_eq!(parse(&stdout)["token"], "ssp_rt_secret");
-    let (ok, _, stderr) = ssp(here, &api, &token, &["token", "add", "--app", "shop-prod"]);
-    assert!(ok && stderr.contains("only once"));
+    assert_eq!(
+        state.lock().unwrap().received.last().unwrap().body,
+        json!({"app": "shop-prod", "note": "proxy"})
+    );
+    let (ok, _, stderr) = ssp(&shop, &api, &token, &["token", "add"]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("Using app shop-prod, the only app of acme/shop in folder shop.")
+            && stderr.contains("only once"),
+        "{stderr}"
+    );
+    // A folder with two apps, or none, needs --app.
+    let dev = directory.path().join("dev");
+    let (ok, _, stderr) = ssp(&dev, &api, &token, &["experiment", "list"]);
+    assert!(!ok);
+    assert!(
+        stderr.contains("acme/shop in folder dev has 2 apps: shop-dev, shop-staging; pass --app"),
+        "{stderr}"
+    );
+    let elsewhere = tempfile::tempdir().unwrap();
+    let (ok, _, stderr) = ssp(elsewhere.path(), &api, &token, &["experiment", "list"]);
+    assert!(!ok && stderr.contains("pass --app"), "{stderr}");
+}
+
+#[test]
+fn experiments_update_start_and_stop() {
+    let directory = shop_repository();
+    let shop = directory.path().join("shop");
+    let state = Arc::new(Mutex::new(Statespace::default()));
+    let api = statespace(state.clone());
+    let token = [("STATESPACE_TOKEN", "t")];
+    let run = |arguments: &[&str]| ssp(&shop, &api, &token, arguments);
+
+    // Update sends only the named arms, and prints the change and the list.
+    let (ok, stdout, stderr) = run(&[
+        "experiment",
+        "update",
+        "checkout",
+        "--arm",
+        "A1B2C3D=0",
+        "--arm",
+        "b2c3d4e=0.05",
+        "--arm",
+        "9f1ce8a=0.06",
+        "--note",
+        "one-page checkout",
+    ]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        state.lock().unwrap().received.last().unwrap().body,
+        json!({"arms": {"a1b2c3d": 0.0, "b2c3d4e": 0.05, "9f1ce8a": 0.06},
+               "note": "one-page checkout"})
+    );
+    assert_eq!(
+        stdout,
+        "checkout · shop-prod · stopped\n\
+         \x20 − a1b2c3d   0.05\n\
+         \x20 + b2c3d4e   0.05\n\
+         \x20 ~ 9f1ce8a   0.06   (was 0.05) (reference)\n\
+         \x20 total 0.11 of max_share 0.2\n\
+         Next: ssp experiment start checkout\n"
+    );
+    // Without --arm, it prints the arms and changes nothing.
+    let (ok, stdout, _) = run(&["experiment", "update", "checkout"]);
+    assert!(ok);
+    assert!(
+        stdout.contains("    9f1ce8a   0.05   (reference)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("  total 0.1 of max_share 0.2"), "{stdout}");
+    // Shares are fractions.
+    for (share, message) in [
+        (
+            "5",
+            "5 is more than 1; a share is a fraction: use a1b2c3d=0.05 for 5%",
+        ),
+        (
+            "5%",
+            "\"5%\" is a percent; a share is a fraction: use a1b2c3d=0.05",
+        ),
+    ] {
+        let arm = format!("a1b2c3d={share}");
+        let (ok, _, stderr) = run(&["experiment", "update", "checkout", "--arm", &arm]);
+        assert!(!ok && stderr.contains(message), "{stderr}");
+    }
+
+    // Start waits, and prints each arm as it becomes ready.
+    let (ok, stdout, stderr) = run(&["experiment", "start", "us-landing", "--note", "US hero"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "starting us-landing on shop-prod\n\
+         \x20 9f1ce8a   ready\n\
+         \x20 a1b2c3d   ready\n\
+         us-landing runs on shop-prod, version 3.\n\
+         Evidence: ssp experiment show us-landing\n"
+    );
+    // checkout runs with another subject, and is first in the file.
+    assert!(
+        stderr.contains(
+            "us-landing and checkout can claim the same requests; checkout is first in statespace.toml"
+        ),
+        "{stderr}"
+    );
+    // With --json, one document: the running experiment.
+    let (ok, stdout, stderr) = run(&["--json", "experiment", "start", "us-landing"]);
+    assert!(ok && stderr.is_empty(), "{stderr}");
+    assert_eq!(parse(&stdout)["state"], "running");
+
+    // An arm that is not ready: the reason per arm, and exit 1.
+    let (ok, stdout, _) = run(&["experiment", "start", "pricing"]);
+    assert!(!ok);
+    assert_eq!(
+        stdout,
+        "starting pricing on shop-prod\n\
+         \x20 9f1ce8a   ready\n\
+         \x20 a1b2c3d   not ready: the container exits at start (exit 1)\n\
+         pricing did not start. Nothing changed.\n"
+    );
+    let (ok, stdout, stderr) = run(&["--json", "experiment", "start", "pricing"]);
+    assert!(!ok && stdout.is_empty());
+    assert_eq!(
+        parse(&stderr)["error"],
+        "pricing did not start. Nothing changed. \
+         a1b2c3d not ready: the container exits at start (exit 1)"
+    );
+
+    // Stop takes several names.
+    let (ok, stdout, _) = run(&["experiment", "stop", "us-landing", "checkout"]);
+    assert!(ok);
+    assert_eq!(
+        stdout,
+        "Stopped us-landing on shop-prod, version 3. Its arms leave traffic in seconds.\n\
+         checkout on shop-prod was stopped already.\n"
+    );
+    let (ok, stdout, _) = run(&["--json", "experiment", "stop", "checkout", "--note", "x"]);
+    assert!(ok);
+    assert_eq!(parse(&stdout)["stopped"][0]["name"], "checkout");
+    assert_eq!(
+        state.lock().unwrap().received.last().unwrap().body,
+        json!({"note": "x"})
+    );
+    let (ok, stdout, stderr) = run(&["experiment", "stop", "checkout", "us-landing-x"]);
+    assert!(!ok && stdout.contains("checkout"), "{stdout}");
+    assert!(stderr.contains("could not stop us-landing-x"), "{stderr}");
+
+    // List: --running and --all.
+    let (ok, stdout, _) = run(&["experiment", "list"]);
+    assert!(ok);
+    assert!(
+        stdout.contains("checkout    running  3        9f1ce8a=0.05 a1b2c3d=0.05  purchase rate %: 9f1ce8a 2.8, a1b2c3d 3.4"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("pricing"));
+    let (ok, stdout, _) = run(&["--json", "experiment", "list", "--running"]);
+    assert!(ok);
+    let names: Vec<Value> = parse(&stdout)["experiments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|experiment| experiment["name"].clone())
+        .collect();
+    assert_eq!(names, [json!("checkout")]);
+    let (ok, stdout, _) = run(&["experiment", "list", "--all"]);
+    assert!(ok && stdout.contains("pricing     gone"), "{stdout}");
 }
 
 #[test]
@@ -677,30 +937,6 @@ fn whoami_says_which_credential_the_cli_uses() {
         ok && stdout.contains("Credential:   the ssp login session"),
         "{stdout}"
     );
-}
-
-#[test]
-fn init_writes_a_starter_file_once() {
-    let directory = tempfile::tempdir().unwrap();
-    let root = directory.path();
-    git(root, &["init", "--quiet"]);
-    let folder = root.join("shop");
-    std::fs::create_dir_all(&folder).unwrap();
-    let (ok, stdout, _) = ssp(&folder, "http://127.0.0.1:9", &[], &["--json", "init"]);
-    assert!(ok);
-    let document = parse(&stdout);
-    assert_eq!(document["path"], "shop");
-    assert!(
-        document["step"]
-            .as_str()
-            .unwrap()
-            .contains("uses: statespace-tech/action@v1")
-    );
-    assert!(document["step"].as_str().unwrap().contains("path: shop"));
-    let written = std::fs::read_to_string(folder.join("statespace.toml")).unwrap();
-    assert!(written.contains("max_traffic = 0.2"));
-    let (ok, _, stderr) = ssp(&folder, "http://127.0.0.1:9", &[], &["init"]);
-    assert!(!ok && stderr.contains("exists here already"), "{stderr}");
 }
 
 #[test]

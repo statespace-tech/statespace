@@ -2,9 +2,8 @@
 //! except `ssp proxy`, which runs until it is stopped.
 
 mod app;
-mod arm;
 mod auth;
-mod init;
+mod experiment;
 mod token;
 
 use serde_json::{Value, json};
@@ -31,9 +30,8 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     let api = Api::new(&endpoint, found)?;
     match cli.command {
         Command::App(command) => app::run(&api, command),
-        Command::Arm(command) => arm::run(&api, command),
+        Command::Experiment(command) => experiment::run(&api, command),
         Command::Token(command) => token::run(&api, command),
-        Command::Init { image } => init::run(image.as_deref()),
         Command::Login { no_open } => auth::login(&api, no_open),
         Command::Logout => auth::logout(&api),
         Command::Whoami => whoami(&api),

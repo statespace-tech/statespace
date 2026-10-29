@@ -9,7 +9,7 @@ use clap::{Args, Parser, Subcommand};
     name = "ssp",
     display_name = "statespace",
     version,
-    about = "Run commits as arms on a share of live traffic, beside a control",
+    about = "Run commits as arms of experiments on shares of live traffic",
     after_help = "Add --json to print one JSON document. \
                   Documentation: https://docs.statespace.com"
 )]
@@ -26,26 +26,19 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Add, show, stop, and resume apps: running copies of a service.
+    /// Add, list, show, and remove apps: running copies of a service.
     #[command(subcommand)]
     App(AppCommand),
-    /// Add, show, stop, and resume arms: commits that run on a share of an
-    /// app's traffic.
+    /// List, show, update, start, and stop experiments: comparisons of
+    /// commits on shares of an app's subjects.
     #[command(subcommand)]
-    Arm(ArmCommand),
+    Experiment(ExperimentCommand),
     /// Add, list, and remove runtime tokens for `ssp proxy`.
     #[command(subcommand)]
     Token(TokenCommand),
     /// Run the proxy in front of an app's live service.
     #[command(subcommand)]
     Proxy(Box<ProxyCommand>),
-    /// Write a starter statespace.toml here and print the CI step that
-    /// records builds.
-    Init {
-        /// The image the CI step records, as the build workflow names it.
-        #[arg(long)]
-        image: Option<String>,
-    },
     /// Sign in with GitHub and save the session.
     Login {
         /// Print the sign-in URL instead of opening a browser.
@@ -75,17 +68,31 @@ fn note(value: &str) -> Result<String, String> {
 
 /// An app name: lowercase letters, digits, and `-`, 1 to 63 characters.
 pub fn app_name(value: &str) -> Result<String, String> {
-    let valid = (1..=63).contains(&value.len())
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-    if valid {
+    if name(value, 63) {
         Ok(value.to_owned())
     } else {
         Err(format!(
             "{value:?} is not an app name: use 1 to 63 lowercase letters, digits, and -"
         ))
     }
+}
+
+/// An experiment name: lowercase letters, digits, and `-`, 1 to 40 characters.
+pub fn experiment_name(value: &str) -> Result<String, String> {
+    if name(value, 40) {
+        Ok(value.to_owned())
+    } else {
+        Err(format!(
+            "{value:?} is not an experiment name: use 1 to 40 lowercase letters, digits, and -"
+        ))
+    }
+}
+
+fn name(value: &str, most: usize) -> bool {
+    (1..=most).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// A commit: a full SHA or a prefix of at least 7 hexadecimal characters.
@@ -102,14 +109,53 @@ pub fn commit(value: &str) -> Result<String, String> {
     }
 }
 
-/// A share of an app's subjects, greater than 0 and at most 1.
-fn share(value: &str) -> Result<f64, String> {
-    match value.parse::<f64>() {
-        Ok(share) if share.is_finite() && share > 0.0 && share <= 1.0 => Ok(share),
-        _ => Err(format!(
-            "{value:?} is not a share: use a number greater than 0 and at most 1, such as 0.05"
-        )),
+/// One `--arm <commit>=<share>`. A share of 0 removes the arm.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArmShare {
+    pub commit: String,
+    pub share: f64,
+}
+
+/// `<commit>=<share>`, the share a fraction from 0 to 1: `0.05`, never `5`
+/// or `5%`.
+fn arm_share(value: &str) -> Result<ArmShare, String> {
+    let (commit_text, share_text) = value.split_once('=').ok_or_else(|| {
+        format!("{value:?} is not an arm: use <commit>=<share>, such as a1b2c3d=0.05")
+    })?;
+    let commit = commit(commit_text)?;
+    let share_text = share_text.trim();
+    if let Some(percent) = share_text.strip_suffix('%') {
+        let example = percent
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|percent| percent.is_finite() && *percent >= 0.0)
+            .map_or_else(|| "0.05".into(), |percent| fraction(percent / 100.0));
+        return Err(format!(
+            "{share_text:?} is a percent; a share is a fraction: use {commit_text}={example}"
+        ));
     }
+    let share = share_text.parse::<f64>().map_err(|_| {
+        format!("{share_text:?} is not a share: use a fraction from 0 to 1, such as 0.05")
+    })?;
+    if !share.is_finite() || share < 0.0 {
+        return Err(format!(
+            "{share_text:?} is not a share: use a fraction from 0 to 1, such as 0.05"
+        ));
+    }
+    if share > 1.0 {
+        return Err(format!(
+            "{share_text} is more than 1; a share is a fraction: use {commit_text}={} for {share_text}%",
+            fraction(share / 100.0)
+        ));
+    }
+    Ok(ArmShare { commit, share })
+}
+
+/// A fraction as people write it: `0.05`, `0.125`, `1`.
+pub fn fraction(value: f64) -> String {
+    let text = format!("{value:.6}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 #[derive(Args)]
@@ -136,7 +182,8 @@ pub enum AppCommand {
         #[command(flatten)]
         note: Note,
     },
-    /// Delete an app and all its data. It fails while the app has arms.
+    /// Delete an app and all its data. It fails while an experiment of the
+    /// app runs.
     Remove {
         #[arg(value_parser = app_name)]
         name: String,
@@ -150,78 +197,61 @@ pub enum AppCommand {
         #[arg(value_parser = app_name)]
         name: String,
     },
-    /// Stop every arm of the app, now and added later, with a hold.
-    Stop {
-        #[arg(value_parser = app_name)]
-        name: String,
-        #[command(flatten)]
-        note: Note,
-    },
-    /// Remove the hold on the app.
-    Resume {
-        #[arg(value_parser = app_name)]
-        name: String,
-        #[command(flatten)]
-        note: Note,
-    },
 }
 
 #[derive(Args)]
 pub struct AppFlag {
-    /// The app.
+    /// The app. Defaults to the only app of the repository and folder here.
     #[arg(long, env = "STATESPACE_APP", value_parser = app_name)]
-    pub app: String,
+    pub app: Option<String>,
 }
 
 #[derive(Subcommand)]
-pub enum ArmCommand {
-    /// Run a commit on a share of the app's traffic, or change its share.
-    Add {
-        #[arg(value_parser = commit)]
-        commit: String,
-        #[command(flatten)]
-        app: AppFlag,
-        /// The share of the app's subjects, such as 0.05 for 5%. Defaults
-        /// to 0.05 for a new arm.
-        #[arg(long, value_parser = share)]
-        share: Option<f64>,
-        #[command(flatten)]
-        note: Note,
-    },
-    /// End an arm. Its evidence is kept.
-    Remove {
-        #[arg(value_parser = commit)]
-        commit: String,
-        #[command(flatten)]
-        app: AppFlag,
-        #[command(flatten)]
-        note: Note,
-    },
-    /// List the arms of an app.
+pub enum ExperimentCommand {
+    /// List the experiments of an app.
     List {
         #[command(flatten)]
         app: AppFlag,
+        /// Only the running experiments.
+        #[arg(long, conflicts_with = "all")]
+        running: bool,
+        /// Also the experiments whose table left statespace.toml.
+        #[arg(long)]
+        all: bool,
     },
-    /// Show an arm and its evidence.
+    /// Show an experiment: its definition, arms, evidence, and history.
     Show {
-        #[arg(value_parser = commit)]
-        commit: String,
+        #[arg(value_parser = experiment_name)]
+        name: String,
         #[command(flatten)]
         app: AppFlag,
     },
-    /// Stop an arm with a hold.
-    Stop {
-        #[arg(value_parser = commit)]
-        commit: String,
+    /// Add, change, or remove arms. Without --arm, print the arms.
+    Update {
+        #[arg(value_parser = experiment_name)]
+        name: String,
+        #[command(flatten)]
+        app: AppFlag,
+        /// An arm and its share of the app's subjects, such as
+        /// `a1b2c3d=0.05`. `=0` removes the arm. Repeat for each.
+        #[arg(long = "arm", value_name = "COMMIT=SHARE", value_parser = arm_share)]
+        arms: Vec<ArmShare>,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// Start a new version, and wait until every arm is ready.
+    Start {
+        #[arg(value_parser = experiment_name)]
+        name: String,
         #[command(flatten)]
         app: AppFlag,
         #[command(flatten)]
         note: Note,
     },
-    /// Remove the hold on an arm.
-    Resume {
-        #[arg(value_parser = commit)]
-        commit: String,
+    /// Stop one or more experiments. Their arms leave traffic in seconds.
+    Stop {
+        #[arg(value_parser = experiment_name, required = true)]
+        names: Vec<String>,
         #[command(flatten)]
         app: AppFlag,
         #[command(flatten)]
@@ -268,21 +298,21 @@ pub struct ProxyArgs {
 
 #[derive(Subcommand)]
 pub enum ProxyCommand {
-    /// Run live, the control, and the arms as Docker containers on this machine.
+    /// Run live and the arms of experiments as Docker containers on this machine.
     Docker {
         #[command(flatten)]
         common: ProxyArgs,
         #[command(flatten)]
         docker: DockerArgs,
     },
-    /// Run the control and the arms as tagged revisions of a Cloud Run service.
+    /// Run the arms of experiments as tagged revisions of a Cloud Run service.
     Cloudrun {
         #[command(flatten)]
         common: ProxyArgs,
         #[command(flatten)]
         cloudrun: CloudRunArgs,
     },
-    /// Run the control and the arms as copies of a Kubernetes Deployment.
+    /// Run the arms of experiments as copies of a Kubernetes Deployment.
     Kubernetes {
         #[command(flatten)]
         common: ProxyArgs,
@@ -387,12 +417,6 @@ mod tests {
             vec!["ssp", "logout"],
             vec![
                 "ssp",
-                "init",
-                "--image",
-                "ghcr.io/acme/shop@${{ steps.build.outputs.digest }}",
-            ],
-            vec![
-                "ssp",
                 "app",
                 "add",
                 "shop-prod",
@@ -411,40 +435,43 @@ mod tests {
             ],
             vec!["ssp", "app", "list"],
             vec!["ssp", "app", "show", "shop-prod"],
-            vec![
-                "ssp",
-                "app",
-                "stop",
-                "shop-prod",
-                "--note",
-                "checkout errors > 2%",
-            ],
-            vec!["ssp", "app", "resume", "shop-prod"],
             vec!["ssp", "app", "remove", "shop-prod"],
+            vec!["ssp", "experiment", "list"],
             vec![
                 "ssp",
-                "arm",
-                "add",
-                "a1b2c3d",
+                "experiment",
+                "list",
                 "--app",
                 "shop-prod",
-                "--share",
-                "0.1",
+                "--running",
             ],
-            vec!["ssp", "arm", "list", "--app", "shop-prod"],
-            vec!["ssp", "arm", "show", "A1B2C3D4", "--app", "shop-prod"],
+            vec!["ssp", "experiment", "list", "--all"],
             vec![
                 "ssp",
-                "arm",
-                "stop",
-                "a1b2c3d",
+                "experiment",
+                "show",
+                "checkout",
                 "--app",
                 "shop-prod",
+            ],
+            vec!["ssp", "experiment", "update", "checkout"],
+            vec![
+                "ssp",
+                "experiment",
+                "update",
+                "checkout",
+                "--arm",
+                "c0ffee1=0.05",
+                "--arm",
+                "A1B2C3D=0",
+                "--arm",
+                "f6a7b8c=1",
                 "--note",
-                "x",
+                "one-page checkout",
             ],
-            vec!["ssp", "arm", "resume", "a1b2c3d", "--app", "shop-prod"],
-            vec!["ssp", "arm", "remove", "a1b2c3d", "--app", "shop-prod"],
+            vec!["ssp", "experiment", "start", "checkout", "--note", "x"],
+            vec!["ssp", "experiment", "stop", "checkout", "us-landing"],
+            vec!["ssp", "token", "add", "--note", "proxy"],
             vec![
                 "ssp",
                 "token",
@@ -500,23 +527,80 @@ mod tests {
     }
 
     #[test]
+    fn reads_arms_as_fractions() {
+        assert_eq!(
+            arm_share("A1B2C3D=0.05").unwrap(),
+            ArmShare {
+                commit: "a1b2c3d".into(),
+                share: 0.05
+            }
+        );
+        assert_eq!(arm_share("a1b2c3d=0").unwrap().share, 0.0);
+        assert_eq!(arm_share("a1b2c3d=1").unwrap().share, 1.0);
+        assert_eq!(
+            arm_share("a1b2c3d=5").unwrap_err(),
+            "5 is more than 1; a share is a fraction: use a1b2c3d=0.05 for 5%"
+        );
+        assert_eq!(
+            arm_share("a1b2c3d=5%").unwrap_err(),
+            "\"5%\" is a percent; a share is a fraction: use a1b2c3d=0.05"
+        );
+        for wrong in [
+            "a1b2c3d",
+            "a1b2c3=0.05",
+            "a1b2c3d=-0.1",
+            "a1b2c3d=x",
+            "a1b2c3d=NaN",
+        ] {
+            assert!(arm_share(wrong).is_err(), "{wrong}");
+        }
+        assert_eq!(fraction(0.05 + 0.06), "0.11");
+        assert_eq!(fraction(1.0), "1");
+        assert_eq!(fraction(0.125), "0.125");
+    }
+
+    #[test]
     fn rejects_wrong_values_and_old_commands() {
         for arguments in [
             vec!["ssp", "app", "add", "Shop"],
             vec!["ssp", "app", "add", "shop_prod"],
-            vec!["ssp", "app", "stop", "shop", "--note", ""],
-            vec!["ssp", "app", "stop", "shop", "--note", "two\nlines"],
-            vec!["ssp", "arm", "add", "a1b2c3", "--app", "shop"],
-            vec!["ssp", "arm", "add", "zzzzzzz", "--app", "shop"],
+            vec!["ssp", "app", "add", "shop", "--note", ""],
+            vec!["ssp", "app", "add", "shop", "--note", "two\nlines"],
+            vec!["ssp", "app", "stop", "shop"],
+            vec!["ssp", "app", "resume", "shop"],
+            vec!["ssp", "arm", "add", "a1b2c3d", "--app", "shop"],
+            vec!["ssp", "arm", "list", "--app", "shop"],
+            vec!["ssp", "init"],
+            vec!["ssp", "experiment", "update", "Checkout"],
             vec![
-                "ssp", "arm", "add", "a1b2c3d", "--app", "shop", "--share", "0",
+                "ssp",
+                "experiment",
+                "update",
+                "checkout",
+                "--arm",
+                "a1b2c3d=5",
             ],
             vec![
-                "ssp", "arm", "add", "a1b2c3d", "--app", "shop", "--share", "1.5",
+                "ssp",
+                "experiment",
+                "update",
+                "checkout",
+                "--arm",
+                "a1b2c3d=5%",
             ],
-            vec!["ssp", "arm", "add", "a1b2c3d"],
+            vec![
+                "ssp",
+                "experiment",
+                "update",
+                "checkout",
+                "--arm",
+                "zzzzzzz=0.1",
+            ],
+            vec!["ssp", "experiment", "list", "--running", "--all"],
+            vec!["ssp", "experiment", "stop"],
+            vec!["ssp", "experiment", "add", "checkout"],
+            vec!["ssp", "experiment", "resume", "checkout"],
             vec!["ssp", "status"],
-            vec!["ssp", "apply", "--image", "x"],
             vec!["ssp", "stop", "shop"],
             vec!["ssp", "controller", "kubernetes"],
             vec!["ssp", "proxy", "--app", "shop", "--token", "t"],
@@ -542,19 +626,6 @@ mod tests {
                 "t",
                 "--image-file",
                 "f",
-                "--redact",
-                "x",
-            ],
-            vec![
-                "ssp",
-                "proxy",
-                "docker",
-                "--app",
-                "shop",
-                "--token",
-                "t",
-                "--image-file",
-                "f",
                 "--max-arms",
                 "3",
             ],
@@ -562,8 +633,10 @@ mod tests {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }
         let long = "x".repeat(201);
-        assert!(Cli::try_parse_from(["ssp", "app", "stop", "shop", "--note", &long]).is_err());
+        assert!(Cli::try_parse_from(["ssp", "app", "remove", "shop", "--note", &long]).is_err());
         let most = "x".repeat(200);
-        assert!(Cli::try_parse_from(["ssp", "app", "stop", "shop", "--note", &most]).is_ok());
+        assert!(Cli::try_parse_from(["ssp", "app", "remove", "shop", "--note", &most]).is_ok());
+        let name = "x".repeat(41);
+        assert!(Cli::try_parse_from(["ssp", "experiment", "show", &name]).is_err());
     }
 }

@@ -48,20 +48,9 @@ pub fn folder(directory: &Path, root: &Path) -> anyhow::Result<String> {
         }
         if current == root || !current.pop() {
             bail!(
-                "no {PROJECT_FILE} here or in a parent folder of the repository; run `ssp init` in the app's folder, or pass --path"
+                "no {PROJECT_FILE} here or in a parent folder of the repository; write one in the app's folder (see https://statespace.com/skill.md), or pass --path"
             );
         }
-    }
-}
-
-/// The folder of `directory` relative to the root of its repository, or
-/// `.` outside a repository.
-pub fn folder_of(directory: &Path) -> String {
-    match git(directory, &["rev-parse", "--show-prefix"]) {
-        Ok(prefix) if !prefix.trim_end_matches('/').is_empty() => {
-            prefix.trim_end_matches('/').to_owned()
-        }
-        _ => ".".into(),
     }
 }
 

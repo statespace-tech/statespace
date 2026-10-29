@@ -3,6 +3,7 @@
 use reqwest::Method;
 use serde_json::{Value, json};
 
+use super::app::resolve;
 use crate::{
     api::{Api, segment},
     cli::TokenCommand,
@@ -12,10 +13,11 @@ use crate::{
 pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
     match command {
         TokenCommand::Add { app, note: flag } => {
+            let app = resolve(api, app.app)?;
             let token: Value = api.send(
                 Method::POST,
                 "/v1/tokens",
-                &json!({ "app": app.app, "note": flag.note }),
+                &json!({ "app": app, "note": flag.note }),
             )?;
             emit(&token, || {
                 let rows = vec![
@@ -24,8 +26,7 @@ pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
                     ("App", text(&token["app"])),
                 ];
                 format!(
-                    "Added a runtime token for {}.\n\n{}\nRun the proxy with it in STATESPACE_TOKEN.",
-                    app.app,
+                    "Added a runtime token for {app}.\n\n{}\nRun the proxy with it in STATESPACE_TOKEN.",
                     fields(&rows)
                 )
             })?;
