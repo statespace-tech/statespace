@@ -1,5 +1,5 @@
-//! The public listener: assign each request, then forward it to live, the
-//! control, or the arm that serves its subject.
+//! The public listener: assign each request, then forward it to live or to
+//! the arm of a running experiment that takes it.
 
 use std::{
     convert::Infallible,
@@ -25,7 +25,7 @@ use super::{
     Runtime,
     assign::{self, Decision, OVERRIDE, OVERRIDE_HEADER, Refused, Routing, SUBJECT_COOKIE},
     orchestrator::{Orchestrator, UnitKey},
-    recorder::RequestRow,
+    recorder::{Origin, RequestRow},
     redact,
 };
 
@@ -128,13 +128,11 @@ pub fn visitor_cookie(id: &str, secure: bool) -> String {
     )
 }
 
-/// The `Set-Cookie` value that keeps an override for an hour, or ends it.
-pub fn override_cookie(commit: Option<&str>, secure: bool) -> String {
-    match commit {
-        Some(commit) => format!(
-            "{OVERRIDE}={commit}; {}",
-            attributes(OVERRIDE_SECONDS, secure)
-        ),
+/// The `Set-Cookie` value that keeps an override (`<experiment>:<commit>`)
+/// for an hour, or ends it.
+pub fn override_cookie(arm: Option<&str>, secure: bool) -> String {
+    match arm {
+        Some(arm) => format!("{OVERRIDE}={arm}; {}", attributes(OVERRIDE_SECONDS, secure)),
         None => format!("{OVERRIDE}=; {}", attributes(0, secure)),
     }
 }
@@ -161,10 +159,11 @@ async fn forward<O: Orchestrator>(
     let requested = take_override(&mut request);
     let mut cookies = assign::cookies(request.headers());
     let secure = is_secure(request.headers());
-    // With the default subject, every response sets or renews the visitor cookie.
+    // While a running experiment uses the default subject, every response
+    // sets or renews the visitor cookie.
     let visitor = routing
         .as_ref()
-        .is_none_or(|routing| routing.default_subject)
+        .is_some_and(|routing| routing.default_subject)
         .then(|| {
             let id = cookies
                 .get(SUBJECT_COOKIE)
@@ -208,7 +207,7 @@ async fn route<O: Orchestrator>(
         &cookies,
     );
     let ready = |routing: &Routing, key: &UnitKey| runtime.address(routing, key).is_some();
-    // With `overrides = true`, a request may name the running arm that serves it.
+    // With `overrides = true`, a request may name the arm that serves it.
     let mut override_change = None;
     let mut chosen = None;
     if let Some(routing) = routing.as_ref().filter(|routing| routing.overrides) {
@@ -225,8 +224,7 @@ async fn route<O: Orchestrator>(
             } else {
                 match pick(value) {
                     Ok(decision) => {
-                        let commit = decision_commit(&decision);
-                        let kept = override_cookie(Some(&commit), secure);
+                        let kept = override_cookie(Some(&decision_arm(&decision)), secure);
                         if navigation {
                             return redirect(&same_site(request.uri()), Some(kept));
                         }
@@ -259,8 +257,7 @@ async fn route<O: Orchestrator>(
             // An arm that stopped since ends its override quietly.
             match pick(value) {
                 Ok(decision) => {
-                    override_change =
-                        Some(override_cookie(Some(&decision_commit(&decision)), secure));
+                    override_change = Some(override_cookie(Some(&decision_arm(&decision)), secure));
                     chosen = Some(decision);
                 }
                 Err(Refused::NotReady) => {}
@@ -272,20 +269,19 @@ async fn route<O: Orchestrator>(
     let decision = match (chosen, &routing) {
         (Some(decision), _) => decision,
         (None, Some(routing)) => assign::decide(routing, &view, |key| ready(routing, key)),
-        (None, None) => Decision::live(
-            cookies
-                .get(SUBJECT_COOKIE)
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-        ),
+        (None, None) => Decision::live(None),
     };
-    if let (Some(run), Some(subject), Some(routing)) = (&decision.run, &decision.subject, &routing)
-    {
-        runtime.recorder.run(
-            &Runtime::<O>::origin(routing, &run.unit),
-            subject,
-            run.reason,
-        );
+    if let Some(routing) = &routing {
+        for run in &decision.runs {
+            let origin = Origin {
+                experiment: run.experiment.clone(),
+                arm: run.arm.clone(),
+                version: routing
+                    .experiment(&run.experiment)
+                    .map(|experiment| experiment.version),
+            };
+            runtime.recorder.run(&origin, &run.subject, run.reason);
+        }
     }
     let mut serve = decision.serve.clone();
     let address = match (&serve, &routing) {
@@ -342,7 +338,7 @@ async fn route<O: Orchestrator>(
             };
             serve = None;
             let live = runtime.orchestrator.live_address();
-            headers.remove("x-statespace-side");
+            headers.remove("x-statespace-experiment");
             headers.remove("x-statespace-arm");
             let mut again = Request::new(Empty::new().map_err(|never| match never {}).boxed());
             *again.method_mut() = method;
@@ -368,7 +364,7 @@ async fn route<O: Orchestrator>(
         .as_str()
         .and_then(|length| length.parse::<u64>().ok());
 
-    // Only the control and the arms are recorded; live never is.
+    // Only the units are recorded; live never is.
     let recorder = runtime.recorder.clone();
     let record = serve.clone().zip(routing.clone()).map(|(key, routing)| {
         let origin = Runtime::<O>::origin(&routing, &key);
@@ -394,7 +390,11 @@ async fn route<O: Orchestrator>(
                     over,
                 },
             );
-            for name in routing.events.request(&view, status.as_u16(), ms) {
+            // The unit's experiment decides which events apply.
+            let Some(events) = routing.events(&key) else {
+                return;
+            };
+            for name in events.request(&view, status.as_u16(), ms) {
                 recorder.event(&origin, name, subject.as_deref());
             }
         }
@@ -444,31 +444,38 @@ async fn route<O: Orchestrator>(
     )
 }
 
-fn decision_commit(decision: &Decision) -> String {
-    match &decision.serve {
-        Some(UnitKey::Arm(commit)) => commit.clone(),
-        _ => String::new(),
-    }
+/// `<experiment>:<commit>` of the arm that serves a decision.
+fn decision_arm(decision: &Decision) -> String {
+    decision
+        .serve
+        .as_ref()
+        .map(|key| format!("{}:{}", key.experiment, key.commit))
+        .unwrap_or_default()
 }
 
 /// Why an override cannot be served, for the person who asked.
-fn refusal(app: &str, routing: &Routing, value: &str, refused: Refused) -> (StatusCode, String) {
+pub fn refusal(
+    app: &str,
+    routing: &Routing,
+    value: &str,
+    refused: Refused,
+) -> (StatusCode, String) {
+    // Only what can be in an experiment name and a commit is repeated back.
+    let shown: String = value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | ':'))
+        .take(82)
+        .collect();
     if refused == Refused::NotReady {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("{value} is starting on {app}. Try again in a few seconds."),
+            format!("{shown} is starting on {app}. Try again in a few seconds."),
         );
     }
     let running = match assign::running_arms(routing) {
-        arms if arms.is_empty() => "No arms are running.".to_owned(),
-        arms => format!("Running arms: {}.", arms.join(", ")),
+        arms if arms.is_empty() => "No experiment is running.".to_owned(),
+        arms => format!("Running: {}", arms.join(", ")),
     };
-    // Only a commit-like value is repeated back to the browser.
-    let shown: String = value
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .take(40)
-        .collect();
     (
         StatusCode::NOT_FOUND,
         format!("{shown} is not running on {app}. {running}"),
@@ -478,7 +485,7 @@ fn refusal(app: &str, routing: &Routing, value: &str, refused: Refused) -> (Stat
 /// What a request asked of the override, before the proxy removed it.
 #[derive(Debug, Default, PartialEq)]
 pub struct Requested {
-    /// `?ssp_arm=`: a commit, or empty to end the override.
+    /// `?ssp_arm=`: `<experiment>:<commit>`, or empty to end the override.
     parameter: Option<String>,
     /// The `ssp-arm` header.
     header: Option<String>,
@@ -560,8 +567,8 @@ fn same_site(uri: &http::Uri) -> String {
     format!("/{}", path.trim_start_matches(['/', '\\']))
 }
 
-/// Mark a response of the control or an arm as private, so a shared cache
-/// never gives one subject's side to another.
+/// Mark a response of a unit as private, so a shared cache never gives one
+/// subject's arm to another.
 pub fn make_private(headers: &mut HeaderMap) {
     let directives: Vec<String> = headers
         .get_all(header::CACHE_CONTROL)
@@ -637,13 +644,9 @@ pub fn prepare_headers<B>(
     if let Some(subject) = subject {
         set("x-statespace-subject", subject);
     }
-    match serve {
-        Some(UnitKey::Control) => set("x-statespace-side", "control"),
-        Some(UnitKey::Arm(commit)) => {
-            set("x-statespace-side", "arm");
-            set("x-statespace-arm", commit);
-        }
-        None => {}
+    if let Some(key) = serve {
+        set("x-statespace-experiment", &key.experiment);
+        set("x-statespace-arm", &key.commit);
     }
 }
 
@@ -882,11 +885,11 @@ mod tests {
 
     #[test]
     fn override_cookies_last_an_hour() {
-        let commit = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
+        let arm = "checkout:a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
         assert_eq!(
-            override_cookie(Some(commit), true),
+            override_cookie(Some(arm), true),
             format!(
-                "ssp_arm={commit}; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=None; Partitioned"
+                "ssp_arm={arm}; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=None; Partitioned"
             )
         );
         assert_eq!(
@@ -921,29 +924,28 @@ mod tests {
         let commit = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
         let incoming = [
             ("x-statespace-arm", "spoofed"),
-            ("x-statespace-side", "arm"),
+            ("x-statespace-experiment", "spoofed"),
             ("x-statespace-anything", "1"),
             ("x-forwarded-for", "1.2.3.4"),
         ];
         let mut arm = request("/", &incoming);
-        prepare_headers(
-            &mut arm,
-            peer,
-            Some(&UnitKey::Arm(commit.into())),
-            Some("sid_1"),
-        );
+        let key = UnitKey {
+            experiment: "checkout".into(),
+            commit: commit.into(),
+        };
+        prepare_headers(&mut arm, peer, Some(&key), Some("sid_1"));
         let headers = arm.headers();
         assert_eq!(headers["x-statespace-subject"], "sid_1");
-        assert_eq!(headers["x-statespace-side"], "arm");
+        assert_eq!(headers["x-statespace-experiment"], "checkout");
         assert_eq!(headers["x-statespace-arm"], commit);
         assert!(!headers.contains_key("x-statespace-anything"));
+        assert!(!headers.contains_key("x-statespace-side"));
         assert_eq!(headers["x-forwarded-for"], "1.2.3.4, 10.0.0.9");
 
-        let mut control = request("/", &incoming);
-        prepare_headers(&mut control, peer, Some(&UnitKey::Control), Some("sid_1"));
-        assert_eq!(control.headers()["x-statespace-side"], "control");
-        assert!(!control.headers().contains_key("x-statespace-arm"));
-
+        let mut live = request("/", &incoming);
+        prepare_headers(&mut live, peer, None, Some("sid_1"));
+        assert_eq!(live.headers()["x-statespace-subject"], "sid_1");
+        assert!(!live.headers().contains_key("x-statespace-arm"));
         let mut live = request("/", &incoming);
         prepare_headers(&mut live, peer, None, None);
         assert!(
@@ -974,18 +976,18 @@ mod tests {
     #[test]
     fn removes_the_override_before_the_app_sees_it() {
         let mut asked = request(
-            "/cart?a=1&ssp_arm=a1b2c3d&b=2",
+            "/cart?a=1&ssp_arm=checkout%3Aa1b2c3d&b=2",
             &[
-                ("ssp-arm", "b2c3d4e"),
-                ("cookie", "ssp_sid=s1; ssp_arm=a1b2c3d; theme=dark"),
+                ("ssp-arm", "us-landing:b2c3d4e"),
+                ("cookie", "ssp_sid=s1; ssp_arm=checkout:a1b2c3d; theme=dark"),
             ],
         );
         assert_eq!(
             take_override(&mut asked),
             Requested {
-                parameter: Some("a1b2c3d".into()),
-                header: Some("b2c3d4e".into()),
-                cookie: Some("a1b2c3d".into()),
+                parameter: Some("checkout:a1b2c3d".into()),
+                header: Some("us-landing:b2c3d4e".into()),
+                cookie: Some("checkout:a1b2c3d".into()),
             }
         );
         assert_eq!(asked.uri(), "/cart?a=1&b=2");
@@ -1011,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn control_and_arm_responses_are_private() {
+    fn unit_responses_are_private() {
         let private = |value: Option<&str>| {
             let mut headers = HeaderMap::new();
             if let Some(value) = value {
@@ -1026,6 +1028,38 @@ mod tests {
             "private, max-age=600"
         );
         assert_eq!(private(Some("no-store")), "no-store");
+    }
+
+    #[test]
+    fn refusals_list_the_running_arms() {
+        let config: super::super::config::RuntimeConfig = serde_json::from_value(json!({
+            "app": "shop-prod", "salt": "s",
+            "settings": {"overrides": true, "redact": []},
+            "live": {"commit": "c0ffee1", "image": "shop@sha256:1"},
+            "experiments": [
+                {"name": "checkout", "version": 1, "state": "running", "arms": [
+                    {"commit": "c0ffee1000", "image": "a", "ranges": []},
+                    {"commit": "f6a7b8c000", "image": "b", "ranges": []}]},
+                {"name": "us-landing", "version": 1, "state": "running", "arms": [
+                    {"commit": "b2c3d4e000", "image": "c", "ranges": []}]},
+                {"name": "pricing", "version": 1, "state": "starting", "arms": [
+                    {"commit": "d4e5f6a000", "image": "d", "ranges": []}]},
+            ],
+        }))
+        .unwrap();
+        let (routing, _) = Routing::compile(&config);
+        let (status, message) = refusal(
+            "shop-prod",
+            &routing,
+            "checkout:a1b2c3d<b>",
+            Refused::NotRunning,
+        );
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            message,
+            "checkout:a1b2c3db is not running on shop-prod. \
+             Running: checkout:c0ffee1, checkout:f6a7b8c, us-landing:b2c3d4e"
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
-//! `ssp proxy cloudrun`: live is a Cloud Run service. The control and each
-//! arm run as revisions of the same service with 0% traffic and a tag,
-//! `ssp-control` or `ssp-<commit 12>`. A new revision copies the service's
-//! template and changes only the image. The proxy sends to the tag URL
-//! with a Google ID token, and reads output from Cloud Logging.
+//! `ssp proxy cloudrun`: live is a Cloud Run service. Each unit runs as a
+//! revision of the same service with 0% traffic and the tag
+//! `ssp-<experiment>-<commit 12>`, cut with a short hash when the tag is too
+//! long. A new revision copies the service's template and changes only the
+//! image. The proxy sends to the tag URL with a Google ID token, and reads
+//! output from Cloud Logging.
 //!
 //! The proxy uses the Cloud Run Admin API v2 with the credentials of the
 //! metadata server: the service account of the proxy's own service.
@@ -19,15 +20,19 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Side, Stream, Unit, channel,
+    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
 };
 use crate::{cli::CloudRunArgs, image};
 
 const LATEST: &str = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST";
 const REVISION: &str = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION";
-/// Revision labels that name the unit.
-const SIDE_LABEL: &str = "statespace-side";
+/// Revision labels that name the unit, with the full experiment and commit.
+const EXPERIMENT_LABEL: &str = "statespace-experiment";
 const COMMIT_LABEL: &str = "statespace-commit";
+/// How long a tag and the service's name may be together: the tag URL's
+/// host, `<tag>---<service>-<hash>-<region>`, is one DNS label of at most
+/// 63 characters.
+const TAG_AND_SERVICE: usize = 46;
 /// The header Cloud Run reads the ID token from, so the app keeps its own
 /// `Authorization` header.
 const AUTHORIZATION: &str = "x-serverless-authorization";
@@ -256,14 +261,9 @@ impl CloudRun {
     /// The unit a revision runs, from its labels and image.
     fn unit_of(revision: &Value) -> Option<Unit> {
         let labels = &revision["labels"];
-        let side = match labels[SIDE_LABEL].as_str()? {
-            "control" => Side::Control,
-            "arm" => Side::Arm,
-            _ => return None,
-        };
         let index = ingress_container(&revision["containers"]);
         Some(Unit {
-            side,
+            experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
             commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
             image: revision["containers"][index]["image"].as_str()?.to_owned(),
             share: 0.0,
@@ -291,7 +291,7 @@ impl Orchestrator for CloudRun {
 
     async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
         let mut service = self.get_service().await?;
-        let tag = tag(unit);
+        let tag = tag(&unit.key(), &self.service);
         if let Some((revision, uri)) = Self::tagged(&service, &tag)
             && let Ok(current) = self.get_revision(&revision).await
             && Self::unit_of(&current).as_ref()
@@ -318,7 +318,7 @@ impl Orchestrator for CloudRun {
 
     async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
         let mut service = self.get_service().await?;
-        let tag = tag(unit);
+        let tag = tag(&unit.key(), &self.service);
         let tagged = Self::tagged(&service, &tag);
         if let Some(traffic) = service["traffic"].as_array_mut() {
             traffic.retain(|target| target["tag"] != tag.as_str());
@@ -365,6 +365,7 @@ impl Orchestrator for CloudRun {
                     unit,
                     address,
                     ready: true,
+                    reason: None,
                 });
                 continue;
             }
@@ -373,6 +374,7 @@ impl Orchestrator for CloudRun {
                 continue;
             };
             let ready = revision_ready(&details);
+            let reason = (!ready).then(|| not_ready(&details));
             if ready {
                 self.ready
                     .lock()
@@ -383,6 +385,7 @@ impl Orchestrator for CloudRun {
                 unit,
                 address: uri,
                 ready,
+                reason,
             });
         }
         Ok(running)
@@ -390,7 +393,7 @@ impl Orchestrator for CloudRun {
 
     fn output(&self, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
-        let tag = tag(unit);
+        let tag = tag(&unit.key(), &self.service);
         let this = Reader {
             client: self.client.clone(),
             logging_api: self.logging_api.clone(),
@@ -575,9 +578,11 @@ fn entry_line(entry: &Value) -> Option<Line> {
     Some(Line { stream, text })
 }
 
-/// `ssp-control`, or `ssp-` and the commit's first 12 characters.
-pub fn tag(unit: &Unit) -> String {
-    format!("ssp-{}", unit.name())
+/// `ssp-<experiment>-<commit 12>`, short enough for the tag URL of
+/// `service`.
+pub fn tag(key: &UnitKey, service: &str) -> String {
+    let limit = TAG_AND_SERVICE.saturating_sub(service.len()).max(12);
+    key.name("ssp-", limit)
 }
 
 fn short_name(revision: &str) -> String {
@@ -611,6 +616,24 @@ pub fn serving_revision(service: &Value) -> Option<String> {
     }
 }
 
+/// Why a revision is not ready, from its `Ready` condition.
+fn not_ready(revision: &Value) -> String {
+    if revision["reconciling"] == true {
+        return "the revision is deploying".into();
+    }
+    revision["conditions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|condition| condition["type"] == "Ready")
+        .and_then(|condition| condition["message"].as_str())
+        .filter(|message| !message.is_empty())
+        .map_or_else(
+            || "the revision is not ready".into(),
+            |message| format!("the revision is not ready: {message}"),
+        )
+}
+
 /// Whether a revision is ready to serve.
 fn revision_ready(revision: &Value) -> bool {
     revision["reconciling"] != true
@@ -641,10 +664,7 @@ pub fn new_revision(service: &mut Value, unit: &Unit, name: &str, tag: &str) -> 
     if !template["labels"].is_object() {
         template["labels"] = json!({});
     }
-    template["labels"][SIDE_LABEL] = json!(match unit.side {
-        Side::Control => "control",
-        Side::Arm => "arm",
-    });
+    template["labels"][EXPERIMENT_LABEL] = json!(unit.experiment);
     template["labels"][COMMIT_LABEL] = json!(unit.commit);
     let mut traffic: Vec<Value> = service["traffic"].as_array().cloned().unwrap_or_default();
     if traffic.is_empty() {
@@ -691,7 +711,7 @@ mod tests {
 
     fn arm() -> Unit {
         Unit {
-            side: Side::Arm,
+            experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
             image: format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64)),
             share: 0.05,
@@ -701,7 +721,9 @@ mod tests {
     #[test]
     fn new_revisions_copy_the_template_and_pin_live() {
         let mut changed = service();
-        new_revision(&mut changed, &arm(), "shop-ssp-1a2b3c", "ssp-a1b2c3d4e5f6").unwrap();
+        let tag = tag(&arm().key(), "shop");
+        assert_eq!(tag, "ssp-checkout-a1b2c3d4e5f6");
+        new_revision(&mut changed, &arm(), "shop-ssp-1a2b3c", &tag).unwrap();
         let template = &changed["template"];
         assert_eq!(template["containers"][1]["image"], arm().image);
         assert_eq!(template["containers"][0]["image"], "otel/collector");
@@ -711,21 +733,31 @@ mod tests {
             "shop@acme.iam.gserviceaccount.com"
         );
         assert_eq!(template["labels"][COMMIT_LABEL], arm().commit);
+        assert_eq!(template["labels"][EXPERIMENT_LABEL], "checkout");
+        assert_eq!(
+            CloudRun::unit_of(
+                &json!({"labels": template["labels"], "containers": template["containers"]})
+            ),
+            Some(Unit {
+                share: 0.0,
+                ..arm()
+            })
+        );
         assert_eq!(changed["labels"]["team"], "web");
         assert_eq!(
             changed["traffic"],
             json!([
                 {"type": REVISION, "percent": 100, "revision": "shop-00042-xyz"},
-                {"type": REVISION, "revision": "shop-ssp-1a2b3c", "percent": 0, "tag": "ssp-a1b2c3d4e5f6"},
+                {"type": REVISION, "revision": "shop-ssp-1a2b3c", "percent": 0, "tag": tag},
             ])
         );
         // The same tag again moves to the new revision.
-        new_revision(&mut changed, &arm(), "shop-ssp-4d5e6f", "ssp-a1b2c3d4e5f6").unwrap();
+        new_revision(&mut changed, &arm(), "shop-ssp-4d5e6f", &tag).unwrap();
         let tagged: Vec<&Value> = changed["traffic"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|target| target["tag"] == "ssp-a1b2c3d4e5f6")
+            .filter(|target| target["tag"] == tag.as_str())
             .collect();
         assert_eq!(tagged.len(), 1);
         assert_eq!(tagged[0]["revision"], "shop-ssp-4d5e6f");
@@ -742,10 +774,13 @@ mod tests {
         let split = json!({"trafficStatuses": [
             {"revision": "shop-1", "percent": 10},
             {"revision": "shop-2", "percent": 90},
-            {"revision": "shop-ssp-1", "percent": 0, "tag": "ssp-control"},
+            {"revision": "shop-ssp-1", "percent": 0, "tag": "ssp-checkout-c0ffee100000"},
         ]});
         assert_eq!(serving_revision(&split).as_deref(), Some("shop-2"));
-        assert_eq!(tag(&arm()), "ssp-a1b2c3d4e5f6");
+        // A long service name leaves less room: the tag ends with a hash.
+        let long = tag(&arm().key(), "shop-checkout-service-eu-west");
+        assert!(long.len() <= 46 - 29, "{long}");
+        assert!(long.starts_with("ssp-chec"), "{long}");
     }
 
     #[test]
@@ -772,5 +807,12 @@ mod tests {
         assert!(!revision_ready(
             &json!({"reconciling": true, "conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}]})
         ));
+        assert_eq!(
+            not_ready(
+                &json!({"conditions": [{"type": "Ready", "state": "CONDITION_FAILED",
+                                              "message": "The container exited (exit 1)"}]})
+            ),
+            "the revision is not ready: The container exited (exit 1)"
+        );
     }
 }

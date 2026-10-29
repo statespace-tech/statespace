@@ -1,4 +1,4 @@
-//! `ssp proxy docker`: live, the control, and the arms as containers on
+//! `ssp proxy docker`: live and the units of experiments as containers on
 //! this machine. Each listens on a private port of 127.0.0.1, restarts with
 //! backoff when it exits, and gets traffic only while it is ready. A new
 //! image replaces a container without dropping requests: the new container
@@ -38,11 +38,12 @@ const STABLE_AFTER: Duration = Duration::from_secs(60);
 const STRAYS_AFTER: Duration = Duration::from_secs(60);
 /// The label every container of this proxy's app carries.
 const APP_LABEL: &str = "statespace.com/app";
-/// The label that names a container's unit: `live`, `control`, or `arm-<commit>`.
+/// The label that names a container's unit: `live`, or `<experiment>:<commit>`.
 const UNIT_LABEL: &str = "statespace.com/unit";
 /// The label that names a container's image.
 const IMAGE_LABEL: &str = "statespace.com/image";
-/// The label with the commit of the control or the arm.
+/// The labels with the experiment and the commit of a unit.
+const EXPERIMENT_LABEL: &str = "statespace.com/experiment";
 const COMMIT_LABEL: &str = "statespace.com/commit";
 /// The label that names the proxy, by the address it listens on, so two
 /// proxies of one app on a machine keep to their own containers.
@@ -68,8 +69,7 @@ impl std::fmt::Display for Target {
 fn label(target: &Target) -> String {
     match target {
         Target::Live => "live".into(),
-        Target::Unit(UnitKey::Control) => "control".into(),
-        Target::Unit(UnitKey::Arm(commit)) => format!("arm-{commit}"),
+        Target::Unit(key) => format!("{}:{}", key.experiment, key.commit),
     }
 }
 
@@ -91,6 +91,8 @@ struct Slot {
     container: Option<String>,
     /// The image the serving container runs.
     running: Option<String>,
+    /// Why the target does not serve, after a failure.
+    error: Option<String>,
 }
 
 /// A container the proxy found when it started, from an earlier run.
@@ -255,6 +257,7 @@ impl Docker {
                 address: None,
                 container: None,
                 running: None,
+                error: None,
             },
         );
         let docker = self.clone();
@@ -311,7 +314,10 @@ impl Docker {
                 Some(Err(error)) => {
                     eprintln!("[ssp] could not start {target}: {error:#}");
                     if serving.is_none() {
-                        self.update(&target, |slot| slot.state = State::Failed);
+                        self.update(&target, |slot| {
+                            slot.state = State::Failed;
+                            slot.error = Some(format!("could not start: {error:#}"));
+                        });
                     }
                     if !pause(&mut delay, &mut images, &mut stopped).await {
                         break;
@@ -337,7 +343,10 @@ impl Docker {
                 Some(Err(error)) => {
                     eprintln!("[ssp] {target} did not become ready: {error:#}");
                     if serving.is_none() {
-                        self.update(&target, |slot| slot.state = State::Failed);
+                        self.update(&target, |slot| {
+                            slot.state = State::Failed;
+                            slot.error = Some(format!("{error:#}"));
+                        });
                     }
                     remove(instance).await;
                     if !pause(&mut delay, &mut images, &mut stopped).await {
@@ -353,6 +362,7 @@ impl Docker {
                 slot.address = Some(instance.address.clone());
                 slot.container = Some(instance.id.clone());
                 slot.running = Some(image.clone());
+                slot.error = None;
             });
             // The new container serves; the one it replaces stops.
             if let Some(previous) = serving.replace(instance) {
@@ -377,10 +387,12 @@ impl Docker {
                 Ended::Stopped => break,
                 Ended::Exited(code) => {
                     serving.take();
+                    let exit = code.map_or_else(|| "no code".into(), |code| format!("exit {code}"));
                     self.update(&target, |slot| {
                         slot.state = State::Starting;
                         slot.address = None;
                         slot.container = None;
+                        slot.error = Some(format!("the container exited ({exit}); it restarts"));
                     });
                     if started.elapsed() > STABLE_AFTER {
                         delay = Duration::from_secs(1);
@@ -424,22 +436,19 @@ impl Docker {
             }
             let _ = docker(&["rm", "--force", &found.id]).await;
         }
+        let (unit_name, experiment, commit) = match target {
+            Target::Live => ("live".to_owned(), "", ""),
+            Target::Unit(key) => (
+                key.name("", 60),
+                key.experiment.as_str(),
+                key.commit.as_str(),
+            ),
+        };
         let name = format!(
-            "ssp-{}-{}-{:06x}",
+            "ssp-{}-{unit_name}-{:06x}",
             self.options.app,
-            label.chars().take(20).collect::<String>(),
             rand::random::<u32>() & 0xff_ffff
         );
-        let commit = match target {
-            Target::Unit(_) => self
-                .slots
-                .lock()
-                .expect("slots are never poisoned")
-                .get(target)
-                .and_then(|slot| slot.unit.as_ref().map(|unit| unit.commit.clone()))
-                .unwrap_or_default(),
-            Target::Live => String::new(),
-        };
         let mut command = Command::new("docker");
         command
             // An init process forwards SIGTERM to apps that run as PID 1.
@@ -448,6 +457,7 @@ impl Docker {
             .args(["--label", &format!("{UNIT_LABEL}={label}")])
             .args(["--label", &format!("{PROXY_LABEL}={}", self.options.listen)])
             .args(["--label", &format!("{IMAGE_LABEL}={image}")])
+            .args(["--label", &format!("{EXPERIMENT_LABEL}={experiment}")])
             .args(["--label", &format!("{COMMIT_LABEL}={commit}")])
             .args(["--publish", &format!("127.0.0.1::{port}")]);
         // Values travel in the environment of `docker` itself, so they never
@@ -546,17 +556,23 @@ impl Docker {
             if self.check(&instance.address).await {
                 return Ok(());
             }
-            let state = docker(&["inspect", "--format", "{{.State.Status}}", &instance.id])
-                .await
-                .unwrap_or_default();
-            if matches!(state.trim(), "exited" | "dead") {
-                bail!("it exited before it was ready");
+            let state = docker(&[
+                "inspect",
+                "--format",
+                "{{.State.Status}} {{.State.ExitCode}}",
+                &instance.id,
+            ])
+            .await
+            .unwrap_or_default();
+            if let Some((status, code)) = state.trim().split_once(' ')
+                && matches!(status, "exited" | "dead")
+            {
+                bail!("the container exits at start (exit {code})");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
         bail!(
-            "it did not answer at {} within {}s",
-            instance.address,
+            "the container did not answer within {}s",
             READY_TIMEOUT.as_secs()
         )
     }
@@ -657,6 +673,7 @@ impl Orchestrator for Docker {
                         unit,
                         address: slot.address.clone().unwrap_or_default(),
                         ready,
+                        reason: if ready { None } else { slot.error.clone() },
                     })
                 })
                 .collect();
@@ -674,7 +691,7 @@ impl Orchestrator for Docker {
         let (sender, stream) = channel();
         let docker = self.clone();
         let target = Target::Unit(unit.key());
-        let prefix = format!("[{}] ", unit.name().chars().take(7).collect::<String>());
+        let prefix = format!("[{}] ", unit.key());
         tokio::spawn(async move {
             // Follow each container the unit runs, one after another; lines
             // from before are left out.
@@ -945,10 +962,13 @@ mod tests {
     #[test]
     fn labels_name_units_stably() {
         assert_eq!(label(&Target::Live), "live");
-        assert_eq!(label(&Target::Unit(UnitKey::Control)), "control");
+        let key = UnitKey {
+            experiment: "checkout".into(),
+            commit: "a".repeat(40),
+        };
         assert_eq!(
-            label(&Target::Unit(UnitKey::Arm("a".repeat(40)))),
-            format!("arm-{}", "a".repeat(40))
+            label(&Target::Unit(key)),
+            format!("checkout:{}", "a".repeat(40))
         );
     }
 

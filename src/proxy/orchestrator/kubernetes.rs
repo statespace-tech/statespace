@@ -1,8 +1,10 @@
 //! `ssp proxy kubernetes`: the proxy runs as its own Deployment in front of
-//! the app. Live is the app's Deployment and its Service. The control and
-//! each arm run as copies of the Deployment's pod spec with another image,
-//! `<deployment>-ssp-control` and `<deployment>-ssp-<commit 12>`, each with
-//! a Service, labeled `statespace.com/app`. Replicas follow the share.
+//! the app. Live is the app's Deployment and its Service. Each unit runs as
+//! a copy of the Deployment's pod spec with another image,
+//! `<deployment>-ssp-<experiment>-<commit 12>` (cut with a short hash past
+//! 63 characters), with a Service, labeled `statespace.com/app`,
+//! `statespace.com/experiment`, and `statespace.com/commit`. Replicas follow
+//! the share.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -17,8 +19,7 @@ use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Side, Stream, Unit, channel,
-    kube::Kube,
+    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, channel, kube::Kube,
 };
 use crate::{cli::KubernetesArgs, image};
 
@@ -26,8 +27,9 @@ use crate::{cli::KubernetesArgs, image};
 pub const APP_LABEL: &str = "statespace.com/app";
 /// The label that selects a unit's pods.
 pub const UNIT_LABEL: &str = "statespace.com/unit";
-const SIDE_ANNOTATION: &str = "statespace.com/side";
-const COMMIT_ANNOTATION: &str = "statespace.com/commit";
+/// The labels with the full experiment and commit of a unit.
+pub const EXPERIMENT_LABEL: &str = "statespace.com/experiment";
+pub const COMMIT_LABEL: &str = "statespace.com/commit";
 const IMAGE_ANNOTATION: &str = "statespace.com/image";
 const PORT_ANNOTATION: &str = "statespace.com/port";
 /// A digest of the object, to tell whether it is current.
@@ -177,7 +179,7 @@ impl Orchestrator for Kubernetes {
                 eprintln!("[ssp] created Deployment {name} for {}", unit.key());
             }
         }
-        let service = unit_service(&self.app, &name, port);
+        let service = unit_service(&self.app, &name, port, unit);
         let services = self.services();
         match self.kube.get(&format!("{services}/{name}")).await? {
             Some(current) if current_hash(&current) == current_hash(&service) => {}
@@ -212,23 +214,21 @@ impl Orchestrator for Kubernetes {
         Ok(deployments
             .iter()
             .filter_map(|deployment| {
+                let labels = &deployment["metadata"]["labels"];
                 let annotations = &deployment["metadata"]["annotations"];
-                let side = match annotations[SIDE_ANNOTATION].as_str()? {
-                    "control" => Side::Control,
-                    "arm" => Side::Arm,
-                    _ => return None,
-                };
                 let name = deployment["metadata"]["name"].as_str()?;
                 let port: u64 = annotations[PORT_ANNOTATION].as_str()?.parse().ok()?;
+                let ready = rolled_out(deployment);
                 Some(Running {
                     unit: Unit {
-                        side,
-                        commit: annotations[COMMIT_ANNOTATION].as_str()?.to_owned(),
+                        experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
+                        commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
                         image: annotations[IMAGE_ANNOTATION].as_str()?.to_owned(),
                         share: 0.0,
                     },
                     address: self.address(name, port),
-                    ready: rolled_out(deployment),
+                    ready,
+                    reason: (!ready).then(|| not_rolled_out(deployment)),
                 })
             })
             .collect())
@@ -356,11 +356,10 @@ fn timestamped(line: &str) -> Option<(DateTime<Utc>, &str)> {
     Some((time, text))
 }
 
-/// `<deployment>-ssp-control` or `<deployment>-ssp-<commit 12>`, at most 63 characters.
+/// `<deployment>-ssp-<experiment>-<commit 12>`, at most 63 characters, the
+/// limit of Kubernetes names and label values.
 pub fn unit_name(deployment: &str, unit: &Unit) -> String {
-    let suffix = format!("-ssp-{}", unit.name());
-    let prefix: String = deployment.chars().take(63 - suffix.len()).collect();
-    format!("{}{suffix}", prefix.trim_end_matches('-'))
+    unit.key().name(&format!("{deployment}-ssp-"), 63)
 }
 
 /// The label selector of a Deployment's pods.
@@ -395,6 +394,31 @@ pub fn replicas(live_replicas: u64, share: f64) -> u64 {
     ((live_replicas as f64 * share).ceil() as u64).max(1)
 }
 
+/// Why a unit's Deployment is not ready: a failed condition, else how many
+/// pods are ready.
+fn not_rolled_out(deployment: &Value) -> String {
+    let failed = deployment["status"]["conditions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|condition| {
+            condition["status"] == "False"
+                && matches!(
+                    condition["type"].as_str(),
+                    Some("Progressing" | "ReplicaFailure")
+                )
+        })
+        .and_then(|condition| condition["message"].as_str());
+    match failed {
+        Some(message) => format!("the rollout failed: {message}"),
+        None => format!(
+            "{} of {} pods are ready",
+            deployment["status"]["readyReplicas"].as_u64().unwrap_or(0),
+            deployment["spec"]["replicas"].as_u64().unwrap_or(1)
+        ),
+    }
+}
+
 /// Whether a unit's Deployment rolled out and has a ready pod.
 fn rolled_out(deployment: &Value) -> bool {
     let status = &deployment["status"];
@@ -405,8 +429,13 @@ fn rolled_out(deployment: &Value) -> bool {
         && status["readyReplicas"].as_u64().unwrap_or(0) >= 1
 }
 
-fn labels(app: &str, name: &str) -> Value {
-    json!({ APP_LABEL: app, UNIT_LABEL: name })
+fn labels(app: &str, name: &str, unit: &Unit) -> Value {
+    json!({
+        APP_LABEL: app,
+        UNIT_LABEL: name,
+        EXPERIMENT_LABEL: unit.experiment,
+        COMMIT_LABEL: unit.commit,
+    })
 }
 
 /// A unit's copy of live's Deployment, and the port its app listens on.
@@ -439,13 +468,7 @@ pub fn unit_deployment(
                 live["metadata"]["name"].as_str().unwrap_or_default()
             )
         })?;
-    let side = match unit.side {
-        Side::Control => "control",
-        Side::Arm => "arm",
-    };
     let annotations = json!({
-        SIDE_ANNOTATION: side,
-        COMMIT_ANNOTATION: unit.commit,
         IMAGE_ANNOTATION: unit.image,
         PORT_ANNOTATION: port.to_string(),
     });
@@ -462,14 +485,14 @@ pub fn unit_deployment(
         "kind": "Deployment",
         "metadata": {
             "name": name,
-            "labels": labels(app, name),
+            "labels": labels(app, name, unit),
             "annotations": annotations,
         },
         "spec": {
             "replicas": replicas(live_replicas, unit.share),
             "selector": {"matchLabels": {UNIT_LABEL: name}},
             "template": {
-                "metadata": {"labels": labels(app, name), "annotations": pod_annotations},
+                "metadata": {"labels": labels(app, name, unit), "annotations": pod_annotations},
                 "spec": pod,
             },
         },
@@ -481,11 +504,11 @@ pub fn unit_deployment(
 }
 
 /// The Service that reaches a unit's pods.
-pub fn unit_service(app: &str, name: &str, port: u64) -> Value {
+pub fn unit_service(app: &str, name: &str, port: u64, unit: &Unit) -> Value {
     hashed(json!({
         "apiVersion": "v1",
         "kind": "Service",
-        "metadata": {"name": name, "labels": labels(app, name)},
+        "metadata": {"name": name, "labels": labels(app, name, unit)},
         "spec": {
             "selector": {UNIT_LABEL: name},
             "ports": [{"name": "http", "port": port, "targetPort": port, "protocol": "TCP"}],
@@ -546,7 +569,7 @@ mod tests {
 
     fn arm(share: f64) -> Unit {
         Unit {
-            side: Side::Arm,
+            experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
             image: format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64)),
             share,
@@ -555,21 +578,32 @@ mod tests {
 
     #[test]
     fn names_units_after_the_deployment() {
-        assert_eq!(unit_name("shop", &arm(0.05)), "shop-ssp-a1b2c3d4e5f6");
-        let control = Unit {
-            side: Side::Control,
-            ..arm(0.05)
-        };
-        assert_eq!(unit_name("shop", &control), "shop-ssp-control");
+        assert_eq!(
+            unit_name("shop", &arm(0.05)),
+            "shop-ssp-checkout-a1b2c3d4e5f6"
+        );
         let long = unit_name(&"x".repeat(80), &arm(0.05));
         assert!(long.len() <= 63, "{long}");
+        let other = Unit {
+            experiment: "checkout-v2".into(),
+            ..arm(0.05)
+        };
+        assert_ne!(long, unit_name(&"x".repeat(80), &other));
+        let named = unit_name("shop-storefront-web", &other);
+        assert!(named.len() <= 63, "{named}");
     }
 
     #[test]
     fn units_copy_the_pod_spec_and_change_only_the_image() {
         let unit = arm(0.05);
-        let (deployment, port) =
-            unit_deployment(&live(), None, "shop-prod", "shop-ssp-a1b2c3d4e5f6", &unit).unwrap();
+        let (deployment, port) = unit_deployment(
+            &live(),
+            None,
+            "shop-prod",
+            "shop-ssp-checkout-a1b2c3d4e5f6",
+            &unit,
+        )
+        .unwrap();
         assert_eq!(port, 8000);
         let spec = &deployment["spec"]["template"]["spec"];
         assert_eq!(spec["serviceAccountName"], "shop");
@@ -582,10 +616,12 @@ mod tests {
         let labels = &deployment["spec"]["template"]["metadata"]["labels"];
         assert_eq!(labels["app"], Value::Null);
         assert_eq!(labels[APP_LABEL], "shop-prod");
+        assert_eq!(labels[EXPERIMENT_LABEL], "checkout");
+        assert_eq!(labels[COMMIT_LABEL], unit.commit);
         assert_eq!(deployment["spec"]["replicas"], 1);
         assert_eq!(
-            deployment["metadata"]["annotations"][SIDE_ANNOTATION],
-            "arm"
+            deployment["metadata"]["labels"][EXPERIMENT_LABEL],
+            "checkout"
         );
         assert_eq!(
             deployment["spec"]["template"]["metadata"]["annotations"]["prometheus.io/scrape"],
@@ -597,16 +633,16 @@ mod tests {
             &live(),
             None,
             "shop-prod",
-            "shop-ssp-a1b2c3d4e5f6",
+            "shop-ssp-checkout-a1b2c3d4e5f6",
             &arm(0.1),
         )
         .unwrap();
         assert_eq!(wider["spec"]["replicas"], 2);
         assert_ne!(current_hash(&deployment), current_hash(&wider));
-        let service = unit_service("shop-prod", "shop-ssp-a1b2c3d4e5f6", 8000);
+        let service = unit_service("shop-prod", "shop-ssp-checkout-a1b2c3d4e5f6", 8000, &unit);
         assert_eq!(
             service["spec"]["selector"][UNIT_LABEL],
-            "shop-ssp-a1b2c3d4e5f6"
+            "shop-ssp-checkout-a1b2c3d4e5f6"
         );
     }
 
@@ -631,6 +667,19 @@ mod tests {
         assert!(!rolled_out(&deployment(3, 2, 1, 1)));
         assert!(!rolled_out(&deployment(2, 2, 0, 1)));
         assert!(!rolled_out(&deployment(2, 2, 1, 0)));
+        assert_eq!(
+            not_rolled_out(&deployment(2, 2, 1, 0)),
+            "0 of 1 pods are ready"
+        );
+        let failed = json!({
+            "spec": {"replicas": 1},
+            "status": {"conditions": [{"type": "Progressing", "status": "False",
+                                       "message": "ReplicaSet has timed out progressing."}]},
+        });
+        assert_eq!(
+            not_rolled_out(&failed),
+            "the rollout failed: ReplicaSet has timed out progressing."
+        );
     }
 
     #[test]

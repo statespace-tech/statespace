@@ -1,4 +1,4 @@
-//! Orchestrators run the control and the arms beside live: on Docker, Cloud
+//! Orchestrators run the units of experiments beside live: on Docker, Cloud
 //! Run, or Kubernetes. A new orchestrator is a new module and a new
 //! subcommand of `ssp proxy`.
 
@@ -10,7 +10,7 @@ pub mod kubernetes;
 use std::future::Future;
 
 use http::{HeaderName, HeaderValue};
-use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 /// An image by digest, such as `ghcr.io/acme/shop@sha256:…`.
@@ -18,34 +18,27 @@ pub type Image = String;
 /// Where the proxy sends a request, such as `http://127.0.0.1:41022`.
 pub type Address = String;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Side {
-    Control,
-    Arm,
-}
-
-/// Which unit: the control, or the arm of a commit.
+/// Which unit: one arm of one experiment. One commit in two experiments is
+/// two units.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum UnitKey {
-    Control,
-    Arm(String),
+pub struct UnitKey {
+    pub experiment: String,
+    /// The full commit.
+    pub commit: String,
 }
 
 impl std::fmt::Display for UnitKey {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Control => formatter.write_str("control"),
-            Self::Arm(commit) => write!(formatter, "arm {}", &commit[..commit.len().min(7)]),
-        }
+        let short = &self.commit[..self.commit.len().min(7)];
+        write!(formatter, "{}:{short}", self.experiment)
     }
 }
 
-/// The control or one arm: `(side, commit, image)`. The control's commit is
-/// the live commit. `share` sizes the replicas where an orchestrator needs it.
+/// One arm of one experiment: `(experiment, commit, image)`. `share` sizes
+/// the replicas where an orchestrator needs it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Unit {
-    pub side: Side,
+    pub experiment: String,
     pub commit: String,
     pub image: Image,
     pub share: f64,
@@ -53,18 +46,30 @@ pub struct Unit {
 
 impl Unit {
     pub fn key(&self) -> UnitKey {
-        match self.side {
-            Side::Control => UnitKey::Control,
-            Side::Arm => UnitKey::Arm(self.commit.clone()),
+        UnitKey {
+            experiment: self.experiment.clone(),
+            commit: self.commit.clone(),
         }
     }
+}
 
-    /// A short name for objects: `control`, or the commit's first 12 characters.
-    pub fn name(&self) -> String {
-        match self.side {
-            Side::Control => "control".into(),
-            Side::Arm => self.commit.chars().take(12).collect(),
+impl UnitKey {
+    /// `<prefix><experiment>-<commit 12>`, at most `limit` characters. A
+    /// longer name is cut and ends with a short hash of the experiment and
+    /// the commit, so it stays unique; labels keep the full values.
+    pub fn name(&self, prefix: &str, limit: usize) -> String {
+        let commit: String = self.commit.chars().take(12).collect();
+        let full = format!("{prefix}{}-{commit}", self.experiment);
+        if full.len() <= limit {
+            return full;
         }
+        let digest = Sha256::digest(format!("{}:{}", self.experiment, self.commit).as_bytes());
+        let hash: String = digest[..3]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let cut: String = full.chars().take(limit.saturating_sub(7)).collect();
+        format!("{}-{hash}", cut.trim_end_matches('-'))
     }
 }
 
@@ -74,6 +79,8 @@ pub struct Running {
     pub unit: Unit,
     pub address: Address,
     pub ready: bool,
+    /// Why the unit is not ready, when the orchestrator knows.
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -108,7 +115,7 @@ pub trait Orchestrator: Send + Sync + 'static {
     fn live(&self) -> impl Future<Output = anyhow::Result<Image>> + Send;
     /// Where the proxy sends live traffic.
     fn live_address(&self) -> Address;
-    /// Start the control (image of live) or an arm. Idempotent.
+    /// Start a unit. Idempotent.
     fn start(&self, unit: &Unit) -> impl Future<Output = anyhow::Result<Address>> + Send;
     fn stop(&self, unit: &Unit) -> impl Future<Output = anyhow::Result<()>> + Send;
     /// What runs now: each unit, its address, and whether it is ready.
@@ -131,4 +138,29 @@ pub trait Orchestrator: Send + Sync + 'static {
 /// The channel an orchestrator feeds a unit's lines into.
 pub fn channel() -> (mpsc::Sender<Line>, OutputStream) {
     mpsc::channel(10_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_fit_platform_limits() {
+        let key = UnitKey {
+            experiment: "checkout".into(),
+            commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
+        };
+        assert_eq!(key.to_string(), "checkout:a1b2c3d");
+        assert_eq!(key.name("ssp-", 46), "ssp-checkout-a1b2c3d4e5f6");
+        let short = key.name("shop-ssp-", 20);
+        assert_eq!(short.len(), 20, "{short}");
+        assert!(short.starts_with("shop-ssp-ch"), "{short}");
+        // Two experiments with one long prefix still get two names.
+        let other = UnitKey {
+            experiment: "checkout-two".into(),
+            ..key.clone()
+        };
+        assert_ne!(key.name("shop-ssp-", 20), other.name("shop-ssp-", 20));
+        assert_eq!(key.name("x", 20), key.name("x", 20));
+    }
 }

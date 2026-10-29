@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 
 const LIVE: &str = "9f1ce8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6";
 const ARM: &str = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
+const LANDING: &str = "b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1";
 
 // ---------------------------------------------------------------------------
 // A small HTTP server for stand-ins.
@@ -742,8 +743,9 @@ fn proxies_fail_for_an_app_that_does_not_exist() {
 struct Google {
     service: Value,
     revisions: HashMap<String, Value>,
-    /// Where each side's tag URL points.
-    control: String,
+    /// Where tag URLs point: the reference's (the live commit), and every
+    /// other unit's.
+    reference: String,
     arm: String,
     patches: Vec<Value>,
     id_tokens: Vec<String>,
@@ -802,8 +804,8 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                     .map(|target| {
                         let mut status = target.clone();
                         if let Some(tag) = target["tag"].as_str() {
-                            status["uri"] = json!(if tag == "ssp-control" {
-                                google.control.clone()
+                            status["uri"] = json!(if tag.contains(&LIVE[..12]) {
+                                google.reference.clone()
                             } else {
                                 google.arm.clone()
                             });
@@ -867,7 +869,7 @@ struct CloudRunTest {
 
 fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
     let live = echo("live");
-    let control = echo("control");
+    let reference = echo("reference");
     let arm = echo("arm");
     let google_state = Arc::new(Mutex::new(Google {
         service: json!({
@@ -886,7 +888,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
             json!({"name": format!("{SERVICE}/revisions/shop-00001-abc"),
                    "containers": [{"image": digest('1'), "ports": [{"containerPort": 8080}]}]}),
         )]),
-        control: format!("http://127.0.0.1:{control}"),
+        reference: format!("http://127.0.0.1:{reference}"),
         arm: format!("http://127.0.0.1:{arm}"),
         patches: Vec::new(),
         id_tokens: Vec::new(),
@@ -898,17 +900,29 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
             "app": "shop-prod",
             "salt": "salt-1",
             "settings_hash": "settings-1",
-            "settings": {"subject": "request.cookies.ssp_sid", "eligibility": null,
-                         "overrides": overrides, "redact": ["\\b\\d{16}\\b"], "max_arms": 5},
-            "events": [
-                {"name": "checkout", "source": "request",
-                 "match": "request.path == \"/checkout\" && request.status == 200"},
-                {"name": "signup", "source": "stdout", "match": "stdout.json.event == \"signup\""},
-                {"name": "fatal", "source": "stderr", "match": "stderr.text.contains(\"FATAL\")"},
-            ],
+            "settings": {"overrides": overrides, "redact": ["\\b\\d{16}\\b"]},
             "live": {"commit": LIVE, "image": digest('1')},
-            "control": {"image": digest('1'), "ranges": [[0.0, 0.4]]},
-            "arms": [{"commit": ARM, "image": digest('2'), "version": 3, "ranges": [[0.4, 0.8]]}],
+            "experiments": [
+                {"name": "checkout", "version": 3, "state": "running",
+                 "subject": null, "eligibility": null,
+                 "events": [
+                     {"name": "checkout", "source": "request",
+                      "match": "request.path == \"/checkout\" && request.status == 200"},
+                     {"name": "signup", "source": "stdout",
+                      "match": "stdout.json.event == \"signup\""},
+                     {"name": "fatal", "source": "stderr",
+                      "match": "stderr.text.contains(\"FATAL\")"},
+                 ],
+                 "arms": [
+                     {"commit": LIVE, "image": digest('1'), "ranges": [[0.0, 0.4]]},
+                     {"commit": ARM, "image": digest('2'), "ranges": [[0.4, 0.8]]},
+                 ]},
+                // A starting experiment: its unit runs, but takes no request.
+                {"name": "us-landing", "version": 1, "state": "starting",
+                 "subject": "request.headers[\"x-user-id\"]", "eligibility": null,
+                 "events": [],
+                 "arms": [{"commit": LANDING, "image": digest('3'), "ranges": [[0.8, 1.0]]}]},
+            ],
             "lease": null,
             "poll_interval_seconds": 1,
         }),
@@ -939,7 +953,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
 #[test]
 fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     let test = cloudrun_proxy(false, true);
-    let control_subject = subject_in(0.0, 0.4);
+    let reference_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     let get = |subject: &str, path: &str| -> Option<(Value, reqwest::header::HeaderMap)> {
@@ -953,19 +967,32 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
                 ("x-statespace-arm", "spoofed"),
                 ("x-forwarded-proto", "https"),
                 ("authorization", "Bearer the-app's-own"),
+                // us-landing claims this user, but it is only starting.
+                ("x-user-id", &live_subject),
             ],
         )?;
         let headers = response.headers().clone();
         let body: Value = response.json().ok()?;
         Some((body, headers))
     };
-    wait_until(60, "the arm and the control serve", || {
+    wait_until(60, "both arms of checkout serve", || {
         get(&arm_subject, "/").is_some_and(|(body, _)| body["name"] == "arm")
-            && get(&control_subject, "/").is_some_and(|(body, _)| body["name"] == "control")
+            && get(&reference_subject, "/").is_some_and(|(body, _)| body["name"] == "reference")
     });
 
-    // The lease holder made one tagged revision for each unit, with 0% traffic,
-    // and pinned live's traffic to the revision it has.
+    // The lease holder made one tagged revision for each unit, with 0%
+    // traffic, also for the starting experiment, and pinned live's traffic
+    // to the revision it has.
+    let reference_tag = format!("ssp-checkout-{}", &LIVE[..12]);
+    let arm_tag = format!("ssp-checkout-{}", &ARM[..12]);
+    let landing_tag = format!("ssp-us-landing-{}", &LANDING[..12]);
+    wait_until(30, "every unit has a tag", || {
+        let google = test.google.lock().unwrap();
+        let traffic = google.service["traffic"].as_array().unwrap();
+        [&reference_tag, &arm_tag, &landing_tag]
+            .iter()
+            .all(|tag| traffic.iter().any(|target| target["tag"] == tag.as_str()))
+    });
     let patches = test.google.lock().unwrap().patches.clone();
     let last = patches.last().unwrap();
     let traffic = last["traffic"].as_array().unwrap();
@@ -973,14 +1000,6 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         traffic.contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
                                      "revision": "shop-00001-abc", "percent": 100})),
         "{traffic:?}"
-    );
-    let tags: Vec<&str> = traffic
-        .iter()
-        .filter_map(|target| target["tag"].as_str())
-        .collect();
-    assert!(
-        tags.contains(&"ssp-control") && tags.contains(&"ssp-a1b2c3d4e5f6"),
-        "{tags:?}"
     );
     assert!(
         traffic
@@ -992,14 +1011,24 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         last["labels"]["team"], "web",
         "the service keeps its own settings"
     );
+    let labels: Vec<Value> = patches
+        .iter()
+        .map(|patch| patch["template"]["labels"].clone())
+        .collect();
+    assert!(
+        labels.contains(
+            &json!({"statespace-experiment": "us-landing", "statespace-commit": LANDING})
+        )
+    );
 
-    // The arm gets the arm's headers and a Google ID token for its URL; the
-    // app keeps its own Authorization header.
+    // The arm gets the experiment and arm headers and a Google ID token for
+    // its URL; the app keeps its own Authorization header.
     let (arm_body, arm_response) = get(&arm_subject, "/checkout").unwrap();
     let headers = &arm_body["headers"];
-    assert_eq!(headers["x-statespace-side"], "arm");
+    assert_eq!(headers["x-statespace-experiment"], "checkout");
     assert_eq!(headers["x-statespace-arm"], ARM);
     assert_eq!(headers["x-statespace-subject"], arm_subject.as_str());
+    assert!(headers.get("x-statespace-side").is_none());
     assert_eq!(headers["authorization"], "Bearer the-app's-own");
     let arm_url = test.google.lock().unwrap().arm.clone();
     assert_eq!(
@@ -1007,21 +1036,27 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         format!("Bearer id-for-{arm_url}")
     );
     assert_eq!(arm_response["cache-control"], "private, max-age=60");
-    let (control_body, _) = get(&control_subject, "/").unwrap();
-    assert_eq!(control_body["headers"]["x-statespace-side"], "control");
-    assert!(control_body["headers"].get("x-statespace-arm").is_none());
+    let (reference_body, _) = get(&reference_subject, "/").unwrap();
+    assert_eq!(reference_body["headers"]["x-statespace-arm"], LIVE);
 
-    // Live is untouched: no side, no private cache, no recording.
+    // Live is untouched: no arm, no private cache, no recording. The
+    // starting experiment takes no request.
     let (live_body, live_response) = get(&live_subject, "/").unwrap();
     assert_eq!(live_body["name"], "live");
-    assert!(live_body["headers"].get("x-statespace-side").is_none());
+    assert!(live_body["headers"].get("x-statespace-arm").is_none());
+    assert!(
+        live_body["headers"]
+            .get("x-statespace-experiment")
+            .is_none()
+    );
     assert_eq!(live_response["cache-control"], "public, max-age=60");
     assert_eq!(
         live_body["headers"]["x-statespace-subject"],
         live_subject.as_str()
     );
 
-    // Every response renews the visitor cookie; a new visitor gets one.
+    // While checkout uses the visitor cookie, every response renews it, and
+    // a new visitor gets one.
     let cookies = live_response
         .get_all("set-cookie")
         .iter()
@@ -1041,7 +1076,7 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         "{cookie}"
     );
 
-    // Rows arrive for the control and the arm only, with the agreed fields.
+    // Rows arrive for the units only, with the agreed fields.
     wait_until(30, "rows of every table", || {
         let state = test.statespace.lock().unwrap();
         [
@@ -1065,26 +1100,18 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     });
     let state = test.statespace.lock().unwrap();
     let runs = state.rows("runs");
-    assert!(runs.iter().any(|run| run["side"] == "control"
-        && run["arm"].is_null()
-        && run["version"].is_null()
-        && run["live"] == LIVE
-        && run["subject"] == control_subject.as_str()
+    assert!(runs.iter().any(|run| run["experiment"] == "checkout"
+        && run["arm"] == LIVE
+        && run["version"] == 3
+        && run["subject"] == reference_subject.as_str()
         && run["reason"] == "assigned"));
+    assert!(runs.iter().any(|run| run["arm"] == ARM));
     assert!(
         runs.iter()
-            .any(|run| run["side"] == "arm" && run["arm"] == ARM && run["version"] == 3)
-    );
-    assert!(
-        runs.iter()
-            .all(|run| run["subject"] != live_subject.as_str())
+            .all(|run| run["subject"] != live_subject.as_str() && run.get("side").is_none())
     );
     let requests = state.rows("requests");
-    assert!(
-        requests
-            .iter()
-            .all(|row| row["side"] == "arm" || row["side"] == "control")
-    );
+    assert!(requests.iter().all(|row| row["experiment"] == "checkout"));
     let checkout = requests
         .iter()
         .find(|row| row["path"] == "/checkout")
@@ -1092,6 +1119,10 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     assert_eq!(checkout["status"], 200);
     assert_eq!(checkout["override"], false);
     assert_eq!(checkout["subject"], arm_subject.as_str());
+    assert_eq!(
+        (&checkout["arm"], &checkout["version"]),
+        (&json!(ARM), &json!(3))
+    );
     assert!(
         checkout["ms"].as_f64().is_some()
             && checkout["id"].is_string()
@@ -1100,14 +1131,16 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     let events = state.rows("events");
     let event = events.iter().find(|row| row["name"] == "checkout").unwrap();
     assert_eq!(
-        (&event["side"], &event["subject"]),
-        (&json!("arm"), &json!(arm_subject))
+        (&event["experiment"], &event["arm"], &event["subject"]),
+        (&json!("checkout"), &json!(ARM), &json!(arm_subject))
     );
     assert!(
         events
             .iter()
             .any(|row| row["name"] == "signup" && row["subject"].is_null())
     );
+    // us-landing has no events of its own here, so its output matches none.
+    assert!(events.iter().all(|row| row["experiment"] == "checkout"));
     // Output is redacted before it leaves.
     let stdout = state.rows("stdout");
     assert!(
@@ -1130,7 +1163,7 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         state
             .rows("lifecycle")
             .iter()
-            .any(|row| row["event"] == "started")
+            .any(|row| row["event"] == "started" && row["experiment"] == "us-landing")
     );
     // Batches carry every table.
     let batch = state
@@ -1151,46 +1184,59 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     }
     assert_eq!(batch.body["app"], "shop-prod");
     drop(state);
-    // Reports name the orchestrator and live image; the holder adds its units.
-    wait_until(30, "a report with units", || {
+    // Reports name the orchestrator and live image; the holder adds each
+    // unit with its experiment.
+    let ready = |experiment: &str, commit: &str| {
+        let experiment = experiment.to_owned();
+        let commit = commit.to_owned();
+        move |unit: &Value| {
+            unit["experiment"] == experiment.as_str()
+                && unit["commit"] == commit.as_str()
+                && unit["ready"] == true
+                && unit["reason"].is_null()
+        }
+    };
+    wait_until(30, "a report with every unit ready", || {
         test.statespace
             .lock()
             .unwrap()
             .reports()
             .iter()
-            .any(|report| report.get("units").is_some())
+            .any(|report| {
+                report["units"].as_array().is_some_and(|units| {
+                    units.iter().any(ready("checkout", ARM))
+                        && units.iter().any(ready("checkout", LIVE))
+                        && units.iter().any(ready("us-landing", LANDING))
+                })
+            })
     });
     let state = test.statespace.lock().unwrap();
-    let reports = state.reports();
-    let report = reports
-        .iter()
-        .rev()
-        .find(|report| report.get("units").is_some())
-        .unwrap();
+    let report = state.reports().pop().unwrap();
     assert_eq!(report["orchestrator"], "cloudrun");
     assert_eq!(report["live_image"], digest('1'));
     assert_eq!(report["settings_hash"], "settings-1");
-    assert!(
-        report["units"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|unit| unit["side"] == "arm" && unit["ready"] == true)
-    );
     drop(state);
 
-    // When the arm leaves the configuration, the holder removes its tag.
-    test.statespace.lock().unwrap().config["arms"] = json!([]);
-    wait_until(30, "the arm's tag is removed", || {
+    // When checkout stops, the holder removes the tags of its units.
+    test.statespace.lock().unwrap().config["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    wait_until(30, "the tags of checkout are removed", || {
         let google = test.google.lock().unwrap();
         google.service["traffic"]
             .as_array()
             .unwrap()
             .iter()
-            .all(|target| target["tag"] != "ssp-a1b2c3d4e5f6")
+            .all(|target| {
+                target["tag"] != arm_tag.as_str() && target["tag"] != reference_tag.as_str()
+            })
     });
     let (body, _) = get(&arm_subject, "/").unwrap();
     assert_eq!(body["name"], "live");
+    // No running experiment uses the visitor cookie now: none is set.
+    let fresh = send(test.port, "GET", "/", &[]).unwrap();
+    assert!(set_cookies(&fresh).is_empty());
 }
 
 #[test]
@@ -1219,11 +1265,11 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
 }
 
 #[test]
-fn overrides_name_a_running_arm_by_commit() {
+fn overrides_name_an_experiment_and_a_commit() {
     let test = cloudrun_proxy(true, true);
     let live_subject = subject_in(0.8, 1.0);
     let cookie = format!("ssp_sid={live_subject}");
-    let named = [("ssp-arm", "a1b2c3d"), ("cookie", cookie.as_str())];
+    let named = [("ssp-arm", "checkout:a1b2c3d"), ("cookie", cookie.as_str())];
     wait_until(60, "the arm serves overrides", || {
         send(test.port, "GET", "/", &named).is_some_and(|response| {
             response.status() == 200 && response.json::<Value>().unwrap()["name"] == "arm"
@@ -1239,6 +1285,7 @@ fn overrides_name_a_running_arm_by_commit() {
     );
     let body: Value = response.json().unwrap();
     assert_eq!(body["name"], "arm");
+    assert_eq!(body["headers"]["x-statespace-experiment"], "checkout");
     assert!(body["headers"].get("ssp-arm").is_none());
 
     // A browser's parameter sets the cookie and returns to the clean URL.
@@ -1246,40 +1293,47 @@ fn overrides_name_a_running_arm_by_commit() {
     let response = send(
         test.port,
         "GET",
-        "/cart?step=1&ssp_arm=a1b2c3d",
+        "/cart?step=1&ssp_arm=checkout:a1b2c3d",
         &plain_cookie,
     )
     .unwrap();
     assert_eq!(response.status(), 302);
     assert_eq!(response.headers()["location"], "/cart?step=1");
     assert!(set_cookies(&response).contains(&format!(
-        "ssp_arm={ARM}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
+        "ssp_arm=checkout:{ARM}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
     )));
 
     // The cookie keeps the arm and never reaches the app.
-    let kept_cookie = format!("{cookie}; ssp_arm={ARM}");
+    let kept_cookie = format!("{cookie}; ssp_arm=checkout:{ARM}");
     let kept = [("cookie", kept_cookie.as_str())];
     let response = send(test.port, "GET", "/", &kept).unwrap();
     assert!(
         set_cookies(&response)
             .iter()
-            .any(|cookie| cookie.starts_with(&format!("ssp_arm={ARM};")))
+            .any(|cookie| cookie.starts_with(&format!("ssp_arm=checkout:{ARM};")))
     );
     let body: Value = response.json().unwrap();
     assert_eq!(body["name"], "arm");
     assert_eq!(body["headers"]["cookie"], cookie.as_str());
 
-    // A prefix that matches no running arm gets a short page.
-    let response = send(test.port, "GET", "/?ssp_arm=b2c3d4e5", &plain_cookie).unwrap();
+    // A value that matches no arm of a running experiment gets a short page.
+    let response = send(
+        test.port,
+        "GET",
+        "/?ssp_arm=checkout:b2c3d4e5",
+        &plain_cookie,
+    )
+    .unwrap();
     assert_eq!(response.status(), 404);
-    assert!(
-        response
-            .text()
-            .unwrap()
-            .contains("b2c3d4e5 is not running on shop-prod. Running arms: a1b2c3d.")
-    );
-    let response = send(test.port, "GET", "/", &[("ssp-arm", "a1b2c3")]).unwrap();
-    assert_eq!(response.status(), 404);
+    assert!(response.text().unwrap().contains(
+        "checkout:b2c3d4e5 is not running on shop-prod. \
+         Running: checkout:9f1ce8a, checkout:a1b2c3d"
+    ));
+    // A starting experiment, or a commit without its experiment, names nothing.
+    for value in ["us-landing:b2c3d4e", "a1b2c3d"] {
+        let response = send(test.port, "GET", "/", &[("ssp-arm", value)]).unwrap();
+        assert_eq!(response.status(), 404, "{value}");
+    }
 
     // An empty parameter ends the override.
     let response = send(test.port, "GET", "/?ssp_arm=", &kept).unwrap();
@@ -1292,14 +1346,14 @@ fn overrides_name_a_running_arm_by_commit() {
 
     wait_until(30, "an override run and request", || {
         let state = test.statespace.lock().unwrap();
-        state
-            .rows("runs")
+        state.rows("runs").iter().any(|run| {
+            run["reason"] == "override"
+                && run["experiment"] == "checkout"
+                && run["subject"] == live_subject.as_str()
+        }) && state
+            .rows("requests")
             .iter()
-            .any(|run| run["reason"] == "override" && run["subject"] == live_subject.as_str())
-            && state
-                .rows("requests")
-                .iter()
-                .any(|row| row["override"] == true)
+            .any(|row| row["override"] == true)
     });
 }
 
@@ -1310,12 +1364,12 @@ fn proxies_without_overrides_still_remove_them() {
         send(test.port, "GET", "/", &[]).is_some()
     });
     let live_subject = subject_in(0.8, 1.0);
-    let cookie = format!("ssp_sid={live_subject}; ssp_arm={ARM}");
+    let cookie = format!("ssp_sid={live_subject}; ssp_arm=checkout:{ARM}");
     let response = send(
         test.port,
         "GET",
-        "/a?ssp_arm=a1b2c3d",
-        &[("ssp-arm", "a1b2c3d"), ("cookie", &cookie)],
+        "/a?ssp_arm=checkout:a1b2c3d",
+        &[("ssp-arm", "checkout:a1b2c3d"), ("cookie", &cookie)],
     )
     .unwrap();
     assert_eq!(response.status(), 200);
@@ -1380,10 +1434,10 @@ fn rand_suffix() -> u32 {
         & 0xff_ffff
 }
 
-/// A proxy on Docker runs live, the control, and the arm as containers,
-/// records only the control and the arm, and adopts its containers after a crash.
+/// A proxy on Docker runs live and both arms of an experiment as
+/// containers, records only the arms, and adopts its containers after a crash.
 #[test]
-fn docker_proxies_run_live_the_control_and_each_arm() {
+fn docker_proxies_run_live_and_each_unit() {
     if std::env::var("STATESPACE_DOCKER_TESTS").as_deref() != Ok("1") {
         eprintln!("skipped: set STATESPACE_DOCKER_TESTS=1 to run the Docker test");
         return;
@@ -1445,12 +1499,18 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
         lease: true,
         config: json!({
             "app": app, "salt": "salt-1", "settings_hash": "h",
-            "settings": {"subject": "request.cookies.ssp_sid", "eligibility": null,
-                         "overrides": false, "redact": [], "max_arms": 5},
-            "events": [{"name": "visit", "source": "stdout", "match": "stdout.json.event == \"visit\""}],
+            "settings": {"overrides": false, "redact": []},
             "live": {"commit": LIVE, "image": live_digest},
-            "control": {"image": live_digest, "ranges": [[0.0, 0.4]]},
-            "arms": [{"commit": ARM, "image": arm_digest, "version": 1, "ranges": [[0.4, 0.8]]}],
+            "experiments": [{
+                "name": "checkout", "version": 1, "state": "running",
+                "subject": null, "eligibility": null,
+                "events": [{"name": "visit", "source": "stdout",
+                            "match": "stdout.json.event == \"visit\""}],
+                "arms": [
+                    {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
+                ],
+            }],
             "lease": null, "poll_interval_seconds": 1,
         }),
         ..Statespace::default()
@@ -1484,34 +1544,35 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
             "/checkout",
             &[
                 ("cookie", &format!("ssp_sid={subject}")),
-                ("x-statespace-side", "spoofed"),
+                ("x-statespace-arm", "spoofed"),
             ],
         )?
         .json()
         .ok()
     };
-    let control_subject = subject_in(0.0, 0.4);
+    let reference_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
-    wait_until(240, "the control and the arm start", || {
-        get(&control_subject).is_some_and(|body| body["side"] == "control")
-            && get(&arm_subject).is_some_and(|body| body["side"] == "arm")
+    wait_until(240, "both arms start", || {
+        get(&reference_subject).is_some_and(|body| body["arm"] == LIVE)
+            && get(&arm_subject).is_some_and(|body| body["arm"] == ARM)
     });
-    let control = get(&control_subject).unwrap();
+    let reference = get(&reference_subject).unwrap();
     let arm = get(&arm_subject).unwrap();
     let live = get(&live_subject).unwrap();
-    assert_eq!(live["side"], "live", "clients cannot pick a side");
+    assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
+    assert_eq!(live["experiment"], Value::Null);
+    assert_eq!(arm["experiment"], "checkout");
     assert_eq!(
         (
-            control["greeting"].as_str(),
+            reference["greeting"].as_str(),
             arm["greeting"].as_str(),
             live["greeting"].as_str()
         ),
         (Some("hello"), Some("hi"), Some("hello"))
     );
-    assert_eq!(arm["arm"], ARM);
     // Containers inherit the proxy's environment, but never its own settings.
-    for body in [&control, &arm, &live] {
+    for body in [&reference, &arm, &live] {
         assert_eq!(body["shared"], "from-the-proxy");
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
@@ -1541,7 +1602,8 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
             state
                 .rows("requests")
                 .iter()
-                .all(|row| row["side"] != "live" && row["subject"] != live_subject.as_str())
+                .all(|row| row["experiment"] == "checkout"
+                    && row["subject"] != live_subject.as_str())
         );
         assert!(state.reports().iter().any(
             |report| report["orchestrator"] == "docker" && report["live_image"] == live_digest
@@ -1572,7 +1634,7 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
         ids
     };
     let mut running = Vec::new();
-    wait_until(60, "live, the control, and the arm run", || {
+    wait_until(60, "live and both arms run", || {
         running = containers();
         running.len() == 3
     });
@@ -1589,10 +1651,10 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
         "the restarted proxy adopted every container"
     );
 
-    // When the arm leaves the configuration, its container stops.
-    state.lock().unwrap().config["arms"] = json!([]);
-    wait_until(60, "the arm stops", || containers().len() == 2);
-    assert_eq!(get(&arm_subject).unwrap()["side"], "live");
+    // When the experiment stops, the containers of its arms stop.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(60, "the arms stop", || containers().len() == 1);
+    assert_eq!(get(&arm_subject).unwrap()["arm"], Value::Null);
 
     // Stopping the proxy removes every container it ran.
     assert!(proxy.stop().is_some_and(|status| status.success()));
@@ -1616,8 +1678,8 @@ fn kubectl(arguments: &[&str]) -> String {
 }
 
 /// The orchestrator against a real API server: it reads live's digest from
-/// pod status, starts the control and the arm as copies of the Deployment,
-/// and deletes the arm when it leaves the configuration. The proxy runs
+/// pod status, starts both arms of an experiment as copies of the
+/// Deployment, and deletes an arm when it leaves the configuration. The proxy runs
 /// outside the cluster through `kubectl proxy`, so it cannot reach the
 /// Services; routing is tested with Cloud Run and Docker.
 #[test]
@@ -1704,11 +1766,15 @@ spec:
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"subject": "request.cookies.ssp_sid", "overrides": false, "redact": [], "max_arms": 5},
-            "events": [],
+            "settings": {"overrides": false, "redact": []},
             "live": {"commit": LIVE, "image": live_digest},
-            "control": {"image": live_digest, "ranges": [[0.0, 0.05]]},
-            "arms": [{"commit": ARM, "image": live_digest, "version": 1, "ranges": [[0.05, 0.6]]}],
+            "experiments": [{
+                "name": "checkout", "version": 1, "state": "running",
+                "arms": [
+                    {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.05]]},
+                    {"commit": ARM, "image": live_digest, "ranges": [[0.05, 0.6]]},
+                ],
+            }],
             "poll_interval_seconds": 1,
         }),
         ..Statespace::default()
@@ -1760,14 +1826,16 @@ spec:
             "jsonpath={.items[*].metadata.name}",
         ])
     };
-    wait_until(120, "the control and the arm exist", || {
+    let reference_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
+    let arm_name = format!("shop-ssp-checkout-{}", &ARM[..12]);
+    wait_until(120, "both arms exist", || {
         let names = names();
-        names.contains("shop-ssp-control") && names.contains("shop-ssp-a1b2c3d4e5f6")
+        names.contains(&reference_name) && names.contains(&arm_name)
     });
     kubectl(&[
         "rollout",
         "status",
-        "deployment/shop-ssp-a1b2c3d4e5f6",
+        &format!("deployment/{arm_name}"),
         "--namespace",
         &namespace,
         "--timeout=180s",
@@ -1776,27 +1844,41 @@ spec:
     let replicas = kubectl(&[
         "get",
         "deployment",
-        "shop-ssp-a1b2c3d4e5f6",
+        &arm_name,
         "--namespace",
         &namespace,
         "-o",
         "jsonpath={.spec.replicas}",
     ]);
     assert_eq!(replicas, "2");
-    let control_replicas = kubectl(&[
+    let reference_replicas = kubectl(&[
         "get",
         "deployment",
-        "shop-ssp-control",
+        &reference_name,
         "--namespace",
         &namespace,
         "-o",
         "jsonpath={.spec.replicas}",
     ]);
-    assert_eq!(control_replicas, "1");
+    assert_eq!(reference_replicas, "1");
+    let labels = kubectl(&[
+        "get",
+        "deployment",
+        &arm_name,
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.metadata.labels}",
+    ]);
+    assert!(
+        labels.contains("\"statespace.com/experiment\":\"checkout\"")
+            && labels.contains(&format!("\"statespace.com/commit\":\"{ARM}\"")),
+        "{labels}"
+    );
     let args = kubectl(&[
         "get",
         "deployment",
-        "shop-ssp-a1b2c3d4e5f6",
+        &arm_name,
         "--namespace",
         &namespace,
         "-o",
@@ -1806,7 +1888,7 @@ spec:
     let service = kubectl(&[
         "get",
         "service",
-        "shop-ssp-a1b2c3d4e5f6",
+        &arm_name,
         "--namespace",
         &namespace,
         "-o",
@@ -1828,18 +1910,21 @@ spec:
     wait_until(60, "the holder reports the units ready", || {
         state.lock().unwrap().reports().iter().any(|report| {
             report["units"].as_array().is_some_and(|units| {
-                units
-                    .iter()
-                    .any(|unit| unit["side"] == "arm" && unit["ready"] == true)
+                units.iter().any(|unit| {
+                    unit["experiment"] == "checkout"
+                        && unit["commit"] == ARM
+                        && unit["ready"] == true
+                })
             })
         })
     });
 
     // The arm leaves the configuration: its Deployment and Service go.
-    state.lock().unwrap().config["arms"] = json!([]);
-    wait_until(60, "the arm is deleted", || {
-        !names().contains("shop-ssp-a1b2c3d4e5f6")
-    });
+    state.lock().unwrap().config["experiments"][0]["arms"]
+        .as_array_mut()
+        .unwrap()
+        .remove(1);
+    wait_until(60, "the arm is deleted", || !names().contains(&arm_name));
     let services = kubectl(&[
         "get",
         "services",
@@ -1848,6 +1933,6 @@ spec:
         "-o",
         "jsonpath={.items[*].metadata.name}",
     ]);
-    assert!(!services.contains("shop-ssp-a1b2c3d4e5f6"), "{services}");
-    assert!(names().contains("shop-ssp-control"));
+    assert!(!services.contains(&arm_name), "{services}");
+    assert!(names().contains(&reference_name));
 }

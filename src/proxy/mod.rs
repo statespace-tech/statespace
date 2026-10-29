@@ -1,8 +1,8 @@
 //! `ssp proxy <orchestrator>`: a reverse proxy in front of an app's live
-//! service. Every instance assigns each request's subject and forwards the
-//! request to live, the control, or an arm. Only the instance that holds
-//! the app's lease orchestrates: it starts and stops the control and the
-//! arms and records their output.
+//! service. Every instance assigns each request and forwards it to live or
+//! to one arm of a running experiment. Only the instance that holds the
+//! app's lease orchestrates: it starts and stops the units of starting and
+//! running experiments and records their output.
 
 pub mod assign;
 pub mod config;
@@ -28,7 +28,7 @@ use self::{
     assign::Routing,
     lease::Lease,
     orchestrator::{
-        Orchestrator, Running, Side, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
+        Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
         kubernetes::Kubernetes,
     },
     recorder::{Origin, Recorder},
@@ -122,6 +122,8 @@ pub struct Runtime<O> {
     /// The lease holder's work: when it last started or stopped each unit,
     /// and the readers of each unit's output.
     attempts: Mutex<HashMap<(UnitKey, String, bool), Instant>>,
+    /// Why the last start of a unit failed, for the report.
+    failures: Mutex<HashMap<UnitKey, String>>,
     readers: Mutex<HashMap<UnitKey, (String, JoinHandle<()>)>>,
     /// Problems already printed, so each is printed once.
     noted: Mutex<HashSet<String>>,
@@ -177,19 +179,12 @@ impl<O: Orchestrator> Runtime<O> {
             .insert(key.clone(), Instant::now());
     }
 
-    /// The side, arm, version, and live commit of a unit's rows.
+    /// The experiment, arm, and version of a unit's rows.
     pub fn origin(routing: &Routing, key: &UnitKey) -> Origin {
         Origin {
-            side: match key {
-                UnitKey::Control => Side::Control,
-                UnitKey::Arm(_) => Side::Arm,
-            },
-            arm: match key {
-                UnitKey::Control => None,
-                UnitKey::Arm(commit) => Some(commit.clone()),
-            },
+            experiment: key.experiment.clone(),
+            arm: Some(key.commit.clone()),
             version: routing.version(key),
-            live: routing.live_commit().map(str::to_owned),
         }
     }
 
@@ -206,20 +201,12 @@ impl<O: Orchestrator> Runtime<O> {
                         failing = false;
                     }
                     interval = Duration::from_secs(config.poll_interval_seconds.clamp(1, 300));
-                    let routing = match Routing::compile(&config) {
-                        Ok((routing, warnings)) => {
-                            for warning in warnings {
-                                self.note(warning);
-                            }
-                            Some(Arc::new(routing))
-                        }
-                        Err(error) => {
-                            self.note(format!("{error:#}; every request goes to live"));
-                            None
-                        }
-                    };
+                    let (routing, warnings) = Routing::compile(&config);
+                    for warning in warnings {
+                        self.note(warning);
+                    }
                     let mut current = self.current.write().expect("routing is never poisoned");
-                    current.routing = routing;
+                    current.routing = Some(Arc::new(routing));
                     current.fetched = Some(Instant::now());
                 }
                 Err(error) => {
@@ -299,11 +286,19 @@ impl<O: Orchestrator> Runtime<O> {
             match self.orchestrator.start(unit).await {
                 Ok(_) => {
                     eprintln!("[ssp] starting {} from {}", unit.key(), unit.image);
+                    self.failures
+                        .lock()
+                        .expect("failures are never poisoned")
+                        .remove(&unit.key());
                     self.recorder
                         .lifecycle(&origin, "started", json!({ "image": unit.image }));
                 }
                 Err(error) => {
                     eprintln!("[ssp] could not start {}: {error:#}", unit.key());
+                    self.failures
+                        .lock()
+                        .expect("failures are never poisoned")
+                        .insert(unit.key(), format!("could not start: {error:#}"));
                     self.recorder.lifecycle(
                         &origin,
                         "failed",
@@ -313,6 +308,10 @@ impl<O: Orchestrator> Runtime<O> {
             }
         }
         let wanted: HashSet<UnitKey> = desired.iter().map(Unit::key).collect();
+        self.failures
+            .lock()
+            .expect("failures are never poisoned")
+            .retain(|key, _| wanted.contains(key));
         for entry in &running {
             let key = entry.unit.key();
             if wanted.contains(&key) || !self.attempt(&key, &entry.unit.image, false) {
@@ -335,6 +334,64 @@ impl<O: Orchestrator> Runtime<O> {
             }
         }
         self.read_output(&desired);
+    }
+
+    /// The units for the report: each unit that should run, ready or with
+    /// the reason it is not, and each unit that runs but should not.
+    fn unit_report(&self, routing: Option<&Routing>) -> Vec<Value> {
+        let units = self.units.read().expect("units are never poisoned");
+        let failures = self.failures.lock().expect("failures are never poisoned");
+        let mut report = Vec::new();
+        let mut listed = HashSet::new();
+        let desired = routing.map(Routing::units).unwrap_or_default();
+        for unit in &desired {
+            let key = unit.key();
+            let running = units
+                .get(&key)
+                .filter(|running| running.unit.image == unit.image);
+            let ready = running.is_some_and(|running| running.ready);
+            let reason = match running {
+                _ if ready => None,
+                Some(running) => running.reason.clone().or_else(|| Some("starting".into())),
+                None => Some(
+                    failures
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| "starting".into()),
+                ),
+            };
+            report.push(json!({
+                "experiment": key.experiment,
+                "commit": key.commit,
+                "address": running.map(|running| running.address.clone()),
+                "ready": ready,
+                "reason": reason,
+            }));
+            listed.insert(key);
+        }
+        for (key, problem) in routing.map(Routing::broken).unwrap_or_default() {
+            if listed.insert(key.clone()) {
+                report.push(json!({
+                    "experiment": key.experiment,
+                    "commit": key.commit,
+                    "address": null,
+                    "ready": false,
+                    "reason": problem,
+                }));
+            }
+        }
+        for (key, running) in units.iter() {
+            if listed.insert(key.clone()) {
+                report.push(json!({
+                    "experiment": key.experiment,
+                    "commit": key.commit,
+                    "address": running.address,
+                    "ready": running.ready,
+                    "reason": "stopping: no experiment runs it",
+                }));
+            }
+        }
+        report
     }
 
     /// Whether to start (or stop) a unit now: not more than once a minute
@@ -399,7 +456,12 @@ async fn record_output<O: Orchestrator>(
         let origin = Runtime::<O>::origin(&routing, &key);
         let text = redact::redact(&line.text, &routing.redact);
         runtime.recorder.output(&origin, line.stream.table(), &text);
-        for name in routing.events.output(line.stream, &text) {
+        // A unit's experiment decides which events apply.
+        for name in routing
+            .events(&key)
+            .map(|events| events.output(line.stream, &text))
+            .unwrap_or_default()
+        {
             runtime.recorder.event(&origin, name, None);
         }
     }
@@ -436,21 +498,7 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
             "settings_hash": routing.as_ref().and_then(|routing| routing.settings_hash.clone()),
         });
         if runtime.lease.held(sent) {
-            let units: Vec<Value> = runtime
-                .units
-                .read()
-                .expect("units are never poisoned")
-                .values()
-                .map(|running| {
-                    json!({
-                        "side": running.unit.side,
-                        "commit": running.unit.commit,
-                        "address": running.address,
-                        "ready": running.ready,
-                    })
-                })
-                .collect();
-            body["units"] = json!(units);
+            body["units"] = json!(runtime.unit_report(routing.as_deref()));
         }
         match runtime.remote.report(&body).await {
             Ok(granted) => {
@@ -495,6 +543,7 @@ async fn serve<O: Orchestrator>(
         lease: Lease::default(),
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         attempts: Mutex::default(),
+        failures: Mutex::default(),
         readers: Mutex::default(),
         noted: Mutex::default(),
     });

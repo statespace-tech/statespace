@@ -1,4 +1,4 @@
-//! Rows the proxy sends to Statespace for the control and the arms: runs,
+//! Rows the proxy sends to Statespace for the units of experiments: runs,
 //! requests, stdout, stderr, events, and lifecycle. Live is never recorded.
 //! Recording never blocks or slows the app: when the buffer is full, rows
 //! are dropped and counted.
@@ -15,7 +15,7 @@ use std::{
 use serde_json::{Map, Value, json};
 use tokio::sync::mpsc;
 
-use super::{assign::Reason, orchestrator::Side, remote::Remote};
+use super::{assign::Reason, remote::Remote};
 
 /// Rows waiting to be sent, at most.
 const BUFFER: usize = 50_000;
@@ -33,19 +33,17 @@ pub const TABLES: [&str; 6] = [
     "lifecycle",
 ];
 
-/// Where a row comes from: the side, the arm and its version, and the live commit.
+/// Where a row comes from: the experiment, the arm, and the version.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Origin {
-    pub side: Side,
-    /// The arm's full commit, or `None` for the control.
+    pub experiment: String,
+    /// The arm's full commit, or `None` for an eligibility error.
     pub arm: Option<String>,
-    /// The arm's version, or `None` for the control.
+    /// The experiment's version, or `None` once it no longer runs.
     pub version: Option<i64>,
-    /// The live commit.
-    pub live: Option<String>,
 }
 
-/// One finished request of the control or an arm.
+/// One finished request of a unit.
 pub struct RequestRow<'a> {
     pub subject: Option<&'a str>,
     pub method: &'a str,
@@ -94,10 +92,9 @@ impl Recorder {
         let mut row = json!({
             "id": id(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
-            "side": origin.side,
+            "experiment": origin.experiment,
             "arm": origin.arm,
             "version": origin.version,
-            "live": origin.live,
         });
         if let (Value::Object(row), Value::Object(fields)) = (&mut row, fields) {
             row.extend(fields);
@@ -108,7 +105,7 @@ impl Recorder {
     }
 
     /// Record a subject's run the first time this proxy routes it, per
-    /// unit, version, and reason.
+    /// experiment, arm, version, and reason.
     pub fn run(&self, origin: &Origin, subject: &str, reason: Reason) {
         let key = (origin.clone(), subject.to_owned(), reason);
         {
@@ -238,10 +235,9 @@ mod tests {
 
     fn arm() -> Origin {
         Origin {
-            side: Side::Arm,
+            experiment: "checkout".into(),
             arm: Some("a".repeat(40)),
             version: Some(3),
-            live: Some("b".repeat(40)),
         }
     }
 
@@ -249,14 +245,10 @@ mod tests {
     async fn rows_have_the_agreed_shapes() {
         let (sender, mut receiver) = mpsc::channel(20);
         let recorder = Recorder::with_sender(Some(sender));
-        let control = Origin {
-            side: Side::Control,
-            arm: None,
-            version: None,
-            live: Some("b".repeat(40)),
-        };
-        recorder.run(&control, "u_1", Reason::Assigned);
-        recorder.run(&control, "u_1", Reason::Assigned);
+        let error = Origin { arm: None, ..arm() };
+        recorder.run(&arm(), "u_1", Reason::Assigned);
+        recorder.run(&arm(), "u_1", Reason::Assigned);
+        recorder.run(&error, "u_1", Reason::EligibilityError);
         recorder.request(
             &arm(),
             RequestRow {
@@ -274,7 +266,7 @@ mod tests {
         );
         recorder.output(&arm(), "stderr", "boom");
         recorder.event(&arm(), "lead", None);
-        recorder.lifecycle(&control, "started", json!({"image": "x"}));
+        recorder.lifecycle(&arm(), "started", json!({"image": "x"}));
         let mut rows = Vec::new();
         while let Ok(row) = receiver.try_recv() {
             rows.push(row);
@@ -282,14 +274,14 @@ mod tests {
         let tables: Vec<&str> = rows.iter().map(|(table, _)| *table).collect();
         assert_eq!(
             tables,
-            ["runs", "requests", "stderr", "events", "lifecycle"]
+            ["runs", "runs", "requests", "stderr", "events", "lifecycle"]
         );
         let keys = |row: &Value| {
             let mut keys: Vec<String> = row.as_object().unwrap().keys().cloned().collect();
             keys.sort();
             keys
         };
-        let base = ["arm", "id", "live", "side", "timestamp", "version"];
+        let base = ["arm", "experiment", "id", "timestamp", "version"];
         let with = |extra: &[&str]| {
             let mut all: Vec<String> = base
                 .iter()
@@ -300,11 +292,12 @@ mod tests {
             all
         };
         assert_eq!(keys(&rows[0].1), with(&["subject", "reason"]));
-        assert_eq!(rows[0].1["side"], "control");
-        assert_eq!(rows[0].1["arm"], Value::Null);
-        assert_eq!(rows[0].1["version"], Value::Null);
+        assert_eq!(rows[0].1["experiment"], "checkout");
+        assert_eq!(rows[0].1["version"], 3);
+        assert_eq!(rows[1].1["arm"], Value::Null);
+        assert_eq!(rows[1].1["reason"], "eligibility-error");
         assert_eq!(
-            keys(&rows[1].1),
+            keys(&rows[2].1),
             with(&[
                 "subject",
                 "method",
@@ -318,15 +311,13 @@ mod tests {
                 "override"
             ])
         );
-        assert_eq!(rows[1].1["side"], "arm");
-        assert_eq!(rows[1].1["version"], 3);
-        assert_eq!(rows[1].1["override"], true);
-        assert_eq!(keys(&rows[2].1), with(&["text"]));
-        assert_eq!(keys(&rows[3].1), with(&["name", "subject"]));
-        assert_eq!(keys(&rows[4].1), with(&["event", "data"]));
+        assert_eq!(rows[2].1["override"], true);
+        assert_eq!(keys(&rows[3].1), with(&["text"]));
+        assert_eq!(keys(&rows[4].1), with(&["name", "subject"]));
+        assert_eq!(keys(&rows[5].1), with(&["event", "data"]));
 
         let batch = batch(rows.into_iter());
-        assert_eq!(count(&batch), 5);
+        assert_eq!(count(&batch), 6);
         assert_eq!(batch["stdout"], json!([]));
     }
 

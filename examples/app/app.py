@@ -1,5 +1,5 @@
-"""A tiny app for trying `ssp proxy`: it says which side served the request,
-and prints a JSON line for every subject it serves."""
+"""A tiny app for trying `ssp proxy`: it says which experiment and arm served
+the request, and prints a JSON line for every subject it serves."""
 
 import json
 import os
@@ -12,8 +12,8 @@ class Handler(BaseHTTPRequestHandler):
         subject = self.headers.get("x-statespace-subject")
         body = json.dumps(
             {
-                # The proxy names the side: control or arm. Live gets none.
-                "side": self.headers.get("x-statespace-side") or "live",
+                # The proxy names the experiment and the arm. Live gets none.
+                "experiment": self.headers.get("x-statespace-experiment"),
                 "arm": self.headers.get("x-statespace-arm"),
                 "subject": subject,
                 "greeting": os.environ.get("GREETING", "hello"),
