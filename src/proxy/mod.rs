@@ -1,86 +1,86 @@
-//! `ssp proxy`: a reverse proxy that assigns each request's subject and
-//! forwards the request to the app's default or to an experiment's arm.
-//!
-//! With `--image` or `--image-file`, the proxy also runs the default and
-//! every arm as Docker containers on this machine. With `--default`, it only
-//! routes: the default runs at that address, and a controller runs the arms.
+//! `ssp proxy <orchestrator>`: a reverse proxy in front of an app's live
+//! service. Every instance assigns each request's subject and forwards the
+//! request to live, the control, or an arm. Only the instance that holds
+//! the app's lease orchestrates: it starts and stops the control and the
+//! arms and records their output.
 
 pub mod assign;
-mod docker;
-pub mod output;
+pub mod config;
+pub mod events;
+mod lease;
+pub mod orchestrator;
+pub mod recorder;
+pub mod redact;
 pub mod remote;
 mod server;
-pub mod telemetry;
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock, atomic::Ordering},
+    sync::{Arc, Mutex, RwLock, atomic::Ordering},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
-use regex::Regex;
-use serde_json::json;
+use serde_json::{Value, json};
+use tokio::task::JoinHandle;
 
 use self::{
-    assign::{Routing, Target},
-    docker::Supervisor,
-    remote::Remote,
-    server::{Shared, Upstreams},
-    telemetry::Telemetry,
+    assign::Routing,
+    lease::Lease,
+    orchestrator::{Orchestrator, Running, Side, Unit, UnitKey, docker::Docker},
+    recorder::{Origin, Recorder},
+    remote::{ConfigError, Remote},
 };
-use crate::{api::Api, cli::ProxyArgs};
+use crate::cli::{ProxyArgs, ProxyCommand};
 
-/// How long the proxy waits for the default before it listens anyway.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long in-flight requests may finish after a shutdown signal.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
+/// How often an instance reports, which renews the lease of its holder.
+const REPORT_EVERY: Duration = Duration::from_secs(10);
+/// How long the proxy routes with a configuration it cannot refresh. After
+/// that, every request goes to live.
+const STALE_AFTER: Duration = Duration::from_secs(300);
+/// How long the lease holder waits before it starts or stops a unit again.
+const RETRY_AFTER: Duration = Duration::from_secs(60);
+/// How long a unit that failed a request gets no traffic.
+const SUSPECT_FOR: Duration = Duration::from_secs(10);
 
-pub fn run(api: Api, arguments: ProxyArgs) -> anyhow::Result<()> {
-    let app = app(&api, arguments.shared.app.as_deref())?;
+pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(proxy(api, arguments, app))
+        .block_on(async move {
+            match command {
+                ProxyCommand::Docker { common, docker } => {
+                    let remote = connect(endpoint, &common).await?;
+                    let orchestrator = Docker::new(&common.app, &common.listen, docker).await?;
+                    orchestrator.wait_for_live(Duration::from_secs(180)).await;
+                    serve(Arc::new(orchestrator), common, remote).await
+                }
+            }
+        })
 }
 
-/// The app to serve: `--app`, or else the one app the token is limited to.
-/// The API refuses a token limited to another app.
-pub fn app(api: &Api, flag: Option<&str>) -> anyhow::Result<String> {
-    if let Some(app) = flag {
-        return Ok(app.to_owned());
+/// A connection to Statespace for an app that exists. When Statespace
+/// cannot be reached, the proxy starts anyway and sends everything to live.
+async fn connect(endpoint: &str, common: &ProxyArgs) -> anyhow::Result<Remote> {
+    let remote = Remote::new(endpoint, common.token.clone(), common.app.clone())?;
+    match remote.config().await {
+        Err(ConfigError::Refused(message)) => bail!(
+            "Statespace refused the app {}: {message}. Add it with `ssp app add {}`, and use a runtime token of the app",
+            common.app,
+            common.app
+        ),
+        Err(ConfigError::Other(error)) => {
+            eprintln!("[ssp] could not reach Statespace: {error:#}; every request goes to live");
+        }
+        Ok(_) => {}
     }
-    let whoami: serde_json::Value = api.get("/v1/whoami")?;
-    whoami["credential"]["app"]
-        .as_str()
-        .map(str::to_owned)
-        .context("pass --app, or use a token that is limited to one app")
+    Ok(remote)
 }
 
-/// `NAME=VALUE` pairs, as `--arm-env` takes them.
-pub fn pairs(values: &[String], flag: &str) -> anyhow::Result<Vec<(String, String)>> {
-    values
-        .iter()
-        .map(|pair| {
-            pair.split_once('=')
-                .filter(|(name, _)| !name.is_empty())
-                .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                .with_context(|| format!("{flag} {pair:?} must look like NAME=VALUE"))
-        })
-        .collect()
-}
-
-pub fn patterns(values: &[String]) -> anyhow::Result<Vec<Regex>> {
-    values
-        .iter()
-        .map(|pattern| {
-            Regex::new(pattern).with_context(|| format!("--redact {pattern:?} is invalid"))
-        })
-        .collect()
-}
-
-/// A name for this proxy or controller in reports: the machine and a random suffix.
-pub fn instance_id() -> String {
+/// A name for this instance in reports: the machine and a random suffix.
+fn instance_id() -> String {
     format!(
         "{}-{:06x}",
         sysinfo::System::host_name().unwrap_or_else(|| "host".into()),
@@ -88,409 +88,448 @@ pub fn instance_id() -> String {
     )
 }
 
-async fn proxy(api: Api, arguments: ProxyArgs, app: String) -> anyhow::Result<()> {
-    let shared_arguments = &arguments.shared;
-    let token = api
-        .token()
-        .context("ssp proxy needs a token with the runtime preset; set SSP_TOKEN")?;
-    let remote = Remote::new(api.endpoint(), token.to_owned(), app.clone())?;
-    let id = instance_id();
-    let telemetry = Arc::new(Telemetry::start(id.clone(), Some(remote.clone())));
-    let redact = patterns(&shared_arguments.redact)?;
-    let arm_env = pairs(&shared_arguments.arm_env, "--arm-env")?;
-    let max_arms = shared_arguments.max_arms;
+/// The routing a proxy has, and when it last heard from Statespace.
+struct Current {
+    routing: Option<Arc<Routing>>,
+    fetched: Option<Instant>,
+}
 
-    let (upstreams, default_image) = match default_image(&arguments)? {
-        Some(image) => {
-            let supervisor = Supervisor::new(
-                telemetry.clone(),
-                docker::Options {
-                    app: app.clone(),
-                    listen: arguments.listen.clone(),
-                    health: shared_arguments.health.clone(),
-                    port: arguments.port,
-                    volumes: arguments.volumes.clone(),
-                    memory: arguments.memory.clone(),
-                    cpus: arguments.cpus.clone(),
-                    environment: docker::inherited_environment(),
-                    arm_env,
-                    redact,
-                },
-            )
-            .await?;
-            docker::pull(&image).await?;
-            supervisor.ensure(Target::Default, image.clone());
-            (Upstreams::Docker(supervisor), Some(image))
-        }
-        None => {
-            let default = arguments.default.clone().context(
-                "pass --image or --image-file to run the default, or --default to route to it",
-            )?;
-            if arguments.port.is_some()
-                || !arguments.volumes.is_empty()
-                || arguments.memory.is_some()
-                || arguments.cpus.is_some()
-            {
-                bail!(
-                    "--port, --volume, --memory, and --cpus set the containers the proxy runs; \
-                     with --default, the platform runs them"
-                );
-            }
-            (
-                Upstreams::Forward {
-                    default,
-                    arms: RwLock::default(),
-                    suspects: std::sync::Mutex::default(),
-                },
-                None,
-            )
-        }
-    };
-    let shared = Arc::new(Shared::new(
-        app.clone(),
-        arguments.overrides,
-        upstreams,
-        telemetry.clone(),
-        Duration::from_secs(shared_arguments.stale_after),
-    ));
-    let defaults = Arc::new(DefaultDigest::default());
-    tokio::spawn(poll(
-        remote.clone(),
-        shared.clone(),
-        max_arms,
-        defaults.clone(),
-    ));
-    tokio::spawn(report(
-        remote.clone(),
-        shared.clone(),
-        id.clone(),
-        max_arms,
-        defaults,
-    ));
-    tokio::spawn(measure(shared.clone()));
+/// What every task of a proxy shares.
+pub struct Runtime<O> {
+    pub app: String,
+    pub instance: String,
+    pub orchestrator: Arc<O>,
+    remote: Remote,
+    current: RwLock<Current>,
+    /// What runs, by unit, as the orchestrator last said.
+    units: RwLock<HashMap<UnitKey, Running>>,
+    suspects: Mutex<HashMap<UnitKey, Instant>>,
+    pub lease: Lease,
+    pub recorder: Arc<Recorder>,
+    pub in_flight: std::sync::atomic::AtomicUsize,
+    /// The lease holder's work: when it last started or stopped each unit,
+    /// and the readers of each unit's output.
+    attempts: Mutex<HashMap<(UnitKey, String, bool), Instant>>,
+    readers: Mutex<HashMap<UnitKey, (String, JoinHandle<()>)>>,
+    /// Problems already printed, so each is printed once.
+    noted: Mutex<HashSet<String>>,
+}
 
-    if let Upstreams::Docker(supervisor) = &shared.upstreams {
-        let started = Instant::now();
-        while supervisor.address(&Target::Default).is_none() && started.elapsed() < DEFAULT_TIMEOUT
+impl<O: Orchestrator> Runtime<O> {
+    fn note(&self, message: String) {
+        if self
+            .noted
+            .lock()
+            .expect("notes are never poisoned")
+            .insert(message.clone())
         {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            eprintln!("[ssp] {message}");
         }
     }
-    let listener = tokio::net::TcpListener::bind(&arguments.listen)
-        .await
-        .with_context(|| format!("could not listen on {}", arguments.listen))?;
-    eprintln!(
-        "[ssp] proxy {id} listening on {}{}",
-        arguments.listen,
-        if arguments.overrides {
-            " · overrides on (?ssp_arm=<branch>, header ssp-arm)"
-        } else {
-            ""
+
+    /// The routing, while its configuration is recent.
+    pub fn routing(&self) -> Option<Arc<Routing>> {
+        let current = self.current.read().expect("routing is never poisoned");
+        let fresh = current
+            .fetched
+            .is_some_and(|fetched| fetched.elapsed() <= STALE_AFTER);
+        current.routing.clone().filter(|_| fresh)
+    }
+
+    /// Where a unit that is ready, runs the image the configuration names,
+    /// and did not just fail takes traffic.
+    pub fn address(&self, routing: &Routing, key: &UnitKey) -> Option<String> {
+        let suspected = self
+            .suspects
+            .lock()
+            .expect("suspects are never poisoned")
+            .get(key)
+            .is_some_and(|since| since.elapsed() < SUSPECT_FOR);
+        if suspected {
+            return None;
         }
+        let wanted = routing.image(key)?;
+        let units = self.units.read().expect("units are never poisoned");
+        units
+            .get(key)
+            .filter(|running| {
+                running.ready && running.unit.image == wanted && !running.address.is_empty()
+            })
+            .map(|running| running.address.clone())
+    }
+
+    pub fn suspect(&self, key: &UnitKey) {
+        self.suspects
+            .lock()
+            .expect("suspects are never poisoned")
+            .insert(key.clone(), Instant::now());
+    }
+
+    /// The side, arm, version, and live commit of a unit's rows.
+    pub fn origin(routing: &Routing, key: &UnitKey) -> Origin {
+        Origin {
+            side: match key {
+                UnitKey::Control => Side::Control,
+                UnitKey::Arm(_) => Side::Arm,
+            },
+            arm: match key {
+                UnitKey::Control => None,
+                UnitKey::Arm(commit) => Some(commit.clone()),
+            },
+            version: routing.version(key),
+            live: routing.live_commit().map(str::to_owned),
+        }
+    }
+
+    /// Keep the configuration and what runs current, and orchestrate while
+    /// this instance holds the lease.
+    async fn poll(self: Arc<Self>) {
+        let mut interval = Duration::from_secs(5);
+        let mut failing = false;
+        loop {
+            match self.remote.config().await {
+                Ok(config) => {
+                    if failing {
+                        eprintln!("[ssp] reached Statespace again");
+                        failing = false;
+                    }
+                    interval = Duration::from_secs(config.poll_interval_seconds.clamp(1, 300));
+                    let routing = match Routing::compile(&config) {
+                        Ok((routing, warnings)) => {
+                            for warning in warnings {
+                                self.note(warning);
+                            }
+                            Some(Arc::new(routing))
+                        }
+                        Err(error) => {
+                            self.note(format!("{error:#}; every request goes to live"));
+                            None
+                        }
+                    };
+                    let mut current = self.current.write().expect("routing is never poisoned");
+                    current.routing = routing;
+                    current.fetched = Some(Instant::now());
+                }
+                Err(error) => {
+                    if !failing {
+                        let message = match error {
+                            ConfigError::Refused(message) => message,
+                            ConfigError::Other(error) => format!("{error:#}"),
+                        };
+                        eprintln!("[ssp] could not reach Statespace: {message}");
+                        failing = true;
+                    }
+                }
+            }
+            self.observe().await;
+            if self.lease.held(Instant::now()) {
+                self.reconcile().await;
+            } else {
+                self.stop_readers();
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Read what runs from the orchestrator.
+    async fn observe(&self) {
+        match self.orchestrator.running().await {
+            Ok(running) => {
+                let holder = self.lease.held(Instant::now());
+                let routing = self.routing();
+                let mut units = self.units.write().expect("units are never poisoned");
+                let previous = std::mem::take(&mut *units);
+                for entry in running {
+                    let key = entry.unit.key();
+                    let was_ready = previous
+                        .get(&key)
+                        .is_some_and(|old| old.ready && old.unit.image == entry.unit.image);
+                    if holder
+                        && entry.ready
+                        && !was_ready
+                        && let Some(routing) = &routing
+                    {
+                        self.recorder.lifecycle(
+                            &Self::origin(routing, &key),
+                            "ready",
+                            json!({ "image": entry.unit.image, "address": entry.address }),
+                        );
+                    }
+                    units.insert(key, entry);
+                }
+            }
+            Err(error) => self.note(format!("could not read what runs: {error:#}")),
+        }
+    }
+
+    /// Make the units match the configuration: start what is missing, stop
+    /// what no longer runs, and read the output of each.
+    async fn reconcile(self: &Arc<Self>) {
+        let Some(routing) = self.routing() else {
+            return;
+        };
+        let desired = routing.units();
+        let running: Vec<Running> = self
+            .units
+            .read()
+            .expect("units are never poisoned")
+            .values()
+            .cloned()
+            .collect();
+        for unit in &desired {
+            let present = running
+                .iter()
+                .any(|entry| entry.unit.key() == unit.key() && entry.unit.image == unit.image);
+            if present || !self.attempt(&unit.key(), &unit.image, true) {
+                continue;
+            }
+            let origin = Self::origin(&routing, &unit.key());
+            match self.orchestrator.start(unit).await {
+                Ok(_) => {
+                    eprintln!("[ssp] starting {} from {}", unit.key(), unit.image);
+                    self.recorder
+                        .lifecycle(&origin, "started", json!({ "image": unit.image }));
+                }
+                Err(error) => {
+                    eprintln!("[ssp] could not start {}: {error:#}", unit.key());
+                    self.recorder.lifecycle(
+                        &origin,
+                        "failed",
+                        json!({ "image": unit.image, "error": format!("{error:#}") }),
+                    );
+                }
+            }
+        }
+        let wanted: HashSet<UnitKey> = desired.iter().map(Unit::key).collect();
+        for entry in &running {
+            let key = entry.unit.key();
+            if wanted.contains(&key) || !self.attempt(&key, &entry.unit.image, false) {
+                continue;
+            }
+            let origin = Origin {
+                version: None,
+                ..Self::origin(&routing, &key)
+            };
+            match self.orchestrator.stop(&entry.unit).await {
+                Ok(()) => {
+                    eprintln!("[ssp] stopped {key}");
+                    self.recorder.lifecycle(
+                        &origin,
+                        "stopped",
+                        json!({ "image": entry.unit.image }),
+                    );
+                }
+                Err(error) => eprintln!("[ssp] could not stop {key}: {error:#}"),
+            }
+        }
+        self.read_output(&desired);
+    }
+
+    /// Whether to start (or stop) a unit now: not more than once a minute
+    /// for the same unit and image.
+    fn attempt(&self, key: &UnitKey, image: &str, start: bool) -> bool {
+        let mut attempts = self.attempts.lock().expect("attempts are never poisoned");
+        let now = Instant::now();
+        attempts.retain(|_, at| now.duration_since(*at) < RETRY_AFTER);
+        let entry = (key.clone(), image.to_owned(), start);
+        if attempts.contains_key(&entry) {
+            return false;
+        }
+        attempts.insert(entry, now);
+        true
+    }
+
+    /// Read each desired unit's lines, and stop reading the others.
+    fn read_output(self: &Arc<Self>, desired: &[Unit]) {
+        let mut readers = self.readers.lock().expect("readers are never poisoned");
+        readers.retain(|key, (image, task)| {
+            let keep = desired
+                .iter()
+                .any(|unit| &unit.key() == key && &unit.image == image)
+                && !task.is_finished();
+            if !keep {
+                task.abort();
+            }
+            keep
+        });
+        for unit in desired {
+            if readers.contains_key(&unit.key()) {
+                continue;
+            }
+            let stream = self.orchestrator.output(unit);
+            let task = tokio::spawn(record_output(self.clone(), unit.key(), stream));
+            readers.insert(unit.key(), (unit.image.clone(), task));
+        }
+    }
+
+    fn stop_readers(&self) {
+        for (_, (_, task)) in self
+            .readers
+            .lock()
+            .expect("readers are never poisoned")
+            .drain()
+        {
+            task.abort();
+        }
+    }
+}
+
+/// Record a unit's lines, redacted, and the output events they match.
+async fn record_output<O: Orchestrator>(
+    runtime: Arc<Runtime<O>>,
+    key: UnitKey,
+    mut stream: orchestrator::OutputStream,
+) {
+    while let Some(line) = stream.recv().await {
+        let Some(routing) = runtime.routing() else {
+            continue;
+        };
+        let origin = Runtime::<O>::origin(&routing, &key);
+        let text = redact::redact(&line.text, &routing.redact);
+        runtime.recorder.output(&origin, line.stream.table(), &text);
+        for name in routing.events.output(line.stream, &text) {
+            runtime.recorder.event(&origin, name, None);
+        }
+    }
+}
+
+/// Report this instance every 10 seconds. The answer grants or renews the
+/// lease; the holder also reports what runs.
+async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
+    let mut held = false;
+    let mut dropped = 0;
+    loop {
+        let sent = Instant::now();
+        let now_dropped = runtime.recorder.dropped();
+        if now_dropped > dropped {
+            eprintln!(
+                "[ssp] dropped {} rows because the buffer was full",
+                now_dropped - dropped
+            );
+            dropped = now_dropped;
+        }
+        let live_image = match runtime.orchestrator.live().await {
+            Ok(image) => Some(image),
+            Err(error) => {
+                runtime.note(format!("could not read the live image: {error:#}"));
+                None
+            }
+        };
+        let routing = runtime.routing();
+        let mut body = json!({
+            "instance": runtime.instance,
+            "version": env!("CARGO_PKG_VERSION"),
+            "orchestrator": runtime.orchestrator.name(),
+            "live_image": live_image,
+            "settings_hash": routing.as_ref().and_then(|routing| routing.settings_hash.clone()),
+        });
+        if runtime.lease.held(sent) {
+            let units: Vec<Value> = runtime
+                .units
+                .read()
+                .expect("units are never poisoned")
+                .values()
+                .map(|running| {
+                    json!({
+                        "side": running.unit.side,
+                        "commit": running.unit.commit,
+                        "address": running.address,
+                        "ready": running.ready,
+                    })
+                })
+                .collect();
+            body["units"] = json!(units);
+        }
+        match runtime.remote.report(&body).await {
+            Ok(granted) => {
+                runtime.lease.granted(granted.lease, sent);
+                if granted.lease != held {
+                    eprintln!(
+                        "[ssp] {} the lease of {}",
+                        if granted.lease {
+                            "holds"
+                        } else {
+                            "does not hold"
+                        },
+                        runtime.app
+                    );
+                    held = granted.lease;
+                }
+            }
+            Err(error) => runtime.note(format!("could not report to Statespace: {error:#}")),
+        }
+        tokio::time::sleep(REPORT_EVERY).await;
+    }
+}
+
+async fn serve<O: Orchestrator>(
+    orchestrator: Arc<O>,
+    common: ProxyArgs,
+    remote: Remote,
+) -> anyhow::Result<()> {
+    let instance = instance_id();
+    let runtime = Arc::new(Runtime {
+        app: common.app.clone(),
+        instance: instance.clone(),
+        orchestrator: orchestrator.clone(),
+        recorder: Arc::new(Recorder::start(remote.clone())),
+        remote,
+        current: RwLock::new(Current {
+            routing: None,
+            fetched: None,
+        }),
+        units: RwLock::default(),
+        suspects: Mutex::default(),
+        lease: Lease::default(),
+        in_flight: std::sync::atomic::AtomicUsize::new(0),
+        attempts: Mutex::default(),
+        readers: Mutex::default(),
+        noted: Mutex::default(),
+    });
+    tokio::spawn(runtime.clone().poll());
+    tokio::spawn(report(runtime.clone()));
+    let listener = tokio::net::TcpListener::bind(&common.listen)
+        .await
+        .with_context(|| format!("could not listen on {}", common.listen))?;
+    let address = listener
+        .local_addr()
+        .map_or_else(|_| common.listen.clone(), |address| address.to_string());
+    eprintln!(
+        "[ssp] proxy {instance} of {} on {} listening on {address}",
+        common.app,
+        orchestrator.name(),
     );
     let (stop, stopped) = tokio::sync::watch::channel(false);
-    let server = tokio::spawn(server::serve(listener, shared.clone(), stopped));
-
-    loop {
-        match signal().await? {
-            Signal::Stop => break,
-            Signal::Reload => reload(&arguments, &shared, default_image.as_deref()).await,
-        }
-    }
+    let server = tokio::spawn(server::serve(listener, runtime.clone(), stopped));
+    signal().await?;
     eprintln!("[ssp] stopping");
     let _ = stop.send(true);
     let _ = server.await;
     let draining = Instant::now();
-    while shared.in_flight.load(Ordering::SeqCst) > 0 && draining.elapsed() < DRAIN_TIMEOUT {
+    while runtime.in_flight.load(Ordering::SeqCst) > 0 && draining.elapsed() < DRAIN_TIMEOUT {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    if let Upstreams::Docker(supervisor) = &shared.upstreams {
-        supervisor.shutdown().await;
-    }
-    telemetry.flush_http();
-    // Give the last events a moment to leave.
+    runtime.stop_readers();
+    orchestrator.shutdown().await;
+    // Give the last rows a moment to leave.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     Ok(())
 }
 
-/// The default image: `--image`, or the contents of `--image-file`.
-fn default_image(arguments: &ProxyArgs) -> anyhow::Result<Option<String>> {
-    if let Some(image) = &arguments.image {
-        return Ok(Some(image.trim().to_owned()));
-    }
-    let Some(path) = &arguments.image_file else {
-        return Ok(None);
-    };
-    let image = std::fs::read_to_string(path)
-        .with_context(|| format!("could not read {}", path.display()))?
-        .trim()
-        .to_owned();
-    if image.is_empty() {
-        bail!("{} holds no image", path.display());
-    }
-    Ok(Some(image))
-}
-
-/// Swap the default for the image `--image-file` now holds, once the new
-/// container is ready.
-async fn reload(arguments: &ProxyArgs, shared: &Shared, started_with: Option<&str>) {
-    let Upstreams::Docker(supervisor) = &shared.upstreams else {
-        eprintln!("[ssp] nothing to reload: the platform deploys the default");
-        return;
-    };
-    if arguments.image_file.is_none() {
-        eprintln!("[ssp] nothing to reload: the default comes from --image {started_with:?}");
-        return;
-    }
-    let image = match default_image(arguments) {
-        Ok(Some(image)) => image,
-        Ok(None) => return,
-        Err(error) => {
-            eprintln!("[ssp] could not reload: {error:#}");
-            return;
-        }
-    };
-    eprintln!("[ssp] switching the default to {image}");
-    if let Err(error) = docker::pull(&image).await {
-        eprintln!("[ssp] could not reload: {error:#}");
-        return;
-    }
-    supervisor.ensure(Target::Default, image);
-}
-
-/// The default this proxy runs, by digest, once it knows it. A new digest
-/// is reported at once: arms based on it may start.
-#[derive(Default)]
-struct DefaultDigest {
-    digest: std::sync::Mutex<Option<String>>,
-    changed: tokio::sync::Notify,
-}
-
-impl DefaultDigest {
-    fn set(&self, digest: Option<String>) {
-        let mut current = self.digest.lock().expect("never poisoned");
-        if *current != digest {
-            *current = digest;
-            self.changed.notify_one();
-        }
-    }
-
-    fn get(&self) -> Option<String> {
-        self.digest.lock().expect("never poisoned").clone()
-    }
-}
-
-/// Keep the app's configuration and arms current.
-async fn poll(
-    remote: Remote,
-    shared: Arc<Shared>,
-    max_arms: u32,
-    default_digest: Arc<DefaultDigest>,
-) {
-    let mut interval = Duration::from_secs(10);
-    let mut failing = false;
-    let mut reported: HashSet<String> = HashSet::new();
-    let mut note = |message: String| {
-        if reported.insert(message.clone()) {
-            eprintln!("[ssp] {message}");
-        }
-    };
-    let mut digests: HashMap<String, String> = HashMap::new();
-    let mut strays_removed = false;
-    loop {
-        match remote.config().await {
-            Ok(config) => {
-                if failing {
-                    eprintln!("[ssp] reached Statespace again");
-                    failing = false;
-                }
-                interval = Duration::from_secs(config.poll_interval_seconds.clamp(1, 300));
-                let (routing, errors) = Routing::compile(&config);
-                for error in errors {
-                    note(format!("serving the default instead of {error}"));
-                }
-                match &shared.upstreams {
-                    Upstreams::Docker(supervisor) => {
-                        if let Some(image) = supervisor.default_image() {
-                            let digest = match digests.get(&image) {
-                                Some(digest) => Some(digest.clone()),
-                                None => match docker::digest(&image).await {
-                                    Ok(digest) => {
-                                        digests.insert(image, digest.clone());
-                                        Some(digest)
-                                    }
-                                    Err(error) => {
-                                        note(format!(
-                                            "could not read the default's digest: {error:#}"
-                                        ));
-                                        None
-                                    }
-                                },
-                            };
-                            default_digest.set(digest);
-                        }
-                        let desired = arms(&routing, supervisor, max_arms, &mut note);
-                        supervisor.retain(&desired);
-                        if !strays_removed && supervisor.default_image().is_some() {
-                            supervisor.remove_strays().await;
-                            strays_removed = true;
-                        }
-                    }
-                    Upstreams::Forward { arms, .. } => {
-                        let ready = routing
-                            .arms()
-                            .into_iter()
-                            .filter_map(|(key, arm)| {
-                                let address = arm.address.clone().filter(|_| arm.ready)?;
-                                Some((key, address))
-                            })
-                            .collect();
-                        *arms.write().expect("arms are never poisoned") = ready;
-                    }
-                }
-                let mut current = shared.current.write().expect("routing is never poisoned");
-                current.routing = routing;
-                current.fetched = Some(Instant::now());
-            }
-            Err(error) => {
-                if !failing {
-                    eprintln!("[ssp] could not reach Statespace: {error:#}");
-                    failing = true;
-                }
-            }
-        }
-        tokio::time::sleep(interval).await;
-    }
-}
-
-/// Start each arm, up to `max_arms`, and return them. Statespace names each
-/// arm's image by digest: a variant's build, or the default build of a
-/// control's base commit that the app's proxies ran.
-fn arms(
-    routing: &Routing,
-    supervisor: &Supervisor,
-    max_arms: u32,
-    note: &mut impl FnMut(String),
-) -> HashSet<assign::Key> {
-    let mut desired = HashSet::new();
-    for (key, arm) in routing.arms() {
-        if desired.len() >= max_arms as usize {
-            note(format!(
-                "{key} exceeds --max-arms {max_arms}; its subjects get the default"
-            ));
-            continue;
-        }
-        supervisor.ensure(Target::Arm(key.clone()), arm.image.clone());
-        desired.insert(key);
-    }
-    desired
-}
-
-/// Tell Statespace what this proxy runs and how much it can run.
-async fn report(
-    remote: Remote,
-    shared: Arc<Shared>,
-    id: String,
-    max_arms: u32,
-    default_digest: Arc<DefaultDigest>,
-) {
-    loop {
-        let age = shared
-            .current
-            .read()
-            .expect("routing is never poisoned")
-            .fetched
-            .map(|fetched| fetched.elapsed().as_secs());
-        let arms = match &shared.upstreams {
-            Upstreams::Docker(supervisor) => json!(supervisor.snapshot()),
-            Upstreams::Forward { arms, .. } => json!(
-                arms.read()
-                    .expect("arms are never poisoned")
-                    .keys()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-            ),
-        };
-        let runs = match &shared.upstreams {
-            Upstreams::Docker(_) => "containers",
-            Upstreams::Forward { .. } => "routes",
-        };
-        let report = json!({
-            "runs": runs,
-            "arms": arms,
-            "dropped_events": shared.telemetry.dropped(),
-            "config_age_seconds": age,
-        });
-        let default = default_digest.get();
-        if let Err(error) = remote
-            .report(&id, "proxy", max_arms, default.as_deref(), report)
-            .await
-        {
-            eprintln!("[ssp] could not report to Statespace: {error:#}");
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {}
-            _ = default_digest.changed.notified() => {}
-        }
-    }
-}
-
-/// Every minute, send each arm's HTTP summary and, on Docker, its CPU and memory.
-async fn measure(shared: Arc<Shared>) {
-    loop {
-        tokio::time::sleep(Duration::from_secs(60)).await;
-        shared.telemetry.flush_http();
-        let Upstreams::Docker(supervisor) = &shared.upstreams else {
-            continue;
-        };
-        let containers = supervisor.arm_containers();
-        let ids: Vec<String> = containers.iter().map(|(_, id)| id.clone()).collect();
-        let stats = docker::stats(&ids).await;
-        for (key, id) in containers {
-            let short: String = id.chars().take(12).collect();
-            if let Some(data) = stats.get(&id).or_else(|| stats.get(&short)) {
-                shared.telemetry.resources(&key, data.clone());
-            }
-        }
-    }
-}
-
-enum Signal {
-    Stop,
-    Reload,
-}
-
 #[cfg(unix)]
-async fn signal() -> anyhow::Result<Signal> {
+async fn signal() -> anyhow::Result<()> {
     use tokio::signal::unix::{SignalKind, signal};
 
     let mut terminate = signal(SignalKind::terminate())?;
-    let mut hangup = signal(SignalKind::hangup())?;
-    Ok(tokio::select! {
-        result = tokio::signal::ctrl_c() => { result?; Signal::Stop }
-        _ = terminate.recv() => Signal::Stop,
-        _ = hangup.recv() => Signal::Reload,
-    })
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => result?,
+        _ = terminate.recv() => {}
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-async fn signal() -> anyhow::Result<Signal> {
+async fn signal() -> anyhow::Result<()> {
     tokio::signal::ctrl_c().await?;
-    Ok(Signal::Stop)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_arm_environment() {
-        let parsed = pairs(&["A=b".into(), "C=d=e".into()], "--arm-env").unwrap();
-        assert_eq!(
-            parsed,
-            vec![("A".into(), "b".into()), ("C".into(), "d=e".into())]
-        );
-        assert!(pairs(&["=x".into()], "--arm-env").is_err());
-        assert!(pairs(&["NOVALUE".into()], "--arm-env").is_err());
-    }
+    Ok(())
 }

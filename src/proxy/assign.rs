@@ -1,175 +1,182 @@
-//! What serves a request: the subject, its experiment, and its arm,
-//! decided from the app's configuration without a network call.
+//! What serves a request: live, the control, or an arm. Decided from the
+//! app's runtime configuration, without a network call.
 
 use std::collections::BTreeMap;
 
 use anyhow::Context as _;
 use cel_interpreter::{Context, Program, Value as Cel};
-use serde::Deserialize;
+use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-/// The cookie the proxy sets so anonymous visitors keep their arm.
+use super::{
+    config::{ArmConfig, ControlConfig, Live, RuntimeConfig},
+    events::Events,
+    orchestrator::{Side, Unit, UnitKey},
+};
+
+/// The visitor cookie the proxy sets with the default subject.
 pub const SUBJECT_COOKIE: &str = "ssp_sid";
-/// The query parameter and cookie that override the arm, with `--overrides`.
+/// The default subject rule.
+pub const DEFAULT_SUBJECT: &str = "request.cookies.ssp_sid";
+/// The query parameter and cookie that name an arm.
 pub const OVERRIDE: &str = "ssp_arm";
-/// The header that overrides the arm of one request, with `--overrides`.
+/// The header that names the arm of one request.
 pub const OVERRIDE_HEADER: &str = "ssp-arm";
 
-/// An app's running configuration, as the API returns it.
-#[derive(Clone, Debug, Deserialize)]
-pub struct HostConfig {
+/// The compiled runtime configuration of an app.
+pub struct Routing {
     pub salt: String,
-    pub experiments: Vec<ExperimentConfig>,
-    pub poll_interval_seconds: u64,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ExperimentConfig {
-    pub name: String,
-    pub version: u32,
-    pub subject: String,
-    pub eligibility: Option<String>,
+    pub settings_hash: Option<String>,
+    subject: Program,
+    /// Whether the subject is the visitor cookie, which the proxy then sets.
+    pub default_subject: bool,
+    eligibility: Option<Program>,
+    pub overrides: bool,
+    pub redact: Vec<Regex>,
+    pub events: Events,
+    pub live: Option<Live>,
+    pub control: Option<ControlConfig>,
+    /// The arms that run, at most `max_arms`.
     pub arms: Vec<ArmConfig>,
 }
 
-/// An arm of a running version: a variant, or the control of a base commit.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ArmConfig {
-    /// A variant, or `control` for the control of a base commit.
-    pub name: String,
-    /// The `exp/` branch of a variant, such as `exp/price/lower`. Controls
-    /// have none.
-    #[serde(default)]
-    pub branch: Option<String>,
-    pub commit: String,
-    /// The image by digest.
-    pub image: String,
-    /// Half-open `[start, end)` intervals of the app's hash space.
-    pub ranges: Vec<[f64; 2]>,
-    /// Where a controller runs the arm.
-    pub address: Option<String>,
-    pub ready: bool,
-}
-
-/// One arm of one experiment version: a variant at a commit, or the control
-/// of a base commit.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Key {
-    pub experiment: String,
-    pub experiment_version: u32,
-    /// `control` or a variant.
-    pub arm: String,
-    pub commit: String,
-}
-
-impl std::fmt::Display for Key {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{}@{} of {}@{}",
-            self.arm,
-            &self.commit[..self.commit.len().min(7)],
-            self.experiment,
-            self.experiment_version
-        )
-    }
-}
-
-/// What serves a request: the app's default, or an arm.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Target {
-    Default,
-    Arm(Key),
-}
-
-impl std::fmt::Display for Target {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Default => write!(formatter, "default"),
-            Self::Arm(key) => key.fmt(formatter),
-        }
-    }
-}
-
-/// An experiment with its rules compiled.
-pub struct Compiled {
-    pub config: ExperimentConfig,
-    subject: Program,
-    eligibility: Option<Program>,
-}
-
-/// The compiled configuration of an app.
-#[derive(Default)]
-pub struct Routing {
-    pub salt: String,
-    pub experiments: Vec<Compiled>,
-}
-
 impl Routing {
-    /// Compile every experiment. One with a rule that does not compile is
-    /// skipped, so its subjects get the default, and reported in the result.
-    pub fn compile(config: &HostConfig) -> (Self, Vec<String>) {
-        let mut errors = Vec::new();
-        let mut experiments = Vec::new();
-        for experiment in &config.experiments {
-            match compile_experiment(experiment) {
-                Ok(compiled) => experiments.push(compiled),
-                Err(error) => errors.push(format!("{}: {error:#}", experiment.name)),
-            }
-        }
-        (
-            Self {
-                salt: config.salt.clone(),
-                experiments,
-            },
-            errors,
-        )
-    }
-
-    /// Every arm of the running experiments.
-    pub fn arms(&self) -> Vec<(Key, &ArmConfig)> {
-        self.experiments
-            .iter()
-            .flat_map(|experiment| {
-                experiment
-                    .config
-                    .arms
-                    .iter()
-                    .map(|arm| (key(&experiment.config, arm), arm))
-            })
-            .collect()
-    }
-}
-
-fn key(experiment: &ExperimentConfig, arm: &ArmConfig) -> Key {
-    Key {
-        experiment: experiment.name.clone(),
-        experiment_version: experiment.version,
-        arm: arm.name.clone(),
-        commit: arm.commit.clone(),
-    }
-}
-
-/// The share of all the app's subjects an arm gets.
-pub fn share(arm: &ArmConfig) -> f64 {
-    arm.ranges.iter().map(|[start, end]| end - start).sum()
-}
-
-fn compile_experiment(config: &ExperimentConfig) -> anyhow::Result<Compiled> {
-    Ok(Compiled {
-        subject: compile(&config.subject).context("invalid subject rule")?,
-        eligibility: config
+    /// Compile a configuration. A subject or eligibility rule that does not
+    /// compile makes the whole configuration unusable: every request goes
+    /// to live. Event rules and redact patterns that do not compile are
+    /// left out and returned as warnings.
+    pub fn compile(config: &RuntimeConfig) -> anyhow::Result<(Self, Vec<String>)> {
+        let settings = &config.settings;
+        let subject_rule = settings.subject.as_deref().unwrap_or(DEFAULT_SUBJECT);
+        let subject = compile(subject_rule).context("the subject rule does not compile")?;
+        let eligibility = settings
             .eligibility
             .as_deref()
             .map(compile)
             .transpose()
-            .context("invalid eligibility rule")?,
-        config: config.clone(),
-    })
+            .context("the eligibility rule does not compile")?;
+        let mut warnings = Vec::new();
+        let mut redact = Vec::new();
+        for pattern in &settings.redact {
+            match Regex::new(pattern) {
+                Ok(pattern) => redact.push(pattern),
+                Err(error) => {
+                    warnings.push(format!("redact {pattern:?} does not compile: {error}"))
+                }
+            }
+        }
+        let (events, errors) = Events::compile(&config.events);
+        warnings.extend(errors);
+        let max_arms = settings.max_arms.unwrap_or(5).max(1) as usize;
+        let (live, control, arms) = match &config.live {
+            // Without a live commit, nothing runs beside live.
+            None => (None, None, Vec::new()),
+            Some(live) => (
+                Some(live.clone()),
+                config.control.clone(),
+                config.arms.iter().take(max_arms).cloned().collect(),
+            ),
+        };
+        if config.arms.len() > max_arms {
+            warnings.push(format!(
+                "the configuration has {} arms; max_arms is {max_arms}",
+                config.arms.len()
+            ));
+        }
+        Ok((
+            Self {
+                salt: config.salt.clone(),
+                settings_hash: config.settings_hash.clone(),
+                subject,
+                default_subject: subject_rule.trim() == DEFAULT_SUBJECT,
+                eligibility,
+                overrides: settings.overrides,
+                redact,
+                events,
+                live,
+                control,
+                arms,
+            },
+            warnings,
+        ))
+    }
+
+    /// The units that should run: the control and each arm.
+    pub fn units(&self) -> Vec<Unit> {
+        let Some(live) = &self.live else {
+            return Vec::new();
+        };
+        let mut units = Vec::new();
+        if let Some(control) = &self.control {
+            units.push(Unit {
+                side: Side::Control,
+                commit: live.commit.clone(),
+                image: control.image.clone(),
+                share: size(&control.ranges),
+            });
+        }
+        for arm in &self.arms {
+            units.push(Unit {
+                side: Side::Arm,
+                commit: arm.commit.clone(),
+                image: arm.image.clone(),
+                share: size(&arm.ranges),
+            });
+        }
+        units
+    }
+
+    /// The image a unit runs now.
+    pub fn image(&self, key: &UnitKey) -> Option<&str> {
+        match key {
+            UnitKey::Control => self.control.as_ref().map(|control| control.image.as_str()),
+            UnitKey::Arm(commit) => self
+                .arms
+                .iter()
+                .find(|arm| &arm.commit == commit)
+                .map(|arm| arm.image.as_str()),
+        }
+    }
+
+    /// The version of an arm. The control has none.
+    pub fn version(&self, key: &UnitKey) -> Option<i64> {
+        match key {
+            UnitKey::Control => None,
+            UnitKey::Arm(commit) => self
+                .arms
+                .iter()
+                .find(|arm| &arm.commit == commit)
+                .map(|arm| arm.version),
+        }
+    }
+
+    /// The live commit.
+    pub fn live_commit(&self) -> Option<&str> {
+        self.live.as_ref().map(|live| live.commit.as_str())
+    }
+
+    /// The subject a rule yields, or `None` when it yields nothing usable.
+    pub fn subject(&self, request: &Value) -> Option<String> {
+        let subject = match evaluate(&self.subject, "request", request).ok()? {
+            Cel::String(value) => value.to_string(),
+            Cel::Int(value) => value.to_string(),
+            Cel::UInt(value) => value.to_string(),
+            _ => return None,
+        };
+        (!subject.is_empty() && subject.len() <= 128).then_some(subject)
+    }
 }
 
-fn compile(expression: &str) -> anyhow::Result<Program> {
+/// The share of the hash space that `ranges` hold.
+pub fn size(ranges: &[[f64; 2]]) -> f64 {
+    ranges
+        .iter()
+        .map(|[start, end]| (end - start).max(0.0))
+        .sum()
+}
+
+pub fn compile(expression: &str) -> anyhow::Result<Program> {
     // The CEL parser panics on some malformed input instead of returning an error.
     match std::panic::catch_unwind(|| Program::compile(expression)) {
         Ok(Ok(program)) => Ok(program),
@@ -178,8 +185,22 @@ fn compile(expression: &str) -> anyhow::Result<Program> {
     }
 }
 
+/// Run a program with one variable.
+pub fn evaluate(program: &Program, name: &str, value: &Value) -> anyhow::Result<Cel> {
+    let mut context = Context::default();
+    context
+        .add_variable(name, value)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let program = std::panic::AssertUnwindSafe(program);
+    let context = std::panic::AssertUnwindSafe(&context);
+    match std::panic::catch_unwind(|| program.execute(&context)) {
+        Ok(result) => result.map_err(|error| anyhow::anyhow!("{error}")),
+        Err(_) => anyhow::bail!("the rule failed"),
+    }
+}
+
 /// Why a subject got what it did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     Assigned,
     Ineligible,
@@ -201,170 +222,131 @@ impl Reason {
     }
 }
 
-/// The experiment a request belongs to and what it decided.
+/// A run to record: the unit whose range holds the subject, and why.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Assignment {
-    pub experiment: String,
-    pub version: u32,
-    pub subject: String,
-    /// The arm the subject is assigned to, or `None` when ineligible.
-    pub assigned: Option<Key>,
+pub struct Run {
+    pub unit: UnitKey,
     pub reason: Reason,
 }
 
-/// What serves a request, and the assignment behind it, if any.
+/// What serves a request.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decision {
-    pub serve: Target,
-    pub assignment: Option<Assignment>,
+    /// The unit that serves the request, or `None` for live.
+    pub serve: Option<UnitKey>,
+    pub subject: Option<String>,
+    pub run: Option<Run>,
 }
 
-/// Decide who serves `request`. `ready` says whether an arm can take
-/// traffic; a subject whose arm cannot gets the default.
-pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&Key) -> bool) -> Decision {
-    let default = Decision {
-        serve: Target::Default,
-        assignment: None,
+impl Decision {
+    pub fn live(subject: Option<String>) -> Self {
+        Self {
+            serve: None,
+            subject,
+            run: None,
+        }
+    }
+}
+
+/// Decide who serves `request`. `ready` says whether a unit can take
+/// traffic; a subject whose unit cannot gets live.
+pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&UnitKey) -> bool) -> Decision {
+    let Some(subject) = routing.subject(request) else {
+        return Decision::live(None);
     };
-    // Arms of running experiments hold disjoint ranges of the app's hash
-    // space, so a subject is in at most one experiment.
-    let Some((experiment, subject, arm)) = routing.experiments.iter().find_map(|experiment| {
-        let subject = subject_of(&experiment.subject, request)?;
-        let point = bucket(&routing.salt, &subject);
-        let arm = experiment
-            .config
-            .arms
-            .iter()
-            .find(|arm| contains(&arm.ranges, point))?;
-        Some((experiment, subject, arm))
-    }) else {
-        return default;
+    let point = bucket(&routing.salt, &subject);
+    let unit = routing
+        .control
+        .as_ref()
+        .filter(|control| contains(&control.ranges, point))
+        .map(|_| UnitKey::Control)
+        .or_else(|| {
+            routing
+                .arms
+                .iter()
+                .find(|arm| contains(&arm.ranges, point))
+                .map(|arm| UnitKey::Arm(arm.commit.clone()))
+        });
+    let Some(unit) = unit.filter(|_| routing.live.is_some()) else {
+        return Decision::live(Some(subject));
     };
-    let config = &experiment.config;
-    let assignment = |assigned, reason| Assignment {
-        experiment: config.name.clone(),
-        version: config.version,
-        subject: subject.clone(),
-        assigned,
-        reason,
-    };
-    let eligible = match &experiment.eligibility {
+    let eligible = match &routing.eligibility {
         None => Ok(true),
-        Some(program) => evaluate(program, request).map(|value| value == Cel::Bool(true)),
+        Some(program) => {
+            evaluate(program, "request", request).map(|value| value == Cel::Bool(true))
+        }
     };
-    match eligible {
-        Ok(true) => {}
-        Ok(false) => {
-            return Decision {
-                serve: Target::Default,
-                assignment: Some(assignment(None, Reason::Ineligible)),
-            };
-        }
-        Err(_) => {
-            return Decision {
-                serve: Target::Default,
-                assignment: Some(assignment(None, Reason::EligibilityError)),
-            };
-        }
-    }
-    let key = key(config, arm);
-    if !ready(&key) {
-        return Decision {
-            serve: Target::Default,
-            assignment: Some(assignment(Some(key), Reason::ArmUnavailable)),
-        };
-    }
+    let reason = match eligible {
+        Ok(true) if ready(&unit) => Reason::Assigned,
+        Ok(true) => Reason::ArmUnavailable,
+        Ok(false) => Reason::Ineligible,
+        Err(_) => Reason::EligibilityError,
+    };
     Decision {
-        serve: Target::Arm(key.clone()),
-        assignment: Some(assignment(Some(key), Reason::Assigned)),
+        serve: (reason == Reason::Assigned).then(|| unit.clone()),
+        subject: Some(subject),
+        run: Some(Run { unit, reason }),
     }
 }
 
 /// Why the arm a request names cannot serve it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refused {
-    /// The branch runs, but its arm cannot take traffic yet.
+    /// The arm runs, but cannot take traffic yet.
     NotReady,
-    /// No running arm has the branch.
+    /// No running arm matches the value.
     NotRunning,
 }
 
-/// Serve `request` on the running arm of `branch`, without eligibility or
-/// the split. The subject is read as usual, so the run is recorded, with the
-/// reason `override`.
+/// Serve `request` on the running arm whose commit starts with `value`, a
+/// prefix of at least 7 characters, without eligibility or the split.
 pub fn override_arm(
     routing: &Routing,
     request: &Value,
-    branch: &str,
-    ready: impl Fn(&Key) -> bool,
+    value: &str,
+    ready: impl Fn(&UnitKey) -> bool,
 ) -> Result<Decision, Refused> {
-    let Some((experiment, arm)) = routing.experiments.iter().find_map(|experiment| {
-        let arm = experiment
-            .config
-            .arms
-            .iter()
-            .find(|arm| arm.branch.as_deref() == Some(branch))?;
-        Some((experiment, arm))
-    }) else {
+    let value = value.to_ascii_lowercase();
+    if !(7..=40).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(Refused::NotRunning);
+    }
+    let matches: Vec<&ArmConfig> = routing
+        .arms
+        .iter()
+        .filter(|arm| arm.commit.starts_with(&value))
+        .collect();
+    let [arm] = matches.as_slice() else {
         return Err(Refused::NotRunning);
     };
-    let key = key(&experiment.config, arm);
-    if !ready(&key) {
+    let unit = UnitKey::Arm(arm.commit.clone());
+    if !ready(&unit) {
         return Err(Refused::NotReady);
     }
-    let assignment = subject_of(&experiment.subject, request).map(|subject| Assignment {
-        experiment: experiment.config.name.clone(),
-        version: experiment.config.version,
-        subject,
-        assigned: Some(key.clone()),
-        reason: Reason::Override,
-    });
+    let subject = routing.subject(request);
     Ok(Decision {
-        serve: Target::Arm(key),
-        assignment,
+        serve: Some(unit.clone()),
+        run: subject.as_ref().map(|_| Run {
+            unit,
+            reason: Reason::Override,
+        }),
+        subject,
     })
 }
 
-/// The branches of the running arms, sorted.
-pub fn running_branches(routing: &Routing) -> Vec<String> {
-    let mut branches: Vec<String> = routing
-        .arms()
-        .into_iter()
-        .filter_map(|(_, arm)| arm.branch.clone())
+/// The running arms, by their first 7 characters, sorted.
+pub fn running_arms(routing: &Routing) -> Vec<String> {
+    let mut arms: Vec<String> = routing
+        .arms
+        .iter()
+        .map(|arm| arm.commit.chars().take(7).collect())
         .collect();
-    branches.sort();
-    branches.dedup();
-    branches
-}
-
-/// Whether a CEL rule compiles.
-pub fn check_rule(expression: &str) -> anyhow::Result<()> {
-    compile(expression).map(drop)
-}
-
-/// The subject ID a rule yields, or `None` when it yields nothing usable.
-fn subject_of(program: &Program, request: &Value) -> Option<String> {
-    let subject = match evaluate(program, request).ok()? {
-        Cel::String(value) => value.to_string(),
-        Cel::Int(value) => value.to_string(),
-        Cel::UInt(value) => value.to_string(),
-        _ => return None,
-    };
-    (!subject.is_empty() && subject.len() <= 128).then_some(subject)
-}
-
-fn evaluate(program: &Program, request: &Value) -> anyhow::Result<Cel> {
-    let mut context = Context::default();
-    context
-        .add_variable("request", request)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    program
-        .execute(&context)
-        .map_err(|error| anyhow::anyhow!("{error}"))
+    arms.sort();
+    arms
 }
 
 /// Map a subject to a uniform point in `[0, 1)`: the first 53 bits of
-/// `SHA-256(salt:subject_id)`, as every Statespace client computes it.
+/// `SHA-256(salt:subject_id)`. Never change this function: it would move
+/// the subjects of running arms.
 pub fn bucket(salt: &str, subject_id: &str) -> f64 {
     let digest = Sha256::digest(format!("{salt}:{subject_id}").as_bytes());
     let mut prefix = [0; 8];
@@ -378,7 +360,8 @@ fn contains(ranges: &[[f64; 2]], point: f64) -> bool {
         .any(|[start, end]| *start <= point && point < *end)
 }
 
-/// The request as CEL rules see it.
+/// The request as CEL rules see it: `method`, `path`, `query`, `headers`,
+/// and `cookies`.
 pub fn request_value(
     method: &str,
     path: &str,
@@ -456,32 +439,34 @@ pub fn decode(value: &str) -> String {
 mod tests {
     use super::*;
 
-    const HEAD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const BASE: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const ARM: &str = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
+    const OTHER: &str = "a1b2c3d9e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
+    const LIVE: &str = "9f1ce8a000000000000000000000000000000000";
 
-    /// An experiment whose variant `fast` and its control hold `fast` and
-    /// `control` of the app's hash space.
-    fn config(fast: [f64; 2], control: [f64; 2], eligibility: Option<&str>) -> HostConfig {
-        let arm = |name: &str, commit: &str, range: [f64; 2]| ArmConfig {
-            name: name.into(),
-            branch: (name != "control").then(|| format!("exp/checkout/{name}")),
-            commit: commit.into(),
-            image: String::new(),
-            ranges: vec![range],
-            address: None,
-            ready: false,
-        };
-        HostConfig {
-            salt: "app-salt".into(),
-            poll_interval_seconds: 10,
-            experiments: vec![ExperimentConfig {
-                name: "checkout".into(),
-                version: 3,
-                subject: "request.headers[\"x-user-id\"]".into(),
-                eligibility: eligibility.map(Into::into),
-                arms: vec![arm("fast", HEAD, fast), arm("control", BASE, control)],
-            }],
-        }
+    fn config(arm: [f64; 2], control: [f64; 2], eligibility: Option<&str>) -> RuntimeConfig {
+        serde_json::from_value(json!({
+            "app": "shop-prod",
+            "salt": "app-salt",
+            "settings_hash": "h1",
+            "settings": {
+                "subject": "request.headers[\"x-user-id\"]",
+                "eligibility": eligibility,
+                "overrides": true,
+                "redact": [],
+                "max_arms": 5,
+            },
+            "events": [],
+            "live": {"commit": LIVE, "image": "shop@sha256:1"},
+            "control": {"image": "shop@sha256:1", "ranges": [control]},
+            "arms": [{"commit": ARM, "image": "shop@sha256:2", "version": 3, "ranges": [arm]}],
+            "lease": null,
+            "poll_interval_seconds": 5,
+        }))
+        .unwrap()
+    }
+
+    fn routing(config: &RuntimeConfig) -> Routing {
+        Routing::compile(config).unwrap().0
     }
 
     fn request(user: Option<&str>, country: &str) -> Value {
@@ -495,14 +480,13 @@ mod tests {
 
     #[test]
     fn buckets_are_stable() {
-        // Changing this value would move subjects of running experiments.
+        // Changing this value would move subjects of running arms.
         assert_eq!(bucket("salt", "u_42"), 0.2531303365722227);
     }
 
     #[test]
-    fn assigns_subjects_stably_by_their_buckets() {
-        let (routing, errors) = Routing::compile(&config([0.0, 0.5], [0.5, 1.0], None));
-        assert!(errors.is_empty());
+    fn assigns_subjects_by_ranges() {
+        let routing = routing(&config([0.0, 0.5], [0.5, 1.0], None));
         let mut served = std::collections::HashMap::new();
         for index in 0..400 {
             let user = format!("u_{index}");
@@ -511,113 +495,131 @@ mod tests {
                 decision,
                 decide(&routing, &request(Some(&user), "US"), |_| true)
             );
-            let assignment = decision.assignment.unwrap();
-            assert_eq!(assignment.reason, Reason::Assigned);
-            let Target::Arm(arm) = decision.serve else {
-                panic!("an assigned subject gets an arm");
-            };
-            assert_eq!(assignment.assigned.as_ref(), Some(&arm));
-            *served.entry(arm.arm).or_insert(0) += 1;
+            let run = decision.run.unwrap();
+            assert_eq!(run.reason, Reason::Assigned);
+            assert_eq!(decision.serve.as_ref(), Some(&run.unit));
+            // The ranges decide the side.
+            let point = bucket("app-salt", &user);
+            assert_eq!(run.unit == UnitKey::Control, point >= 0.5);
+            *served.entry(run.unit).or_insert(0) += 1;
         }
-        // Half of the subjects each, give or take sampling noise; control
-        // is an arm of its own.
-        assert!((150..250).contains(&served["fast"]), "{served:?}");
-        assert!((150..250).contains(&served["control"]), "{served:?}");
-    }
-
-    #[test]
-    fn subjects_outside_the_slice_get_the_default_without_a_run() {
-        let (routing, _) = Routing::compile(&config([0.0, 0.0], [0.0, 0.0], None));
-        let decision = decide(&routing, &request(Some("u_1"), "US"), |_| true);
-        assert_eq!(
-            (decision.serve, decision.assignment),
-            (Target::Default, None)
+        assert!(
+            (150..250).contains(&served[&UnitKey::Control]),
+            "{served:?}"
         );
-        let no_subject = decide(&routing, &request(None, "US"), |_| true);
-        assert_eq!(no_subject.assignment, None);
+        assert!((150..250).contains(&served[&UnitKey::Arm(ARM.into())]));
     }
 
     #[test]
-    fn eligibility_and_readiness_send_subjects_to_the_default() {
+    fn subjects_outside_every_range_get_live_without_a_run() {
+        let routing = routing(&config([0.0, 0.0], [0.0, 0.0], None));
+        let decision = decide(&routing, &request(Some("u_1"), "US"), |_| true);
+        assert_eq!(decision, Decision::live(Some("u_1".into())));
+        assert_eq!(
+            decide(&routing, &request(None, "US"), |_| true),
+            Decision::live(None)
+        );
+    }
+
+    #[test]
+    fn reasons_send_subjects_to_live() {
         let rule = Some("request.headers[\"cf-ipcountry\"] == \"US\"");
-        let (routing, _) = Routing::compile(&config([0.0, 1.0], [1.0, 1.0], rule));
+        let routing = routing(&config([0.0, 1.0], [1.0, 1.0], rule));
         let elsewhere = decide(&routing, &request(Some("u_1"), "FR"), |_| true);
-        assert_eq!(elsewhere.serve, Target::Default);
-        assert_eq!(elsewhere.assignment.unwrap().reason, Reason::Ineligible);
+        assert_eq!(elsewhere.serve, None);
+        assert_eq!(elsewhere.run.unwrap().reason, Reason::Ineligible);
 
         let down = decide(&routing, &request(Some("u_1"), "US"), |_| false);
-        assert_eq!(down.serve, Target::Default);
-        let assignment = down.assignment.unwrap();
-        assert_eq!(assignment.reason, Reason::ArmUnavailable);
-        assert_eq!(assignment.assigned.unwrap().arm, "fast");
+        assert_eq!(down.serve, None);
+        let run = down.run.unwrap();
+        assert_eq!(run.reason, Reason::ArmUnavailable);
+        assert_eq!(run.unit, UnitKey::Arm(ARM.into()));
+        assert_eq!(run.reason.as_str(), "arm-unavailable");
 
-        // A missing header is null, but adding a number to text is an error.
         let broken = Some("request.headers[\"x-user-id\"] + 1 == 2");
-        let (routing, _) = Routing::compile(&config([0.0, 1.0], [1.0, 1.0], broken));
+        let routing = super::tests::routing(&config([0.0, 1.0], [1.0, 1.0], broken));
         let error = decide(&routing, &request(Some("u_1"), "US"), |_| true);
-        assert_eq!(error.assignment.unwrap().reason, Reason::EligibilityError);
+        assert_eq!(error.serve, None);
+        assert_eq!(error.run.unwrap().reason, Reason::EligibilityError);
     }
 
     #[test]
-    fn lists_each_experiments_arms_and_their_shares() {
-        let (routing, _) = Routing::compile(&config([0.0, 0.05], [0.05, 0.1], None));
-        let arms = routing.arms();
-        let names: Vec<String> = arms.iter().map(|(key, _)| key.to_string()).collect();
-        assert_eq!(
-            names,
-            [
-                "fast@aaaaaaa of checkout@3",
-                "control@bbbbbbb of checkout@3"
-            ]
-        );
-        assert!((share(arms[0].1) - 0.05).abs() < 1e-12);
-        assert_eq!(arms[1].0.arm, "control");
+    fn without_live_everything_goes_to_live() {
+        let mut config = config([0.0, 1.0], [1.0, 1.0], None);
+        config.live = None;
+        let routing = routing(&config);
+        assert!(routing.units().is_empty());
+        let decision = decide(&routing, &request(Some("u_1"), "US"), |_| true);
+        assert_eq!(decision.serve, None);
+        assert_eq!(decision.run, None);
     }
 
     #[test]
-    fn overrides_serve_a_running_arm_without_the_split() {
-        // The subject is outside every slice and not eligible, yet the
-        // override serves the arm and records the run as an override.
+    fn units_follow_the_configuration_and_max_arms() {
+        let mut config = config([0.0, 0.05], [0.05, 0.1], None);
+        let units = routing(&config).units();
+        assert_eq!(units.len(), 2);
+        assert_eq!(units[0].side, Side::Control);
+        assert_eq!(units[0].commit, LIVE);
+        assert!((units[0].share - 0.05).abs() < 1e-12);
+        assert_eq!(units[1].key(), UnitKey::Arm(ARM.into()));
+        config.settings.max_arms = Some(1);
+        let mut second = config.arms[0].clone();
+        second.commit = OTHER.into();
+        config.arms.push(second);
+        let (routing, warnings) = Routing::compile(&config).unwrap();
+        assert_eq!(routing.arms.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(routing.version(&UnitKey::Arm(ARM.into())), Some(3));
+        assert_eq!(routing.version(&UnitKey::Control), None);
+    }
+
+    #[test]
+    fn overrides_name_one_running_arm_by_commit() {
         let rule = Some("request.headers[\"cf-ipcountry\"] == \"US\"");
-        let (routing, _) = Routing::compile(&config([0.0, 0.0], [0.0, 0.0], rule));
+        let mut config = config([0.0, 0.0], [0.0, 0.0], rule);
+        let routing_one = routing(&config);
         let request = request(Some("u_1"), "FR");
-        let decision = override_arm(&routing, &request, "exp/checkout/fast", |_| true).unwrap();
-        let Target::Arm(key) = &decision.serve else {
-            panic!("an override is served by its arm");
-        };
-        assert_eq!(key.arm, "fast");
-        let assignment = decision.assignment.unwrap();
-        assert_eq!(assignment.reason, Reason::Override);
-        assert_eq!(assignment.reason.as_str(), "override");
-        assert_eq!(assignment.subject, "u_1");
-
+        let decision = override_arm(&routing_one, &request, "A1B2C3D", |_| true).unwrap();
+        assert_eq!(decision.serve, Some(UnitKey::Arm(ARM.into())));
+        let run = decision.run.unwrap();
+        assert_eq!(run.reason, Reason::Override);
+        for value in ["a1b2c3", "b2c3d4e", "control", "a1b2c3d!"] {
+            assert_eq!(
+                override_arm(&routing_one, &request, value, |_| true),
+                Err(Refused::NotRunning),
+                "{value}"
+            );
+        }
         assert_eq!(
-            override_arm(&routing, &request, "exp/checkout/slow", |_| true),
-            Err(Refused::NotRunning)
-        );
-        assert_eq!(
-            override_arm(&routing, &request, "control", |_| true),
-            Err(Refused::NotRunning)
-        );
-        assert_eq!(
-            override_arm(&routing, &request, "exp/checkout/fast", |_| false),
+            override_arm(&routing_one, &request, ARM, |_| false),
             Err(Refused::NotReady)
         );
-        assert_eq!(running_branches(&routing), ["exp/checkout/fast"]);
-
+        // A prefix that matches two arms names none.
+        let mut second = config.arms[0].clone();
+        second.commit = OTHER.into();
+        config.arms.push(second);
+        let routing_two = routing(&config);
+        assert_eq!(
+            override_arm(&routing_two, &request, "a1b2c3d", |_| true),
+            Err(Refused::NotRunning)
+        );
+        assert!(override_arm(&routing_two, &request, "a1b2c3d4", |_| true).is_ok());
+        assert_eq!(running_arms(&routing_two), ["a1b2c3d", "a1b2c3d"]);
         // Without a subject, the arm still serves, and no run is recorded.
         let anonymous = request_value("GET", "/", None, &http::HeaderMap::new(), &Map::new());
-        let decision = override_arm(&routing, &anonymous, "exp/checkout/fast", |_| true).unwrap();
-        assert_eq!(decision.assignment, None);
+        let decision = override_arm(&routing_one, &anonymous, ARM, |_| true).unwrap();
+        assert_eq!(decision.run, None);
     }
 
     #[test]
-    fn rules_that_do_not_compile_are_skipped() {
+    fn rules_that_do_not_compile_make_the_configuration_unusable() {
         let mut broken = config([0.0, 1.0], [1.0, 1.0], None);
-        broken.experiments[0].subject = "request.headers[".into();
-        let (routing, errors) = Routing::compile(&broken);
-        assert!(routing.experiments.is_empty());
-        assert_eq!(errors.len(), 1);
+        broken.settings.subject = Some("request.headers[".into());
+        assert!(Routing::compile(&broken).is_err());
+        let mut defaults = config([0.0, 1.0], [1.0, 1.0], None);
+        defaults.settings.subject = None;
+        assert!(routing(&defaults).default_subject);
     }
 
     #[test]

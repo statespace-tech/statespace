@@ -8,7 +8,7 @@ authors = ["Statespace Technologies, Inc."]
 homepage = "https://statespace.com"
 documentation = "https://docs.statespace.com"
 repository = "https://github.com/statespace-tech/statespace"
-description = "A/B test multiple versions of your app in production"
+description = "Run commits as arms on a share of live traffic, beside a control"
 readme = "README.md"
 keywords = ["experimentation", "ab-testing", "proxy", "agents", "cli"]
 categories = ["command-line-utilities", "development-tools"]
@@ -29,6 +29,7 @@ http = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "server-auto", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "tls12", "webpki-tokio"] }
 rand = "0.9"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }

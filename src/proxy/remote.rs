@@ -1,12 +1,14 @@
-//! The connection of `ssp proxy` and `ssp controller` to Statespace:
-//! configuration, reports, and events.
+//! The proxy's connection to Statespace: the runtime configuration, the
+//! report that holds the lease, and events.
 
 use std::time::Duration;
 
 use anyhow::bail;
+use reqwest::StatusCode;
+use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::assign::HostConfig;
+use super::config::RuntimeConfig;
 use crate::api::segment;
 
 #[derive(Clone)]
@@ -15,6 +17,20 @@ pub struct Remote {
     endpoint: String,
     token: String,
     app: String,
+}
+
+/// What a report returns.
+#[derive(Debug, Deserialize)]
+pub struct Granted {
+    pub lease: bool,
+}
+
+/// Why the configuration could not be read.
+#[derive(Debug)]
+pub enum ConfigError {
+    /// The app does not exist, or the token is not for it.
+    Refused(String),
+    Other(anyhow::Error),
 }
 
 impl Remote {
@@ -38,17 +54,14 @@ impl Remote {
         )
     }
 
-    async fn check(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
+    async fn message(response: reqwest::Response) -> String {
         let status = response.status();
-        if status.is_success() {
-            return Ok(response);
-        }
         let body = response.text().await.unwrap_or_default();
         let message = serde_json::from_str::<Value>(&body)
             .ok()
             .and_then(|value| Some(value.get("error")?.as_str()?.to_owned()))
             .unwrap_or(body);
-        bail!("{status}: {message}")
+        format!("{message} ({status})")
     }
 
     async fn post(&self, url: String, body: &Value) -> anyhow::Result<reqwest::Response> {
@@ -56,52 +69,50 @@ impl Remote {
             .client
             .post(url)
             .bearer_auth(&self.token)
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(20))
             .json(body)
             .send()
             .await?;
-        Self::check(response).await
+        if !response.status().is_success() {
+            bail!("{}", Self::message(response).await);
+        }
+        Ok(response)
     }
 
-    pub async fn config(&self) -> anyhow::Result<HostConfig> {
+    pub async fn config(&self) -> Result<RuntimeConfig, ConfigError> {
         let response = self
             .client
             .get(self.url(""))
             .bearer_auth(&self.token)
             .timeout(Duration::from_secs(20))
             .send()
-            .await?;
-        Ok(Self::check(response).await?.json().await?)
+            .await
+            .map_err(|error| ConfigError::Other(error.into()))?;
+        let status = response.status();
+        if matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) {
+            return Err(ConfigError::Refused(Self::message(response).await));
+        }
+        if !status.is_success() {
+            return Err(ConfigError::Other(anyhow::anyhow!(
+                "{}",
+                Self::message(response).await
+            )));
+        }
+        response
+            .json()
+            .await
+            .map_err(|error| ConfigError::Other(error.into()))
     }
 
-    /// Report this proxy or controller: its kind, version, capacity, and
-    /// the default it runs, by digest, when it knows it.
-    pub async fn report(
-        &self,
-        id: &str,
-        kind: &str,
-        max_arms: u32,
-        default_image: Option<&str>,
-        report: Value,
-    ) -> anyhow::Result<()> {
-        let body = json!({
-            "id": id,
-            "kind": kind,
-            "version": env!("CARGO_PKG_VERSION"),
-            "max_arms": max_arms,
-            "default_image": default_image,
-            "report": report,
-        });
-        self.post(self.url("/hosts"), &body).await.map(drop)
+    /// Report this instance. The answer says whether it holds the lease.
+    pub async fn report(&self, report: &Value) -> anyhow::Result<Granted> {
+        Ok(self.post(self.url("/report"), report).await?.json().await?)
     }
 
-    /// Report every arm a controller runs.
-    pub async fn report_arms(&self, controller: &str, arms: Vec<Value>) -> anyhow::Result<()> {
-        let body = json!({ "controller": controller, "arms": arms });
-        self.post(self.url("/arms"), &body).await.map(drop)
-    }
-
-    /// Send events of this app, as `{table: [events]}`.
+    /// Send a batch of rows of this app.
     pub async fn send_events(&self, mut batch: Value) -> anyhow::Result<()> {
         batch["app"] = json!(self.app);
         self.post(format!("{}/v1/events", self.endpoint), &batch)

@@ -1,8 +1,9 @@
-//! What arms print. Every line is recorded; patterns are redacted first.
+//! Redaction: `redact` patterns from statespace.toml replace their matches
+//! with `[redacted]` before a line or a request path leaves the machine.
 
 use regex::Regex;
 
-/// Recorded lines longer than this are cut.
+/// Recorded text longer than this is cut.
 const MAX_LINE_BYTES: usize = 16 * 1024;
 
 /// Replace every match of `patterns` and cut overly long lines, before a

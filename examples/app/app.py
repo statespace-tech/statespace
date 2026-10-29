@@ -1,4 +1,4 @@
-"""A tiny app for trying `ssp proxy`: it says which arm served the request,
+"""A tiny app for trying `ssp proxy`: it says which side served the request,
 and prints a JSON line for every subject it serves."""
 
 import json
@@ -12,15 +12,20 @@ class Handler(BaseHTTPRequestHandler):
         subject = self.headers.get("x-statespace-subject")
         body = json.dumps(
             {
-                # The proxy names what serves the request: default, control, or an arm.
+                # The proxy names the side: control or arm. Live gets none.
+                "side": self.headers.get("x-statespace-side") or "live",
                 "arm": self.headers.get("x-statespace-arm"),
                 "subject": subject,
                 "greeting": os.environ.get("GREETING", "hello"),
                 "shared": os.environ.get("SHARED"),
+                # Names only: the proxy never passes its own settings on.
+                "statespace_variables": sorted(
+                    name for name in os.environ if name.startswith("STATESPACE_")
+                ),
             }
         ).encode()
         if subject:
-            print(json.dumps({"event": "visit", "subject": subject, "path": self.path}), flush=True)
+            print(json.dumps({"event": "visit", "path": self.path}), flush=True)
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))

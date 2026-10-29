@@ -1,94 +1,82 @@
-//! Tokens: credentials for programs, agents, and SQL, and sign-in sessions.
+//! `ssp token`: runtime tokens, the only Statespace tokens. One app each.
 
-use anyhow::bail;
 use reqwest::Method;
 use serde_json::{Value, json};
 
 use crate::{
     api::{Api, segment},
     cli::TokenCommand,
-    output::{emit, fields, list, note, table, text, time},
+    output::{emit, fields, note, table, text, time},
 };
 
 pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
     match command {
-        TokenCommand::Create {
-            name,
-            preset,
-            scopes,
-            app,
-            expires_in_days,
-        } => {
-            let scopes = match preset {
-                Some(preset) => preset.scopes(),
-                None => scopes.iter().map(String::as_str).collect(),
-            };
-            let body = json!({
-                "name": name,
-                "scopes": scopes,
-                "app": app,
-                "expires_in_days": expires_in_days,
-            });
-            let token: Value = api.send(Method::POST, "/v1/tokens", &body)?;
+        TokenCommand::Add { app, note: flag } => {
+            let token: Value = api.send(
+                Method::POST,
+                "/v1/tokens",
+                &json!({ "app": app.app, "note": flag.note }),
+            )?;
             emit(&token, || {
-                let mut rows = vec![("Token", text(&token["token"]))];
-                if !token["database_url"].is_null() {
-                    rows.push(("Database URL", text(&token["database_url"])));
-                }
-                rows.extend([
+                let rows = vec![
+                    ("Token", text(&token["token"])),
                     ("ID", text(&token["id"])),
-                    ("Scopes", list(&token["scopes"])),
                     ("App", text(&token["app"])),
-                    ("Expires", time(&token["expires_at"])),
-                ]);
-                format!("Created token {name}.\n\n{}", fields(&rows))
+                ];
+                format!(
+                    "Added a runtime token for {}.\n\n{}\nRun the proxy with it in STATESPACE_TOKEN.",
+                    app.app,
+                    fields(&rows)
+                )
             })?;
             note("Store the token now. Statespace shows it only once.");
             Ok(())
         }
-        TokenCommand::List => {
-            let tokens: Vec<Value> = api.get("/v1/tokens")?;
-            emit(&tokens, || {
+        TokenCommand::Remove { id, note } => {
+            let removed: Value = api.send(
+                Method::DELETE,
+                &format!("/v1/tokens/{}", segment(&id)),
+                &json!({ "note": note.note }),
+            )?;
+            let document = if removed.is_null() {
+                json!({ "removed": id })
+            } else {
+                removed
+            };
+            emit(&document, || {
+                format!(
+                    "Removed token {id}. Proxies that use it stop at their next request to Statespace."
+                )
+            })
+        }
+        TokenCommand::List { app } => {
+            let listed: Value = api.get("/v1/tokens")?;
+            let mut tokens: Vec<Value> = match &listed {
+                Value::Array(tokens) => tokens.clone(),
+                other => other["tokens"].as_array().cloned().unwrap_or_default(),
+            };
+            if let Some(app) = &app {
+                tokens.retain(|token| token["app"] == app.as_str());
+            }
+            let document = json!({ "tokens": tokens });
+            emit(&document, || {
+                if tokens.is_empty() {
+                    return "No runtime tokens. Add one with `ssp token add --app <app>`.".into();
+                }
                 table(
-                    &[
-                        "ID",
-                        "NAME",
-                        "KIND",
-                        "SCOPES",
-                        "APP",
-                        "EXPIRES",
-                        "LAST USED",
-                    ],
+                    &["ID", "APP", "NOTE", "CREATED", "LAST USED"],
                     tokens
                         .iter()
                         .map(|token| {
                             vec![
                                 text(&token["id"]),
-                                text(&token["name"]),
-                                text(&token["kind"]),
-                                list(&token["scopes"]),
                                 text(&token["app"]),
-                                time(&token["expires_at"]),
+                                text(&token["note"]),
+                                time(&token["created_at"]),
                                 time(&token["last_used_at"]),
                             ]
                         })
                         .collect(),
-                )
-            })
-        }
-        TokenCommand::Revoke { id: Some(id), .. } => {
-            api.delete(&format!("/v1/tokens/{}", segment(&id)))?;
-            emit(&json!({ "revoked": id }), || format!("Revoked {id}."))
-        }
-        TokenCommand::Revoke { id: None, yes, .. } => {
-            if !yes {
-                bail!("pass --yes to revoke every token and session of the account");
-            }
-            let revoked: Value = api.send(Method::POST, "/v1/tokens/revoke-all", &json!({}))?;
-            emit(&revoked, || {
-                format!(
-                    "Revoked {} tokens and sessions. Sign in again with `ssp login`.",
-                    text(&revoked["revoked"])
                 )
             })
         }

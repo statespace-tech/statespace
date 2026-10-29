@@ -1,32 +1,48 @@
-//! `ssp`: A/B test whole versions of an app in production.
+//! `ssp`: run commits as arms on a share of live traffic, beside a control.
 //!
-//! Every command except `ssp proxy` and `ssp controller` prints text, or one
-//! JSON document with `--json`. Errors print on standard error, as
-//! `{"error": "..."}` with `--json`, and exit with status 1.
+//! Every command except `ssp proxy` prints text, or one JSON document with
+//! `--json`. Errors print on standard error, as `{"error": "..."}` with
+//! `--json`, and exit with status 1.
 
 mod api;
 mod cli;
 mod commands;
 mod config;
-mod controller;
+mod credential;
 mod image;
 mod output;
-mod project;
 mod proxy;
+mod repo;
 
 use clap::Parser;
 use serde_json::json;
 
 fn main() {
-    let cli = cli::Cli::parse();
+    let json = std::env::args().any(|argument| argument == "--json");
+    let cli = match cli::Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) if !error.use_stderr() => error.exit(),
+        Err(error) if json => fail(true, &error.to_string()),
+        Err(error) => error.exit(),
+    };
     output::set_json(cli.json);
     if let Err(error) = commands::run(cli) {
         if error.is::<output::Reported>() {
-        } else if output::json() {
-            eprintln!("{}", json!({ "error": format!("{error:#}") }));
-        } else {
-            eprintln!("error: {error:#}");
+            std::process::exit(1);
         }
-        std::process::exit(1);
+        fail(output::json(), &format!("{error:#}"));
     }
+}
+
+/// Print an error and exit with status 1.
+fn fail(json: bool, message: &str) -> ! {
+    let message = message.trim();
+    let message = message.strip_prefix("error: ").unwrap_or(message);
+    if json {
+        let first = message.lines().next().unwrap_or(message);
+        eprintln!("{}", json!({ "error": first }));
+    } else {
+        eprintln!("error: {message}");
+    }
+    std::process::exit(1);
 }

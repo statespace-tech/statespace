@@ -1,6 +1,6 @@
 //! A small blocking client for the Statespace HTTP API.
 
-use std::time::Duration;
+use std::{cell::OnceCell, time::Duration};
 
 use anyhow::{Context, bail};
 use reqwest::{
@@ -10,16 +10,18 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::credential::{self, Found};
+
 pub struct Api {
     client: Client,
     endpoint: String,
-    token: Option<String>,
-    /// The workspace that a session acts on.
-    workspace: Option<String>,
+    credential: Option<Found>,
+    /// The secret of the credential, once read.
+    secret: OnceCell<String>,
 }
 
 impl Api {
-    pub fn new(endpoint: &str, token: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(endpoint: &str, credential: Option<Found>) -> anyhow::Result<Self> {
         Ok(Self {
             client: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
@@ -27,35 +29,26 @@ impl Api {
                 .user_agent(concat!("statespace/", env!("CARGO_PKG_VERSION")))
                 .build()?,
             endpoint: endpoint.trim_end_matches('/').to_owned(),
-            token,
-            workspace: None,
+            credential,
+            secret: OnceCell::new(),
         })
-    }
-
-    /// The same client, acting on `workspace`.
-    pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
-        self.workspace = workspace;
-        self
     }
 
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
 
-    pub fn client(&self) -> &Client {
-        &self.client
+    pub fn credential(&self) -> Option<&Found> {
+        self.credential.as_ref()
     }
 
-    pub fn token(&self) -> Option<&str> {
-        self.token.as_deref()
-    }
-
-    pub fn with_token(&self, token: String) -> Self {
+    /// The same API with another credential.
+    pub fn with_credential(&self, credential: Found) -> Self {
         Self {
             client: self.client.clone(),
             endpoint: self.endpoint.clone(),
-            token: Some(token),
-            workspace: self.workspace.clone(),
+            credential: Some(credential),
+            secret: OnceCell::new(),
         }
     }
 
@@ -66,15 +59,17 @@ impl Api {
     }
 
     pub fn request(&self, method: Method, path: &str) -> anyhow::Result<RequestBuilder> {
-        let token = self
-            .token
-            .as_deref()
-            .context("not signed in; run `ssp login` or set SSP_TOKEN")?;
-        let request = self.anonymous(method, path).bearer_auth(token);
-        Ok(match &self.workspace {
-            Some(workspace) => request.header("Statespace-Workspace", workspace),
-            None => request,
-        })
+        let found = self.credential.as_ref().context(
+            "no credential: run `ssp login`, or set STATESPACE_TOKEN or a GitHub user token in GH_TOKEN",
+        )?;
+        let secret = match self.secret.get() {
+            Some(secret) => secret.clone(),
+            None => {
+                let secret = credential::secret(&self.client, found)?;
+                self.secret.get_or_init(|| secret).clone()
+            }
+        };
+        Ok(self.anonymous(method, path).bearer_auth(secret))
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {
@@ -89,16 +84,13 @@ impl Api {
     ) -> anyhow::Result<T> {
         decode(self.request(method, path)?.json(body).send()?)
     }
-
-    pub fn delete(&self, path: &str) -> anyhow::Result<()> {
-        check(self.request(Method::DELETE, path)?.send()?).map(drop)
-    }
 }
 
 /// Decode a successful JSON response or turn an error response into a message.
 pub fn decode<T: DeserializeOwned>(response: Response) -> anyhow::Result<T> {
     let bytes = check(response)?.bytes()?;
-    serde_json::from_slice(&bytes).context("the server returned invalid JSON")
+    let bytes: &[u8] = if bytes.is_empty() { b"null" } else { &bytes };
+    serde_json::from_slice(bytes).context("the server returned invalid JSON")
 }
 
 fn check(response: Response) -> anyhow::Result<Response> {
@@ -106,15 +98,17 @@ fn check(response: Response) -> anyhow::Result<Response> {
     if status.is_success() {
         return Ok(response);
     }
-    if status == StatusCode::UNAUTHORIZED {
-        bail!("the credential is invalid or expired; run `ssp login` or set SSP_TOKEN");
-    }
     let body = response.text().unwrap_or_default();
     let message = serde_json::from_str::<Value>(&body)
         .ok()
         .and_then(|value| Some(value.get("error")?.as_str()?.to_owned()))
         .unwrap_or(body);
-    bail!("{status}: {message}")
+    if status == StatusCode::UNAUTHORIZED {
+        bail!(
+            "the credential is invalid or expired ({message}); run `ssp login` or check `ssp whoami`"
+        );
+    }
+    bail!("{message} ({status})")
 }
 
 /// Percent-encode one URL path segment.
@@ -136,7 +130,7 @@ mod tests {
 
     #[test]
     fn encodes_path_segments() {
-        assert_eq!(segment("rank-v2.1"), "rank-v2.1");
+        assert_eq!(segment("shop-prod"), "shop-prod");
         assert_eq!(segment("a/b?c"), "a%2Fb%3Fc");
     }
 }

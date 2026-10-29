@@ -119,20 +119,9 @@ pub fn time(value: &Value) -> String {
         )
 }
 
-/// A size in bytes, in binary units such as `1.5 GiB`.
-pub fn bytes(bytes: i64) -> String {
-    let mut size = bytes as f64;
-    for unit in ["B", "KiB", "MiB", "GiB"] {
-        if size < 1024.0 {
-            return if unit == "B" {
-                format!("{bytes} B")
-            } else {
-                format!("{size:.1} {unit}")
-            };
-        }
-        size /= 1024.0;
-    }
-    format!("{size:.1} TiB")
+/// A commit as people read it: its first 7 characters.
+pub fn short(commit: &str) -> String {
+    commit.chars().take(7).collect()
 }
 
 #[cfg(test)]
@@ -150,16 +139,15 @@ mod tests {
             "2026-10-15 17:40 UTC"
         );
         assert_eq!(time(&Value::Null), "-");
-        assert_eq!(bytes(999), "999 B");
-        assert_eq!(bytes(10 * 1024 * 1024 * 1024), "10.0 GiB");
+        assert_eq!(short("a1b2c3d4e5"), "a1b2c3d");
         assert_eq!(list(&json!(["a", "b"])), "a, b");
     }
 
     #[test]
     fn aligns_fields_and_tables() {
         assert_eq!(
-            fields(&[("Name", "web".into()), ("Retention", "30 days".into())]),
-            "Name:      web\nRetention: 30 days\n"
+            fields(&[("App", "shop".into()), ("Live", "9f1ce8a".into())]),
+            "App:  shop\nLive: 9f1ce8a\n"
         );
         assert_eq!(
             table(

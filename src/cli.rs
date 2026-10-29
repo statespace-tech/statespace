@@ -1,38 +1,51 @@
-//! Command-line arguments.
+//! Command-line arguments: `ssp <noun> <verb> <object>`.
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(
     name = "ssp",
     display_name = "statespace",
     version,
-    about = "A/B test multiple versions of your app in production",
+    about = "Run commits as arms on a share of live traffic, beside a control",
     after_help = "Add --json to print one JSON document. \
                   Documentation: https://docs.statespace.com"
 )]
 pub struct Cli {
     /// Statespace API URL.
-    #[arg(long, env = "STATESPACE_URL", global = true)]
-    pub endpoint: Option<String>,
-    /// A token. Defaults to the saved `ssp login` session.
-    #[arg(long, env = "SSP_TOKEN", global = true, hide_env_values = true)]
-    pub token: Option<String>,
+    #[arg(long, env = "STATESPACE_API", global = true)]
+    pub api: Option<String>,
     /// Print one JSON document instead of text.
     #[arg(long, global = true)]
     pub json: bool,
-    /// The workspace, by its GitHub login, such as `acme`. Defaults to the
-    /// owner of the targets' repository, else your only workspace.
-    #[arg(long, env = "STATESPACE_WORKSPACE", global = true)]
-    pub workspace: Option<String>,
     #[command(subcommand)]
     pub command: Command,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Add, show, stop, and resume apps: running copies of a service.
+    #[command(subcommand)]
+    App(AppCommand),
+    /// Add, show, stop, and resume arms: commits that run on a share of an
+    /// app's traffic.
+    #[command(subcommand)]
+    Arm(ArmCommand),
+    /// Add, list, and remove runtime tokens for `ssp proxy`.
+    #[command(subcommand)]
+    Token(TokenCommand),
+    /// Run the proxy in front of an app's live service.
+    #[command(subcommand)]
+    Proxy(Box<ProxyCommand>),
+    /// Write a starter statespace.toml here and print the CI step that
+    /// records builds.
+    Init {
+        /// The image the CI step records, as the build workflow names it.
+        #[arg(long)]
+        image: Option<String>,
+    },
     /// Sign in with GitHub and save the session.
     Login {
         /// Print the sign-in URL instead of opening a browser.
@@ -40,228 +53,253 @@ pub enum Command {
         no_open: bool,
     },
     /// Sign this terminal out.
-    Logout {
-        /// Sign out every session of the account, everywhere.
-        #[arg(long)]
-        all: bool,
-    },
-    /// Show the account, the credential in use, what it may do, and storage use.
+    Logout,
+    /// Show who you are to Statespace and which credential the CLI uses.
     Whoami,
-    /// Record the image this CI job built. On the default branch, it becomes
-    /// the app's default build; on an exp/ branch, a version of the arm.
-    Apply {
-        /// The image, by tag or digest. A tag is resolved to its digest with `docker`.
-        #[arg(long, env = "STATESPACE_IMAGE")]
-        image: String,
-        #[arg(long, default_value = PROJECT_FILE)]
-        file: PathBuf,
-        /// Check and print the plan, but record nothing. Works outside CI.
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Show what runs, and why, and the holds that stop arms. Without a
-    /// target: the arm of the exp/ branch checked out, else the app or
-    /// repository you are in, else everything.
-    Status {
-        /// A pull request or repository URL, a path, an app (sandbox), an
-        /// experiment (sandbox/price), or a branch (exp/price/lower).
-        targets: Vec<String>,
-    },
-    /// Stop arms at once with a hold in Statespace. Their subjects get the
-    /// default, and their pull requests do not change. A hold covers the
-    /// arms that start later too, until `ssp resume` removes it.
-    Stop {
-        /// What to hold: an app (sandbox), an experiment (sandbox/price), a
-        /// branch (exp/price/lower), a pull request URL (its arms), a
-        /// repository URL (its apps), or a path such as `.` (its app).
-        #[arg(required = true)]
-        targets: Vec<String>,
-        /// Why, such as "checkout errors > 2%". The pull request check, `ssp
-        /// status`, and the dashboard show it.
-        #[arg(long)]
-        reason: Option<String>,
-    },
-    /// Remove the hold on each target, and only that hold. Its arms run again
-    /// while their pull requests can merge, unless another hold covers them.
-    Resume {
-        /// The same kinds of target as `ssp stop`.
-        #[arg(required = true)]
-        targets: Vec<String>,
-    },
-    /// Manage tokens: credentials for proxies, controllers, agents, and SQL.
-    #[command(subcommand)]
-    Token(TokenCommand),
-    /// Run a reverse proxy that assigns each request's subject and forwards
-    /// it to the app's default or to an experiment's arm.
-    Proxy(Box<ProxyArgs>),
-    /// Run the arms of an app's experiments on a platform.
-    #[command(subcommand)]
-    Controller(ControllerCommand),
 }
 
-/// The file with an app's settings and an arm's settings.
+/// The file with an app's settings.
 pub const PROJECT_FILE: &str = "statespace.toml";
 
+/// A note for the audit log and the commit status: 1 to 200 characters, one line.
+fn note(value: &str) -> Result<String, String> {
+    let length = value.chars().count();
+    if !(1..=200).contains(&length) {
+        return Err("a note has 1 to 200 characters".into());
+    }
+    if value.contains(['\n', '\r']) {
+        return Err("a note has one line".into());
+    }
+    Ok(value.to_owned())
+}
+
+/// An app name: lowercase letters, digits, and `-`, 1 to 63 characters.
+pub fn app_name(value: &str) -> Result<String, String> {
+    let valid = (1..=63).contains(&value.len())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+    if valid {
+        Ok(value.to_owned())
+    } else {
+        Err(format!(
+            "{value:?} is not an app name: use 1 to 63 lowercase letters, digits, and -"
+        ))
+    }
+}
+
+/// A commit: a full SHA or a prefix of at least 7 hexadecimal characters.
+pub fn commit(value: &str) -> Result<String, String> {
+    let lower = value.to_ascii_lowercase();
+    let valid =
+        (7..=40).contains(&lower.len()) && lower.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if valid {
+        Ok(lower)
+    } else {
+        Err(format!(
+            "{value:?} is not a commit: use a full SHA or a prefix of at least 7 characters"
+        ))
+    }
+}
+
+/// A share of an app's subjects, greater than 0 and at most 1.
+fn share(value: &str) -> Result<f64, String> {
+    match value.parse::<f64>() {
+        Ok(share) if share.is_finite() && share > 0.0 && share <= 1.0 => Ok(share),
+        _ => Err(format!(
+            "{value:?} is not a share: use a number greater than 0 and at most 1, such as 0.05"
+        )),
+    }
+}
+
+#[derive(Args)]
+pub struct Note {
+    /// Why, in 1 to 200 characters on one line. The audit log and the
+    /// commit status show it.
+    #[arg(long, value_parser = note)]
+    pub note: Option<String>,
+}
+
 #[derive(Subcommand)]
-pub enum ControllerCommand {
-    /// Run each arm as a copy of the default's Deployment.
-    Kubernetes(Box<ControllerArgs>),
+pub enum AppCommand {
+    /// Add an app for the repository and folder here, or for --repo and --path.
+    Add {
+        #[arg(value_parser = app_name)]
+        name: String,
+        /// The repository, as `owner/name`. Defaults to the `origin` remote.
+        #[arg(long)]
+        repo: Option<String>,
+        /// The folder of statespace.toml in the repository. Defaults to the
+        /// folder of the nearest statespace.toml.
+        #[arg(long)]
+        path: Option<String>,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// Delete an app and all its data. It fails while the app has arms.
+    Remove {
+        #[arg(value_parser = app_name)]
+        name: String,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// List the apps.
+    List,
+    /// Show an app in full.
+    Show {
+        #[arg(value_parser = app_name)]
+        name: String,
+    },
+    /// Stop every arm of the app, now and added later, with a hold.
+    Stop {
+        #[arg(value_parser = app_name)]
+        name: String,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// Remove the hold on the app.
+    Resume {
+        #[arg(value_parser = app_name)]
+        name: String,
+        #[command(flatten)]
+        note: Note,
+    },
+}
+
+#[derive(Args)]
+pub struct AppFlag {
+    /// The app.
+    #[arg(long, env = "STATESPACE_APP", value_parser = app_name)]
+    pub app: String,
+}
+
+#[derive(Subcommand)]
+pub enum ArmCommand {
+    /// Run a commit on a share of the app's traffic, or change its share.
+    Add {
+        #[arg(value_parser = commit)]
+        commit: String,
+        #[command(flatten)]
+        app: AppFlag,
+        /// The share of the app's subjects, such as 0.05 for 5%. Defaults
+        /// to 0.05 for a new arm.
+        #[arg(long, value_parser = share)]
+        share: Option<f64>,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// End an arm. Its evidence is kept.
+    Remove {
+        #[arg(value_parser = commit)]
+        commit: String,
+        #[command(flatten)]
+        app: AppFlag,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// List the arms of an app.
+    List {
+        #[command(flatten)]
+        app: AppFlag,
+    },
+    /// Show an arm and its evidence.
+    Show {
+        #[arg(value_parser = commit)]
+        commit: String,
+        #[command(flatten)]
+        app: AppFlag,
+    },
+    /// Stop an arm with a hold.
+    Stop {
+        #[arg(value_parser = commit)]
+        commit: String,
+        #[command(flatten)]
+        app: AppFlag,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// Remove the hold on an arm.
+    Resume {
+        #[arg(value_parser = commit)]
+        commit: String,
+        #[command(flatten)]
+        app: AppFlag,
+        #[command(flatten)]
+        note: Note,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum TokenCommand {
-    /// Create a token. It is printed only once.
-    Create {
-        #[arg(long)]
-        name: String,
-        /// The usual scopes for a job.
-        #[arg(long, conflicts_with = "scopes", required_unless_present = "scopes")]
-        preset: Option<Preset>,
-        /// A scope, for combinations no preset covers. Repeat for each.
-        #[arg(long = "scope", value_parser = SCOPES)]
-        scopes: Vec<String>,
-        /// Limit the token to one app: the views it reads in SQL, and the
-        /// proxies and controllers it runs, which then take the app from it.
-        #[arg(long, env = "STATESPACE_APP")]
+    /// Add a runtime token for an app. It is printed only once.
+    Add {
+        #[command(flatten)]
+        app: AppFlag,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// Remove a runtime token by its ID.
+    Remove {
+        id: String,
+        #[command(flatten)]
+        note: Note,
+    },
+    /// List runtime tokens, without their secrets.
+    List {
+        /// Only the tokens of this app.
+        #[arg(long, value_parser = app_name)]
         app: Option<String>,
-        /// Days until the token expires. Omit for no expiration.
-        #[arg(long, value_parser = clap::value_parser!(i64).range(1..=3650))]
-        expires_in_days: Option<i64>,
-    },
-    /// List tokens and sessions, without their secrets.
-    List,
-    /// Revoke a token or session by its ID, or all of them.
-    Revoke {
-        #[arg(required_unless_present = "all", conflicts_with = "all")]
-        id: Option<String>,
-        /// Revoke every token and session of the account.
-        #[arg(long)]
-        all: bool,
-        /// Confirm revoking everything.
-        #[arg(long, requires = "all")]
-        yes: bool,
     },
 }
 
-pub const SCOPES: [&str; 6] = [
-    "runtime:read",
-    "events:write",
-    "arms:report",
-    "experiments:write",
-    "query:read",
-    "tokens:manage",
-];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum Preset {
-    /// For `ssp proxy` and `ssp controller`: read the app's configuration,
-    /// send events, and report where arms run.
-    Runtime,
-    /// For SQL: read runs, output, and requests.
-    Analyst,
-    /// Everything, for agents that run the whole loop.
-    Admin,
-}
-
-impl Preset {
-    pub fn scopes(self) -> Vec<&'static str> {
-        match self {
-            Self::Runtime => vec!["runtime:read", "events:write", "arms:report"],
-            Self::Analyst => vec!["query:read"],
-            Self::Admin => SCOPES.to_vec(),
-        }
-    }
-}
-
-/// What `ssp proxy` and `ssp controller` share.
-#[derive(Args)]
-pub struct Shared {
-    /// The app whose experiments to serve. Defaults to the app of a token
-    /// that is limited to one app.
-    #[arg(long, env = "STATESPACE_APP")]
-    pub app: Option<String>,
-    /// A path that must answer 200 before an arm gets traffic. Without it,
-    /// an arm is ready once its port accepts connections.
-    #[arg(long, env = "STATESPACE_HEALTH")]
-    pub health: Option<String>,
-    /// How many arms run at once, control arms included, 1 to 64.
-    #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=64))]
-    pub max_arms: u32,
-    /// Seconds to keep routing with the last configuration while Statespace
-    /// is unreachable. After that, every subject gets the default.
-    #[arg(long, default_value_t = 300)]
-    pub stale_after: u64,
-    /// An environment variable every arm gets and the default does not, such
-    /// as a database URL without schema permissions. Repeat for each.
-    #[arg(long = "arm-env", value_name = "NAME=VALUE")]
-    pub arm_env: Vec<String>,
-    /// A regular expression whose matches are replaced in recorded lines
-    /// before they leave this machine. Repeat for each.
-    #[arg(long = "redact", value_name = "REGEX")]
-    pub redact: Vec<String>,
-}
-
-/// `ssp proxy` runs the default and the arms as Docker containers with
-/// `--image` or `--image-file`, or only routes with `--default`.
-#[derive(Args)]
-#[command(group(clap::ArgGroup::new("default_source").required(true).args(["image", "image_file", "default"])))]
+/// What every `ssp proxy` subcommand takes.
+#[derive(Args, Clone)]
 pub struct ProxyArgs {
-    #[command(flatten)]
-    pub shared: Shared,
+    /// The app.
+    #[arg(long, env = "STATESPACE_APP", value_parser = app_name)]
+    pub app: String,
     /// The public address.
     #[arg(long, env = "STATESPACE_LISTEN", default_value = "0.0.0.0:8080")]
     pub listen: String,
-    /// The app's default image. The proxy runs it and every arm as Docker
-    /// containers on this machine.
-    #[arg(long, env = "STATESPACE_IMAGE")]
-    pub image: Option<String>,
-    /// A file holding the default image. On SIGHUP, the proxy reads it again
-    /// and swaps the default without dropping requests.
-    #[arg(long, env = "STATESPACE_IMAGE_FILE")]
-    pub image_file: Option<PathBuf>,
-    /// Where the default listens, such as `http://localhost:8000`. The proxy
-    /// only routes; a controller runs the arms.
-    #[arg(long, env = "STATESPACE_DEFAULT")]
-    pub default: Option<String>,
-    /// The port the app listens on in its container. Defaults to the
-    /// image's `EXPOSE`. With `--image`.
-    #[arg(long, env = "STATESPACE_PORT")]
-    pub port: Option<u16>,
-    /// A volume, as `docker run --volume` takes it. Repeat for each. With `--image`.
-    #[arg(long = "volume", value_name = "SOURCE:TARGET")]
-    pub volumes: Vec<String>,
-    /// A memory limit for each container, such as `1g`. With `--image`.
-    #[arg(long)]
-    pub memory: Option<String>,
-    /// A CPU limit for each container, such as `1.5`. With `--image`.
-    #[arg(long)]
-    pub cpus: Option<String>,
-    /// Let a request name the running arm that serves it: a browser opens a
-    /// URL with `?ssp_arm=exp/price/lower`, which a cookie keeps for an hour,
-    /// and an API client sends the header `ssp-arm: exp/price/lower`. These
-    /// visits are recorded as overrides. Without this flag, both are ignored.
-    #[arg(
-        long,
-        env = "STATESPACE_OVERRIDES",
-        value_parser = clap::builder::FalseyValueParser::new()
-    )]
-    pub overrides: bool,
+    /// The runtime token of the app, from `ssp token add`.
+    #[arg(long, env = "STATESPACE_TOKEN", hide_env_values = true)]
+    pub token: String,
 }
 
-#[derive(Args)]
-pub struct ControllerArgs {
-    #[command(flatten)]
-    pub shared: Shared,
-    /// The Deployment that runs the app's default.
-    #[arg(long, env = "STATESPACE_DEPLOYMENT")]
-    pub deployment: String,
-    /// The default's app container. Defaults to its first container other
-    /// than `statespace-proxy`.
-    #[arg(long, env = "STATESPACE_CONTAINER")]
-    pub container: Option<String>,
-    /// The namespace of the Deployment. Defaults to the controller's own.
-    #[arg(long, env = "STATESPACE_NAMESPACE")]
-    pub namespace: Option<String>,
+#[derive(Subcommand)]
+pub enum ProxyCommand {
+    /// Run live, the control, and the arms as Docker containers on this machine.
+    Docker {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        docker: DockerArgs,
+    },
+}
+
+#[derive(Args, Clone)]
+pub struct DockerArgs {
+    /// A file that holds the live image. When the file changes, the proxy
+    /// deploys the new live image without dropping requests.
+    #[arg(long, env = "STATESPACE_IMAGE_FILE")]
+    pub image_file: PathBuf,
+    /// The port the app listens on in its container. Defaults to the
+    /// image's first `EXPOSE` port.
+    #[arg(long)]
+    pub port: Option<u16>,
+    /// A path that must answer 200 before a container gets traffic. Without
+    /// it, a container is ready when its port accepts connections.
+    #[arg(long)]
+    pub health: Option<String>,
+    /// A volume, as `docker run --volume` takes it. Repeat for each.
+    #[arg(long = "volume", value_name = "SOURCE:TARGET")]
+    pub volumes: Vec<String>,
+    /// A memory limit for each container, such as `1g`.
+    #[arg(long)]
+    pub memory: Option<String>,
+    /// A CPU limit for each container, such as `1.5`.
+    #[arg(long)]
+    pub cpus: Option<String>,
 }
 
 #[cfg(test)]
@@ -279,78 +317,89 @@ mod tests {
     fn parses_the_commands() {
         for arguments in [
             vec!["ssp", "whoami"],
-            vec!["ssp", "logout", "--all"],
+            vec!["ssp", "logout"],
             vec![
                 "ssp",
-                "apply",
+                "init",
                 "--image",
-                "ghcr.io/acme/web:abc",
-                "--dry-run",
+                "ghcr.io/acme/shop@${{ steps.build.outputs.digest }}",
             ],
-            vec!["ssp", "status"],
-            vec!["ssp", "status", "https://github.com/acme/web/pull/418"],
-            vec!["ssp", "stop", "https://github.com/acme/web/pull/418", "."],
             vec![
                 "ssp",
+                "app",
+                "add",
+                "shop-prod",
+                "--note",
+                "shop, all traffic",
+            ],
+            vec![
+                "ssp",
+                "app",
+                "add",
+                "shop-dev",
+                "--repo",
+                "acme/shop",
+                "--path",
+                "shop",
+            ],
+            vec!["ssp", "app", "list"],
+            vec!["ssp", "app", "show", "shop-prod"],
+            vec![
+                "ssp",
+                "app",
                 "stop",
-                "sandbox/price",
-                "--reason",
+                "shop-prod",
+                "--note",
                 "checkout errors > 2%",
             ],
-            vec!["ssp", "resume", "https://github.com/acme/web"],
+            vec!["ssp", "app", "resume", "shop-prod"],
+            vec!["ssp", "app", "remove", "shop-prod"],
             vec![
                 "ssp",
-                "proxy",
+                "arm",
+                "add",
+                "a1b2c3d",
                 "--app",
-                "web",
-                "--image",
-                "ghcr.io/acme/web:main",
-                "--arm-env",
-                "A=b",
-                "--memory",
-                "1g",
+                "shop-prod",
+                "--share",
+                "0.1",
             ],
+            vec!["ssp", "arm", "list", "--app", "shop-prod"],
+            vec!["ssp", "arm", "show", "A1B2C3D4", "--app", "shop-prod"],
             vec![
                 "ssp",
-                "proxy",
+                "arm",
+                "stop",
+                "a1b2c3d",
                 "--app",
-                "web",
-                "--default",
-                "http://localhost:8000",
+                "shop-prod",
+                "--note",
+                "x",
             ],
-            vec![
-                "ssp",
-                "proxy",
-                "--app",
-                "web",
-                "--default",
-                "http://localhost:8000",
-                "--overrides",
-            ],
-            vec![
-                "ssp",
-                "controller",
-                "kubernetes",
-                "--app",
-                "web",
-                "--deployment",
-                "web",
-            ],
-            vec![
-                "ssp", "token", "create", "--name", "edge", "--preset", "runtime",
-            ],
+            vec!["ssp", "arm", "resume", "a1b2c3d", "--app", "shop-prod"],
+            vec!["ssp", "arm", "remove", "a1b2c3d", "--app", "shop-prod"],
             vec![
                 "ssp",
                 "token",
-                "create",
-                "--name",
-                "sql",
-                "--scope",
-                "query:read",
+                "add",
                 "--app",
-                "web",
+                "shop-prod",
+                "--note",
+                "proxy",
             ],
-            vec!["ssp", "token", "revoke", "--all", "--yes"],
+            vec!["ssp", "token", "list"],
+            vec!["ssp", "token", "remove", "tok_1"],
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
+                "--app",
+                "shop-dev",
+                "--token",
+                "t",
+                "--image-file",
+                "/etc/shop/image",
+            ],
         ] {
             Cli::try_parse_from(&arguments)
                 .unwrap_or_else(|error| panic!("{arguments:?}: {error}"));
@@ -358,59 +407,70 @@ mod tests {
     }
 
     #[test]
-    fn overrides_are_off_unless_asked() {
-        let proxy = |arguments: &[&str]| {
-            let base = ["ssp", "proxy", "--default", "http://localhost:8000"];
-            let Command::Proxy(proxy) = Cli::try_parse_from(base.iter().chain(arguments))
-                .unwrap()
-                .command
-            else {
-                panic!("a proxy");
-            };
-            proxy.overrides
-        };
-        assert!(!proxy(&[]));
-        assert!(proxy(&["--overrides"]));
-    }
-
-    #[test]
-    fn rejects_unknown_scopes_and_ambiguous_proxies() {
+    fn rejects_wrong_values_and_old_commands() {
         for arguments in [
+            vec!["ssp", "app", "add", "Shop"],
+            vec!["ssp", "app", "add", "shop_prod"],
+            vec!["ssp", "app", "stop", "shop", "--note", ""],
+            vec!["ssp", "app", "stop", "shop", "--note", "two\nlines"],
+            vec!["ssp", "arm", "add", "a1b2c3", "--app", "shop"],
+            vec!["ssp", "arm", "add", "zzzzzzz", "--app", "shop"],
             vec![
-                "ssp",
-                "token",
-                "create",
-                "--name",
-                "a",
-                "--scope",
-                "keys:manage",
+                "ssp", "arm", "add", "a1b2c3d", "--app", "shop", "--share", "0",
             ],
             vec![
-                "ssp",
-                "token",
-                "create",
-                "--name",
-                "a",
-                "--preset",
-                "publisher",
+                "ssp", "arm", "add", "a1b2c3d", "--app", "shop", "--share", "1.5",
             ],
-            vec!["ssp", "proxy", "--app", "web"],
-            vec!["ssp", "stop"],
-            vec!["ssp", "resume"],
+            vec!["ssp", "arm", "add", "a1b2c3d"],
+            vec!["ssp", "status"],
+            vec!["ssp", "apply", "--image", "x"],
+            vec!["ssp", "stop", "shop"],
+            vec!["ssp", "controller", "kubernetes"],
+            vec!["ssp", "proxy", "--app", "shop", "--token", "t"],
             vec![
                 "ssp",
                 "proxy",
+                "docker",
                 "--app",
-                "web",
-                "--image",
-                "web:main",
-                "--default",
-                "http://localhost:8000",
+                "shop",
+                "--token",
+                "t",
+                "--image-file",
+                "f",
+                "--overrides",
             ],
-            vec!["ssp", "controller", "--app", "web", "--deployment", "web"],
-            vec!["ssp", "token", "revoke"],
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
+                "--app",
+                "shop",
+                "--token",
+                "t",
+                "--image-file",
+                "f",
+                "--redact",
+                "x",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
+                "--app",
+                "shop",
+                "--token",
+                "t",
+                "--image-file",
+                "f",
+                "--max-arms",
+                "3",
+            ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }
+        let long = "x".repeat(201);
+        assert!(Cli::try_parse_from(["ssp", "app", "stop", "shop", "--note", &long]).is_err());
+        let most = "x".repeat(200);
+        assert!(Cli::try_parse_from(["ssp", "app", "stop", "shop", "--note", &most]).is_ok());
     }
 }

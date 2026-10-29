@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use crate::{
     api::{Api, decode},
     config::Settings,
+    credential::{Found, Source},
     output::{emit, text},
 };
 
@@ -34,65 +35,46 @@ pub fn login(api: &Api, no_open: bool) -> anyhow::Result<()> {
         eprintln!("Open {}", login.verification_url);
     }
     let token = wait_for_approval(api, &login)?;
-    let me: Value = api.with_token(token.clone()).get("/v1/me")?;
+    let me: Value = api
+        .with_credential(Found::Token(Source::Session, token.clone()))
+        .get("/v1/whoami")?;
     Settings {
         endpoint: Some(api.endpoint().into()),
         token: Some(token),
     }
     .save()?;
-    emit(
-        &json!({ "status": "signed_in", "person": me["person"], "workspaces": me["workspaces"] }),
-        || {
-            let workspaces: Vec<String> = me["workspaces"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|workspace| text(&workspace["login"]))
-                .collect();
-            let login = text(&me["person"]["login"]);
-            match workspaces.as_slice() {
-                [] => format!(
-                    "Signed in as {login}. Install the Statespace GitHub App at \
-                     https://statespace.com to make a workspace."
-                ),
-                [one] => format!("Signed in as {login}, in the workspace {one}."),
-                many => format!(
-                    "Signed in as {login}. Your workspaces: {}. Commands use the owner of \
-                     their repository, or --workspace.",
-                    many.join(", ")
-                ),
-            }
-        },
-    )
+    emit(&json!({ "status": "signed_in", "whoami": me }), || {
+        let login = me["person"]["login"]
+            .as_str()
+            .map_or_else(|| text(&me["login"]), str::to_owned);
+        format!("Signed in as {login}.")
+    })
 }
 
-/// Sign this terminal out, or every session of the account with `all`. The
-/// saved session is forgotten even when Statespace cannot be reached.
-pub fn logout(api: &Api, all: bool) -> anyhow::Result<()> {
-    let ended = match api.token() {
-        Some(_) if all => api
-            .send::<Value>(
-                Method::POST,
-                "/v1/tokens/revoke-all",
-                &json!({ "kind": "session" }),
-            )
-            .map(|response| response["revoked"].clone()),
-        Some(_) => api.delete("/v1/auth/session").map(|()| json!(1)),
-        None => Ok(json!(0)),
+/// Sign this terminal out. The saved session is forgotten even when
+/// Statespace cannot be reached.
+pub fn logout(api: &Api) -> anyhow::Result<()> {
+    let settings = Settings::load()?;
+    let ended = match &settings.token {
+        Some(token) => api
+            .with_credential(Found::Token(Source::Session, token.clone()))
+            .send::<Value>(Method::DELETE, "/v1/auth/session", &json!({}))
+            .map(|_| true),
+        None => Ok(false),
     };
     Settings {
-        endpoint: Some(api.endpoint().into()),
+        endpoint: settings.endpoint,
         token: None,
     }
     .save()?;
     let ended = ended?;
     emit(
-        &json!({ "status": "signed_out", "sessions_ended": ended }),
+        &json!({ "status": "signed_out", "session_ended": ended }),
         || {
-            if all {
-                format!("Signed out of {} sessions.", text(&ended))
-            } else {
+            if ended {
                 "Signed out.".into()
+            } else {
+                "No session was saved.".into()
             }
         },
     )
