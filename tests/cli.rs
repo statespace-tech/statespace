@@ -1598,3 +1598,256 @@ fn docker_proxies_run_live_the_control_and_each_arm() {
     assert!(proxy.stop().is_some_and(|status| status.success()));
     assert!(containers().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// The proxy on Kubernetes, in a kind cluster.
+
+fn kubectl(arguments: &[&str]) -> String {
+    let output = std::process::Command::new("kubectl")
+        .args(arguments)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "kubectl {arguments:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// The orchestrator against a real API server: it reads live's digest from
+/// pod status, starts the control and the arm as copies of the Deployment,
+/// and deletes the arm when it leaves the configuration. The proxy runs
+/// outside the cluster through `kubectl proxy`, so it cannot reach the
+/// Services; routing is tested with Cloud Run and Docker.
+#[test]
+fn kind_kubernetes_proxies_copy_the_deployment() {
+    if std::env::var("STATESPACE_KIND_TESTS").as_deref() != Ok("1") {
+        eprintln!("skipped: set STATESPACE_KIND_TESTS=1 and select a kind cluster in kubectl");
+        return;
+    }
+    let namespace = format!("ssptest-{:06x}", rand_suffix());
+    kubectl(&["create", "namespace", &namespace]);
+    struct Namespace(String);
+    impl Drop for Namespace {
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("kubectl")
+                .args(["delete", "namespace", &self.0, "--wait=false"])
+                .output();
+        }
+    }
+    let _namespace = Namespace(namespace.clone());
+    let manifest = r#"
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: shop}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: shop}}
+  template:
+    metadata: {labels: {app: shop}}
+    spec:
+      containers:
+        - name: shop
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["netexec", "--http-port=8080"]
+          ports: [{containerPort: 8080}]
+          readinessProbe: {httpGet: {path: /, port: 8080}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: shop}
+spec:
+  selector: {app: shop}
+  ports: [{port: 80, targetPort: 8080}]
+"#;
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), manifest).unwrap();
+    kubectl(&[
+        "apply",
+        "--namespace",
+        &namespace,
+        "-f",
+        file.path().to_str().unwrap(),
+    ]);
+    kubectl(&[
+        "rollout",
+        "status",
+        "deployment/shop",
+        "--namespace",
+        &namespace,
+        "--timeout=180s",
+    ]);
+    let image_id = kubectl(&[
+        "get",
+        "pods",
+        "--namespace",
+        &namespace,
+        "-l",
+        "app=shop",
+        "-o",
+        "jsonpath={.items[0].status.containerStatuses[0].imageID}",
+    ]);
+    let live_digest = image_id.rsplit("://").next().unwrap().to_owned();
+    assert!(live_digest.contains("@sha256:"), "{live_digest}");
+
+    let kube_port = free_port();
+    let _kube_proxy = Process(
+        std::process::Command::new("kubectl")
+            .args(["proxy", "--port", &kube_port.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
+            "settings": {"subject": "request.cookies.ssp_sid", "overrides": false, "redact": [], "max_arms": 5},
+            "events": [],
+            "live": {"commit": LIVE, "image": live_digest},
+            "control": {"image": live_digest, "ranges": [[0.0, 0.05]]},
+            "arms": [{"commit": ARM, "image": live_digest, "version": 1, "ranges": [[0.05, 0.6]]}],
+            "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    wait_until(30, "kubectl proxy listens", || {
+        TcpStream::connect(("127.0.0.1", kube_port)).is_ok()
+    });
+    let _proxy = Process(
+        std::process::Command::new(cargo_bin("ssp"))
+            .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+            .env("STATESPACE_API", &api)
+            .env("STATESPACE_TOKEN", "runtime-secret")
+            .env(
+                "STATESPACE_KUBE_API",
+                format!("http://127.0.0.1:{kube_port}"),
+            )
+            .args([
+                "proxy",
+                "kubernetes",
+                "--app",
+                "shop-prod",
+                "--deployment",
+                "shop",
+                "--namespace",
+                &namespace,
+            ])
+            .args(["--listen", "127.0.0.1:0"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    wait_until(60, "the report names live's digest", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["live_image"] == live_digest.as_str() && report["orchestrator"] == "kubernetes"
+        })
+    });
+    let names = || {
+        kubectl(&[
+            "get",
+            "deployments",
+            "--namespace",
+            &namespace,
+            "-l",
+            "statespace.com/app=shop-prod",
+            "-o",
+            "jsonpath={.items[*].metadata.name}",
+        ])
+    };
+    wait_until(120, "the control and the arm exist", || {
+        let names = names();
+        names.contains("shop-ssp-control") && names.contains("shop-ssp-a1b2c3d4e5f6")
+    });
+    kubectl(&[
+        "rollout",
+        "status",
+        "deployment/shop-ssp-a1b2c3d4e5f6",
+        "--namespace",
+        &namespace,
+        "--timeout=180s",
+    ]);
+    // The copy has live's pod spec, its own labels, and replicas by share.
+    let replicas = kubectl(&[
+        "get",
+        "deployment",
+        "shop-ssp-a1b2c3d4e5f6",
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.spec.replicas}",
+    ]);
+    assert_eq!(replicas, "2");
+    let control_replicas = kubectl(&[
+        "get",
+        "deployment",
+        "shop-ssp-control",
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.spec.replicas}",
+    ]);
+    assert_eq!(control_replicas, "1");
+    let args = kubectl(&[
+        "get",
+        "deployment",
+        "shop-ssp-a1b2c3d4e5f6",
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.spec.template.spec.containers[0].args}",
+    ]);
+    assert!(args.contains("netexec"), "{args}");
+    let service = kubectl(&[
+        "get",
+        "service",
+        "shop-ssp-a1b2c3d4e5f6",
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.spec.ports[0].port}",
+    ]);
+    assert_eq!(service, "8080");
+    // Live's Service selects none of the copies' pods.
+    let live_pods = kubectl(&[
+        "get",
+        "pods",
+        "--namespace",
+        &namespace,
+        "-l",
+        "app=shop",
+        "-o",
+        "name",
+    ]);
+    assert_eq!(live_pods.lines().count(), 2);
+    wait_until(60, "the holder reports the units ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units
+                    .iter()
+                    .any(|unit| unit["side"] == "arm" && unit["ready"] == true)
+            })
+        })
+    });
+
+    // The arm leaves the configuration: its Deployment and Service go.
+    state.lock().unwrap().config["arms"] = json!([]);
+    wait_until(60, "the arm is deleted", || {
+        !names().contains("shop-ssp-a1b2c3d4e5f6")
+    });
+    let services = kubectl(&[
+        "get",
+        "services",
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.items[*].metadata.name}",
+    ]);
+    assert!(!services.contains("shop-ssp-a1b2c3d4e5f6"), "{services}");
+    assert!(names().contains("shop-ssp-control"));
+}

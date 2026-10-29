@@ -29,6 +29,7 @@ use self::{
     lease::Lease,
     orchestrator::{
         Orchestrator, Running, Side, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
+        kubernetes::Kubernetes,
     },
     recorder::{Origin, Recorder},
     remote::{ConfigError, Remote},
@@ -62,6 +63,11 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 ProxyCommand::Cloudrun { common, cloudrun } => {
                     let remote = connect(endpoint, &common).await?;
                     serve(Arc::new(CloudRun::new(cloudrun).await?), common, remote).await
+                }
+                ProxyCommand::Kubernetes { common, kubernetes } => {
+                    let remote = connect(endpoint, &common).await?;
+                    let orchestrator = Kubernetes::new(&common.app, kubernetes).await?;
+                    serve(Arc::new(orchestrator), common, remote).await
                 }
             }
         })

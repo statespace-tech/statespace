@@ -1,0 +1,83 @@
+# `ssp proxy kubernetes` in front of the shop: its own Deployment and Service,
+# with a Role that manages the control and the arms in this namespace. Point
+# your Ingress or load balancer at the Service statespace-proxy instead of
+# the Service shop.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: statespace-proxy
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: statespace-proxy
+rules:
+  # Read the shop's Deployment; create, change, and delete its copies.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Read the shop's Service; create and delete the Services of the copies.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  # Read live's image digest from pod status, and the copies' output.
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: statespace-proxy
+subjects:
+  - kind: ServiceAccount
+    name: statespace-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: statespace-proxy
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: statespace-proxy
+spec:
+  # Every replica routes. One replica holds the lease and manages the copies.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: statespace-proxy
+  template:
+    metadata:
+      labels:
+        app: statespace-proxy
+    spec:
+      serviceAccountName: statespace-proxy
+      containers:
+        - name: proxy
+          image: ghcr.io/statespace-tech/statespace:0.3.0
+          args: ["proxy", "kubernetes", "--deployment", "shop"]
+          env:
+            - name: STATESPACE_APP
+              value: shop-prod
+            - name: STATESPACE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: statespace
+                  key: token
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: statespace-proxy
+spec:
+  selector:
+    app: statespace-proxy
+  ports:
+    - port: 80
+      targetPort: 8080

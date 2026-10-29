@@ -282,6 +282,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         cloudrun: CloudRunArgs,
     },
+    /// Run the control and the arms as copies of a Kubernetes Deployment.
+    Kubernetes {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        kubernetes: KubernetesArgs,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -344,6 +351,22 @@ pub struct CloudRunArgs {
         default_value = "metadata.google.internal"
     )]
     pub metadata_host: String,
+}
+
+#[derive(Args, Clone)]
+pub struct KubernetesArgs {
+    /// The Deployment that runs live.
+    #[arg(long)]
+    pub deployment: String,
+    /// The namespace of the Deployment. Defaults to the proxy's own.
+    #[arg(long)]
+    pub namespace: Option<String>,
+    /// The Service of live. Defaults to the Deployment's name.
+    #[arg(long)]
+    pub service: Option<String>,
+    /// The app's container in the pod. Defaults to the first container.
+    #[arg(long)]
+    pub container: Option<String>,
 }
 
 #[cfg(test)]
@@ -456,6 +479,19 @@ mod tests {
                 "shop",
                 "--region",
                 "us-east1",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "kubernetes",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--deployment",
+                "shop",
+                "--namespace",
+                "prod",
             ],
         ] {
             Cli::try_parse_from(&arguments)

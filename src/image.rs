@@ -41,6 +41,13 @@ pub fn normalize(repository: &str) -> String {
         .to_owned()
 }
 
+/// `repository@sha256:…` from a container runtime's image ID, which may
+/// carry a scheme such as `docker-pullable://`.
+pub fn digest_reference(image_id: &str) -> Option<String> {
+    let reference = image_id.rsplit("://").next().unwrap_or(image_id);
+    is_digest(reference).then(|| reference.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,6 +62,11 @@ mod tests {
         )));
         assert!(!is_digest("ghcr.io/acme/shop:main"));
         assert!(!is_digest(&format!("shop@sha256:{}", "A".repeat(64))));
+        assert_eq!(
+            digest_reference(&format!("docker-pullable://{digest}")).as_deref(),
+            Some(digest.as_str())
+        );
+        assert_eq!(digest_reference("sha256:abc"), None);
     }
 
     #[test]
