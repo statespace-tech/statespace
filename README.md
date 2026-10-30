@@ -69,7 +69,7 @@ visitors ─► proxy ──┼─► checkout:c0ffee1    ( 5%)  recorded
 - The **reference** is the arm that you added first. To compare a change
   with what runs now, add the live commit as an arm.
 - A **unit** is one running copy of one arm. The proxy runs units on Docker,
-  Cloud Run, or Kubernetes.
+  Cloud Run, Kubernetes, or Fly.io.
 
 Statespace posts the evidence on the commit of each arm as the commit status
 `statespace/<app>/<experiment>`. The status tells where the arm is, never
@@ -256,6 +256,7 @@ request event has the subject; an output event has none.
 ssp proxy docker      --app shop-dev  --image-file /etc/shop/image
 ssp proxy cloudrun    --app shop-prod --service shop --region us-east1
 ssp proxy kubernetes  --app shop-prod --deployment shop --namespace prod
+ssp proxy fly         --app shop-prod --fly-app shop
 ```
 
 Every subcommand takes these flags:
@@ -388,6 +389,46 @@ output and standard error, so the proxy records all lines as `stdout`.
 
 [`examples/kubernetes`](examples/kubernetes) has the manifests.
 
+### Fly.io
+
+`ssp proxy fly` runs as its own Fly.io app in the same organization as the
+app. Live is the Machines of the app in one process group that Statespace
+did not make. Each unit is one Machine of the same app, named
+`ssp-<experiment>-<commit 12>`, with the metadata `statespace.com/app`,
+`statespace.com/experiment`, and `statespace.com/commit`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--fly-app` | The Fly.io app that runs live |
+| `--process-group` | The process group of live. The default is `app` |
+| `--region` | The region of units. The default is the region of live |
+| `--port` | The port of the app. The default is live's internal port |
+| `--live-url` | Live's URL. The default is `http://<fly app>.flycast` |
+| `--fly-token` | A deploy token of the app. Or set `FLY_API_TOKEN` |
+
+A unit is a copy of the config of a live Machine with the unit's image:
+
+1. It keeps the guest size, the environment, the files, the init, and the
+   restart policy. Fly.io gives it the secrets of the app.
+2. It has no services. Thus Fly.io never sends it public or Flycast
+   traffic. The health checks of the services become Machine checks.
+3. It has no mounts. A volume is for one Machine only.
+4. It has no `fly_*` metadata. Thus `fly deploy` and `fly scale` do not
+   change it.
+5. It never gets a variable that starts with `STATESPACE_`.
+
+A unit is ready when its Machine is `started`, runs the unit's image, passes
+all its checks, and accepts a connection. The proxy sends requests to the
+private IPv6 address of the Machine. Thus the app must listen on `[::]`.
+Fly.io must pull the image of each arm: push your builds to
+`registry.fly.io/<fly app>` or to a public registry. Live's image is the
+digest that all live Machines run. During a deploy,
+they differ, and live is not known until the deploy ends. Fly.io joins
+standard output and standard error, so the proxy records all lines as
+`stdout`.
+
+[`examples/fly`](examples/fly) has the `fly.toml` of the proxy.
+
 ## Overrides
 
 With `overrides = true` for an app, a tester can open an arm of a running
@@ -462,7 +503,7 @@ and send rows. It cannot change experiments or read evidence.
 ssp app         add | remove | list | show
 ssp experiment  list | show | update | start | stop        (--app)
 ssp token       add | remove | list                         (--app)
-ssp proxy       docker | cloudrun | kubernetes              (--app)
+ssp proxy       docker | cloudrun | kubernetes | fly        (--app)
 ssp login | logout | whoami
 ```
 

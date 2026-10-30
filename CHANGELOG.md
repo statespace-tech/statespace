@@ -4,6 +4,13 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
+### Added
+
+- `ssp proxy fly --fly-app <app>` runs the arms of experiments as Machines of a Fly.io
+  app. Each unit is a copy of a live Machine with the unit's image, without services,
+  mounts, or `fly_*` metadata, so it gets no public traffic and `fly deploy` leaves it
+  alone. The proxy reaches units on the private network.
+
 ### Fixed
 
 - Cloud Run: a deploy of a new live gets all the traffic again while units run. The
@@ -14,8 +21,9 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ### Changed
 
-- Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, and real Cloud
-  Run) run before each release, and an admin can run them on `main`.
+- Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, real Cloud
+  Run, and real Fly.io) run before each release, and an admin can run them on `main`.
+- The example app listens on IPv6 and IPv4.
 
 ## 0.4.0 - 2026-10-29
 

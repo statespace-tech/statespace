@@ -73,6 +73,41 @@ cargo test --locked --test cli gcp_cloudrun -- --nocapture
 cargo test --locked --test cli gcp_sweeper -- --nocapture
 ```
 
+The Fly.io tests use a stand-in for the Machines API and the logs API. They run
+with `cargo test`.
+
+The real Fly.io test runs `ssp proxy fly` in a dedicated Fly.io app. Use only that
+app, never an app of production or of a customer. The test does these steps:
+
+1. It makes sure that the token can read `STATESPACE_TEST_FLY_APP` and no other app.
+   If not, it stops before it makes anything.
+2. It pushes three images of `examples/app` and an image of `ssp` to the registry of
+   the app. It deploys one image of the example app as live with `fly deploy`.
+3. It runs the proxy as a Machine of the app. The proxy reaches the stand-in for
+   Statespace through a Cloudflare quick tunnel.
+4. It sends requests to `https://<app>.fly.dev`. It checks the arms, that live
+   traffic never reaches a unit, a new deploy of live, and the stop.
+5. It destroys its Machines, also when it fails. The sweeper destroys the Machines
+   of the app that are older than three hours.
+
+The test needs `fly`, Docker, `cloudflared`, and a Linux amd64 build of `ssp`. The
+app needs a private Flycast address, and public addresses for the proxy.
+
+```shell
+fly ips allocate-v6 --private -a statespace-test-fly
+cargo build --release --locked --target x86_64-unknown-linux-musl
+export STATESPACE_FLY_TESTS=1
+export STATESPACE_TEST_FLY_APP=statespace-test-fly
+export FLY_API_TOKEN="$(fly tokens create deploy -a statespace-test-fly -x 2h)"
+export STATESPACE_TEST_SSP_BINARY=$PWD/target/x86_64-unknown-linux-musl/release/ssp
+cargo test --locked --test cli fly_sweeper -- --nocapture
+cargo test --locked --test cli fly_proxies_run_arms -- --nocapture
+cargo test --locked --test cli fly_sweeper -- --nocapture
+```
+
+Set `STATESPACE_TEST_FLY_REGION` for a region other than `iad`, and
+`STATESPACE_TEST_FLY_ORG` to check the organization of the app too.
+
 Run the CLI against a local service by setting its URL.
 
 ```shell
