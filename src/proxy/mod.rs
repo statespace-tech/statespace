@@ -28,8 +28,8 @@ use self::{
     assign::Routing,
     lease::Lease,
     orchestrator::{
-        Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker, fly::Fly,
-        kubernetes::Kubernetes,
+        Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker, fargate::Fargate,
+        fly::Fly, kubernetes::Kubernetes,
     },
     recorder::{Origin, Recorder},
     remote::{ConfigError, Remote},
@@ -67,6 +67,11 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 ProxyCommand::Kubernetes { common, kubernetes } => {
                     let remote = connect(endpoint, &common).await?;
                     let orchestrator = Kubernetes::new(&common.app, kubernetes).await?;
+                    serve(Arc::new(orchestrator), common, remote).await
+                }
+                ProxyCommand::Fargate { common, fargate } => {
+                    let remote = connect(endpoint, &common).await?;
+                    let orchestrator = Fargate::new(&common.app, fargate).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Fly { common, fly } => {

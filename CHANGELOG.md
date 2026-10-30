@@ -6,23 +6,36 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ### Added
 
+- `ssp proxy fargate` runs the arms of experiments on ECS Fargate. Each unit
+  is an ECS service in live's cluster, from a copy of live's task definition
+  with another image. The proxy sends to the tasks' IP addresses, reads
+  output from CloudWatch Logs, and uses the AWS default chain for
+  credentials. `examples/fargate` has the proxy's task definition, service,
+  and policy.
+- The runtime tests also run `ssp proxy fargate` on real ECS Fargate in a
+  sandbox account of AWS.
 - `ssp proxy fly --fly-app <app>` runs the arms of experiments as Machines of a Fly.io
   app. Each unit is a copy of a live Machine with the unit's image, without services,
   mounts, or `fly_*` metadata, so it gets no public traffic and `fly deploy` leaves it
   alone. The proxy reaches units on the private network.
+- The runtime tests also run `ssp proxy fly` on a real Fly.io app.
 
 ### Fixed
 
 - Cloud Run: a deploy of a new live gets all the traffic again while units run. The
   proxy pins live's traffic only while it makes the revision of a unit. Then it gives
   the service its own template and traffic, and adds only the unit's tag.
+- Cloud Run: the proxy reads the output of all units with one Cloud Logging query
+  every 5 seconds, not one query for each unit. When Cloud Logging answers 429, the
+  proxy waits as it asks, or longer each time, and loses no line.
 - Cloud Run: the proxy sends an ID token for the service's URL. Cloud Run refuses an
   ID token for the tag URL at the tag URL.
 
 ### Changed
 
 - Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, real Cloud
-  Run, and real Fly.io) run before each release, and an admin can run them on `main`.
+  Run, real ECS Fargate, and real Fly.io) run before each release, and an admin can
+  run them on `main`.
 - The example app listens on IPv6 and IPv4.
 
 ## 0.4.0 - 2026-10-29

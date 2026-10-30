@@ -1,8 +1,9 @@
 name: Runtime tests
 
 # Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), Cloud Run in
-# the sandbox project, and Fly.io in the dedicated test app. A v* tag runs them before the release; an admin can run
-# them by hand on main.
+# the sandbox project, ECS Fargate in the sandbox account, and Fly.io in the dedicated
+# test app. A v* tag runs them before the release; an admin can run them by hand on
+# main.
 
 on:
   push:
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       skip:
-        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun,fly)"
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun,fargate,fly)"
         required: false
         default: ""
   workflow_call:
@@ -46,6 +47,8 @@ jobs:
             refs/heads/main | refs/tags/v*) ;;
             # TODO: remove after merge. Only to check this workflow on its branch.
             refs/heads/runtime-tests) ;;
+            # TODO: remove after merge. Only to check the Fargate job on its branch.
+            refs/heads/fargate) ;;
             *) echo "::error::Run the runtime tests on main or a v tag."; exit 1 ;;
           esac
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .permission)
@@ -127,6 +130,39 @@ jobs:
       - name: Sweep old test resources
         if: always()
         run: cargo test --locked --test cli gcp_sweeper -- --nocapture
+
+  fargate:
+    name: Fargate
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',fargate,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_FARGATE_TESTS: "1"
+      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
+      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Build first, so the short-lived AWS credentials last for the test.
+      - run: cargo test --locked --test cli --no-run
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          role-session-name: statespace-runtime-tests-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+      - name: Sweep old test resources
+        run: cargo test --locked --test cli aws_sweeper -- --nocapture
+      - run: cargo test --locked --test cli aws_fargate -- --nocapture
+      - name: Sweep old test resources
+        if: always()
+        run: cargo test --locked --test cli aws_sweeper -- --nocapture
 
   fly:
     name: Fly.io

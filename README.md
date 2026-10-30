@@ -69,7 +69,7 @@ visitors ─► proxy ──┼─► checkout:c0ffee1    ( 5%)  recorded
 - The **reference** is the arm that you added first. To compare a change
   with what runs now, add the live commit as an arm.
 - A **unit** is one running copy of one arm. The proxy runs units on Docker,
-  Cloud Run, Kubernetes, or Fly.io.
+  Cloud Run, Kubernetes, ECS Fargate, or Fly.io.
 
 Statespace posts the evidence on the commit of each arm as the commit status
 `statespace/<app>/<experiment>`. The status tells where the arm is, never
@@ -256,6 +256,8 @@ request event has the subject; an output event has none.
 ssp proxy docker      --app shop-dev  --image-file /etc/shop/image
 ssp proxy cloudrun    --app shop-prod --service shop --region us-east1
 ssp proxy kubernetes  --app shop-prod --deployment shop --namespace prod
+ssp proxy fargate     --app shop-prod --cluster shop --service shop \
+                      --live-url http://internal-shop.example.com
 ssp proxy fly         --app shop-prod --fly-app shop
 ```
 
@@ -353,8 +355,10 @@ the most traffic.
 
 The proxy uses the service account of its own service. Give that account
 the role Cloud Run Developer on the app's service, and the role Service
-Account User on the app's runtime service account. To read output, give it
-Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
+Account User on the app's runtime service account. When the images are in
+Artifact Registry, give it Artifact Registry Reader on their repository:
+Cloud Run deploys a revision only when the caller can read its image. To
+read output, give it Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
 give it Cloud Run Invoker on the app's service too.
 
 While the proxy makes the revision of a unit, it pins the service's traffic
@@ -389,6 +393,46 @@ output and standard error, so the proxy records all lines as `stdout`.
 
 [`examples/kubernetes`](examples/kubernetes) has the manifests.
 
+### ECS Fargate
+
+`ssp proxy fargate` runs as its own ECS service in front of the app. Live
+is an ECS service. Each unit is an ECS service in the same cluster, named
+`<service>-ssp-<experiment>-<commit 12>`, at most 255 characters. It runs a
+copy of live's task definition with another image. The unit's service
+copies live's network, launch, and deployment settings, but not its load
+balancers or service discovery. Thus a unit gets no live traffic. The task
+definition and the service have the tags `statespace.com/app`,
+`statespace.com/experiment`, and `statespace.com/commit`. The desired count
+is live's desired count times the share, at least one.
+
+| Flag | Meaning |
+| --- | --- |
+| `--cluster` | The cluster of live's service |
+| `--service` | The service that runs live |
+| `--region` | The region. The default is the region of the AWS configuration |
+| `--live-url` | Where live traffic goes, such as live's internal load balancer. The default is live's first Service Connect name |
+| `--container` | The app's container. The default is the first container with a port |
+| `--unit-ip` | `private` (the default) or `public`: the address of a unit's task that the proxy uses |
+
+Live is the image of the task definition of the service's primary
+deployment. When the image has a tag, the proxy reports the digest that
+live's tasks run. A unit is ready when one of its tasks runs its image and
+is healthy. A container without a health check must accept a TCP
+connection. The proxy sends to the IP address of a task, and reads output
+from CloudWatch Logs. The `awslogs` driver joins standard output and
+standard error, so the proxy records all lines as `stdout`. When a unit
+stops, the proxy deletes its service, and deregisters and deletes its task
+definitions.
+
+The proxy uses the AWS default chain for credentials. On Fargate, this is
+its task role. The role needs the ECS actions on the cluster,
+`iam:PassRole` for live's task role and execution role, and
+`logs:FilterLogEvents` on live's log group. Units get no `STATESPACE_*`
+variable or secret.
+
+[`examples/fargate`](examples/fargate) has the task definition, the service,
+and the policy of the proxy.
+
 ### Fly.io
 
 `ssp proxy fly` runs as its own Fly.io app in the same organization as the
@@ -422,8 +466,8 @@ all its checks, and accepts a connection. The proxy sends requests to the
 private IPv6 address of the Machine. Thus the app must listen on `[::]`.
 Fly.io must pull the image of each arm: push your builds to
 `registry.fly.io/<fly app>` or to a public registry. Live's image is the
-digest that all live Machines run. During a deploy,
-they differ, and live is not known until the deploy ends. Fly.io joins
+digest that all live Machines run. During a deploy, they differ, and live
+is not known until the deploy ends. Fly.io joins
 standard output and standard error, so the proxy records all lines as
 `stdout`.
 
@@ -503,7 +547,7 @@ and send rows. It cannot change experiments or read evidence.
 ssp app         add | remove | list | show
 ssp experiment  list | show | update | start | stop        (--app)
 ssp token       add | remove | list                         (--app)
-ssp proxy       docker | cloudrun | kubernetes | fly        (--app)
+ssp proxy       docker | cloudrun | kubernetes | fargate | fly (--app)
 ssp login | logout | whoami
 ```
 

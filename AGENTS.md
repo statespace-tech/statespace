@@ -2,12 +2,12 @@
 
 An experiment compares commits of one app. Each arm is one commit with an exact share
 of the app's subjects. `ssp app`, `ssp experiment`, and `ssp token` call the Statespace
-API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, and `ssp proxy
-fly` run a reverse proxy in front of the app's live service. Every proxy instance routes
-requests to the arms of running experiments, in the order of `statespace.toml`. Only the
-instance that holds the app's lease starts and stops units, one for each arm of each
-starting or running experiment, through the `Orchestrator` trait in
-`src/proxy/orchestrator`.
+API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
+fargate`, and `ssp proxy fly` run a reverse proxy in front of the app's live service.
+Every proxy instance routes requests to the arms of running experiments, in the order
+of `statespace.toml`. Only the instance that holds the app's lease starts and stops
+units, one for each arm of each starting or running experiment, through the
+`Orchestrator` trait in `src/proxy/orchestrator`.
 
 `../design.md` is the source of truth for the model.
 
@@ -45,6 +45,7 @@ STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
 STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 # Needs a Fly.io test app and its deploy token; see CONTRIBUTING.md
 STATESPACE_FLY_TESTS=1 cargo test --locked --test cli fly_proxies_run_arms
+# Real Cloud Run and Fargate: see CONTRIBUTING.md
 ```
 
 ## Commits

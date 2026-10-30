@@ -1,0 +1,21 @@
+{
+  "cluster": "shop",
+  "serviceName": "statespace-proxy",
+  "taskDefinition": "statespace-proxy",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["subnet-0aaaaaaaaaaaaaaaa", "subnet-0bbbbbbbbbbbbbbbb"],
+      "securityGroups": ["sg-0cccccccccccccccc"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/statespace-proxy/0123456789abcdef",
+      "containerName": "proxy",
+      "containerPort": 8080
+    }
+  ]
+}
