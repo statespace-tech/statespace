@@ -3276,3 +3276,481 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     });
     assert_eq!(sandbox.service(&name)["traffic"], before["traffic"]);
 }
+
+// ---------------------------------------------------------------------------
+// A stand-in for ECS, EC2, and CloudWatch Logs.
+
+const ECR: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/shop";
+const CLUSTER_ARN: &str = "arn:aws:ecs:us-east-1:123456789012:cluster/shop";
+
+#[derive(Default)]
+struct Ecs {
+    /// Services by name.
+    services: HashMap<String, Value>,
+    /// `DescribeTaskDefinition` answers by ARN.
+    definitions: HashMap<String, Value>,
+    /// What the proxy registered and created, as it sent them.
+    registrations: Vec<Value>,
+    creations: Vec<Value>,
+    deletions: Vec<Value>,
+    deregistered: Vec<String>,
+    /// The port of the stand-in app of each unit: the reference's and the
+    /// arm's. The stand-in gives a unit's task definition that port.
+    reference: u16,
+    arm: u16,
+    actions: Vec<String>,
+}
+
+fn fargate_digest(character: char) -> String {
+    format!("{ECR}@sha256:{}", character.to_string().repeat(64))
+}
+
+/// One running task of each active service, on the network interface
+/// `eni-<service>`.
+fn ecs_task(service: &Value) -> Value {
+    let name = service["serviceName"].as_str().unwrap();
+    let definition = service["taskDefinition"].as_str().unwrap();
+    json!({
+        "taskArn": format!("arn:aws:ecs:us-east-1:123456789012:task/shop/{name}-task"),
+        "taskDefinitionArn": definition,
+        "lastStatus": "RUNNING",
+        "attachments": [{"type": "ElasticNetworkInterface", "details": [
+            {"name": "networkInterfaceId", "value": format!("eni-{name}")},
+            // Not reachable: the proxy must use the public address.
+            {"name": "privateIPv4Address", "value": "10.255.255.1"},
+        ]}],
+        "containers": [{"name": "shop", "lastStatus": "RUNNING",
+                        "imageDigest": service["digest"]}],
+    })
+}
+
+fn aws(state: Arc<Mutex<Ecs>>) -> String {
+    let port = serve(move |received| {
+        let mut ecs = state.lock().unwrap();
+        let authorization = received
+            .headers
+            .get("authorization")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            authorization.starts_with("AWS4-HMAC-SHA256 Credential=AKIDSTANDIN/"),
+            "{authorization}"
+        );
+        // EC2 is a query API: the action is in the form body.
+        if let Value::String(form) = &received.body
+            && form.starts_with("Action=DescribeNetworkInterfaces")
+        {
+            assert!(authorization.contains("/us-east-1/ec2/aws4_request"));
+            return (
+                200,
+                "text/xml",
+                "<DescribeNetworkInterfacesResponse><networkInterfaceSet><item>\
+                 <association><publicIp>127.0.0.1</publicIp></association>\
+                 </item></networkInterfaceSet></DescribeNetworkInterfacesResponse>"
+                    .into(),
+            );
+        }
+        let target = received
+            .headers
+            .get("x-amz-target")
+            .cloned()
+            .unwrap_or_default();
+        let (_, action) = target.split_once('.').unwrap_or_default();
+        ecs.actions.push(action.to_owned());
+        let body = &received.body;
+        let not_found = |message: &str| {
+            json_answer(
+                400,
+                &json!({"__type": "com.amazonaws.ecs#ServiceNotFoundException", "message": message}),
+            )
+        };
+        match action {
+            "DescribeServices" => {
+                let services: Vec<Value> = body["services"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|name| ecs.services.get(name.as_str().unwrap()).cloned())
+                    .collect();
+                json_answer(200, &json!({"services": services, "failures": []}))
+            }
+            "ListServices" => {
+                let arns: Vec<String> = ecs
+                    .services
+                    .values()
+                    .filter(|service| service["status"] == "ACTIVE")
+                    .map(|service| {
+                        format!(
+                            "arn:aws:ecs:us-east-1:123456789012:service/shop/{}",
+                            service["serviceName"].as_str().unwrap()
+                        )
+                    })
+                    .collect();
+                json_answer(200, &json!({"serviceArns": arns}))
+            }
+            "DescribeTaskDefinition" => {
+                match ecs
+                    .definitions
+                    .get(body["taskDefinition"].as_str().unwrap())
+                {
+                    Some(definition) => json_answer(200, definition),
+                    None => not_found("no task definition"),
+                }
+            }
+            "RegisterTaskDefinition" => {
+                ecs.registrations.push(body.clone());
+                let family = body["family"].as_str().unwrap().to_owned();
+                let revision = ecs.registrations.len();
+                let arn = format!(
+                    "arn:aws:ecs:us-east-1:123456789012:task-definition/{family}:{revision}"
+                );
+                let mut definition = body.clone();
+                let tags = definition.as_object_mut().unwrap().remove("tags").unwrap();
+                definition["taskDefinitionArn"] = json!(arn);
+                definition["revision"] = json!(revision);
+                // The stand-in app of the unit listens on its own port.
+                let port = if family.contains(&LIVE[..12]) {
+                    ecs.reference
+                } else {
+                    ecs.arm
+                };
+                definition["containerDefinitions"][0]["portMappings"][0]["containerPort"] =
+                    json!(port);
+                let answer = json!({"taskDefinition": definition, "tags": tags});
+                ecs.definitions.insert(arn, answer.clone());
+                json_answer(200, &answer)
+            }
+            "CreateService" => {
+                ecs.creations.push(body.clone());
+                let name = body["serviceName"].as_str().unwrap().to_owned();
+                let definition = &ecs.definitions[body["taskDefinition"].as_str().unwrap()];
+                let image = definition["taskDefinition"]["containerDefinitions"][0]["image"]
+                    .as_str()
+                    .unwrap();
+                let digest = image.split_once('@').unwrap().1.to_owned();
+                let mut service = body.clone();
+                service["status"] = json!("ACTIVE");
+                service["clusterArn"] = json!(CLUSTER_ARN);
+                service["digest"] = json!(digest);
+                service.as_object_mut().unwrap().remove("cluster");
+                ecs.services.insert(name, service.clone());
+                json_answer(200, &json!({"service": service}))
+            }
+            "DeleteService" => {
+                ecs.deletions.push(body.clone());
+                let name = body["service"].as_str().unwrap();
+                match ecs.services.get_mut(name) {
+                    Some(service) => {
+                        service["status"] = json!("DRAINING");
+                        json_answer(200, &json!({"service": service}))
+                    }
+                    None => not_found("no service"),
+                }
+            }
+            "ListTasks" => {
+                let name = body["serviceName"].as_str().unwrap();
+                let arns: Vec<String> = match ecs.services.get(name) {
+                    Some(service)
+                        if service["status"] == "ACTIVE" && body["desiredStatus"] == "RUNNING" =>
+                    {
+                        vec![ecs_task(service)["taskArn"].as_str().unwrap().to_owned()]
+                    }
+                    _ => Vec::new(),
+                };
+                json_answer(200, &json!({"taskArns": arns}))
+            }
+            "DescribeTasks" => {
+                let tasks: Vec<Value> = ecs
+                    .services
+                    .values()
+                    .map(ecs_task)
+                    .filter(|task| body["tasks"].as_array().unwrap().contains(&task["taskArn"]))
+                    .collect();
+                json_answer(200, &json!({"tasks": tasks}))
+            }
+            "ListTaskDefinitions" => {
+                let prefix = body["familyPrefix"].as_str().unwrap();
+                let arns: Vec<&String> = ecs
+                    .definitions
+                    .keys()
+                    .filter(|arn| arn.contains(&format!("/{prefix}:")))
+                    .filter(|arn| !ecs.deregistered.contains(arn))
+                    .collect();
+                json_answer(200, &json!({"taskDefinitionArns": arns}))
+            }
+            "DeregisterTaskDefinition" => {
+                let arn = body["taskDefinition"].as_str().unwrap().to_owned();
+                ecs.deregistered.push(arn);
+                json_answer(200, &json!({}))
+            }
+            "DeleteTaskDefinitions" => json_answer(200, &json!({"taskDefinitions": []})),
+            "FilterLogEvents" => {
+                assert_eq!(body["logGroupName"], "/ecs/shop");
+                let events: Vec<Value> = body["logStreamNames"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|stream| {
+                        let stream = stream.as_str().unwrap();
+                        assert!(stream.starts_with("ecs/shop/"), "{stream}");
+                        [
+                            json!({"eventId": format!("{stream}-1"), "logStreamName": stream,
+                                   "timestamp": 4_102_444_800_000_i64,
+                                   "message": "{\"event\": \"signup\", \"card\": \"4242424242424242\"}\n"}),
+                            json!({"eventId": format!("{stream}-2"), "logStreamName": stream,
+                                   "timestamp": 4_102_444_800_001_i64,
+                                   "message": "FATAL out of memory"}),
+                        ]
+                    })
+                    .collect();
+                json_answer(200, &json!({"events": events}))
+            }
+            _ => json_answer(
+                400,
+                &json!({"__type": "UnknownOperationException", "message": target}),
+            ),
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A proxy on Fargate runs each unit as an ECS service from a copy of live's
+/// task definition, sends to the task's address, records the unit's
+/// CloudWatch Logs, and deletes the services and task definitions of an
+/// experiment that stops.
+#[test]
+fn fargate_proxies_run_units_as_services() {
+    let live = echo("live");
+    let reference = echo("reference");
+    let arm = echo("arm");
+    let live_arn = "arn:aws:ecs:us-east-1:123456789012:task-definition/shop:7";
+    let live_service = json!({
+        "serviceName": "shop", "status": "ACTIVE", "clusterArn": CLUSTER_ARN,
+        "desiredCount": 4, "launchType": "FARGATE", "platformVersion": "LATEST",
+        "taskDefinition": live_arn,
+        "networkConfiguration": {"awsvpcConfiguration": {
+            "subnets": ["subnet-1"], "securityGroups": ["sg-1"], "assignPublicIp": "ENABLED"}},
+        "loadBalancers": [{"targetGroupArn": "arn:aws:elasticloadbalancing:tg/shop",
+                           "containerName": "shop", "containerPort": 8000}],
+        "tags": [{"key": "team", "value": "web"}],
+        "deployments": [{"status": "PRIMARY", "taskDefinition": live_arn}],
+        "digest": format!("sha256:{}", "1".repeat(64)),
+    });
+    let live_definition = json!({
+        "taskDefinition": {
+            "taskDefinitionArn": live_arn, "family": "shop", "revision": 7, "status": "ACTIVE",
+            "requiresCompatibilities": ["FARGATE"], "networkMode": "awsvpc",
+            "cpu": "256", "memory": "512",
+            "executionRoleArn": "arn:aws:iam::123456789012:role/shop-execution",
+            "containerDefinitions": [{
+                "name": "shop", "image": format!("{ECR}:main"),
+                "portMappings": [{"containerPort": 8000}],
+                "environment": [{"name": "MODE", "value": "prod"}],
+                "logConfiguration": {"logDriver": "awslogs", "options": {
+                    "awslogs-group": "/ecs/shop", "awslogs-region": "us-east-1",
+                    "awslogs-stream-prefix": "ecs"}},
+            }],
+        },
+        "tags": [],
+    });
+    let ecs = Arc::new(Mutex::new(Ecs {
+        services: HashMap::from([("shop".to_owned(), live_service)]),
+        definitions: HashMap::from([(live_arn.to_owned(), live_definition)]),
+        reference,
+        arm,
+        ..Ecs::default()
+    }));
+    let endpoint = aws(ecs.clone());
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
+            "settings": {"overrides": false, "redact": ["\\b\\d{16}\\b"]},
+            "live": {"commit": LIVE, "image": fargate_digest('1')},
+            "experiments": [{
+                "name": "checkout", "version": 3, "state": "running",
+                "subject": null, "eligibility": null,
+                "events": [{"name": "signup", "source": "stdout",
+                            "match": "stdout.json.event == \"signup\""}],
+                "arms": [
+                    {"commit": LIVE, "image": fargate_digest('1'), "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": fargate_digest('2'), "ranges": [[0.4, 0.8]]},
+                ],
+            }],
+            "lease": null, "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("AWS_ACCESS_KEY_ID", "AKIDSTANDIN")
+        .env("AWS_SECRET_ACCESS_KEY", "secret-standin")
+        .env_remove("AWS_SESSION_TOKEN")
+        .env_remove("AWS_PROFILE")
+        .env("AWS_CONFIG_FILE", directory.path().join("aws-config"))
+        .env(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            directory.path().join("aws-credentials"),
+        )
+        .env("AWS_EC2_METADATA_DISABLED", "true")
+        .env("AWS_ENDPOINT_URL_ECS", &endpoint)
+        .env("AWS_ENDPOINT_URL_EC2", &endpoint)
+        .env("AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", &endpoint)
+        .args(["proxy", "fargate", "--app", "shop-prod"])
+        .args([
+            "--cluster",
+            "shop",
+            "--service",
+            "shop",
+            "--region",
+            "us-east-1",
+        ])
+        .args(["--live-url", &format!("http://127.0.0.1:{live}")])
+        .args(["--unit-ip", "public"]);
+    let (_proxy, port) = spawn_proxy(command);
+    let reference_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+    let get = |subject: &str| -> Option<Value> {
+        send(
+            port,
+            "GET",
+            "/checkout",
+            &[
+                ("cookie", &format!("ssp_sid={subject}")),
+                ("x-statespace-arm", "spoofed"),
+            ],
+        )?
+        .json()
+        .ok()
+    };
+    wait_until(60, "both arms of checkout serve", || {
+        get(&arm_subject).is_some_and(|body| body["name"] == "arm")
+            && get(&reference_subject).is_some_and(|body| body["name"] == "reference")
+    });
+
+    // Each unit is a service from a copy of live's task definition with its
+    // own image, tagged with the app, experiment, and commit.
+    let reference_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
+    let arm_name = format!("shop-ssp-checkout-{}", &ARM[..12]);
+    {
+        let ecs = ecs.lock().unwrap();
+        assert_eq!(ecs.creations.len(), 2, "{:?}", ecs.creations);
+        let creation = ecs
+            .creations
+            .iter()
+            .find(|creation| creation["serviceName"] == arm_name.as_str())
+            .unwrap();
+        assert_eq!(creation["cluster"], "shop");
+        assert_eq!(creation["desiredCount"], 2, "4 tasks of live × 0.4");
+        assert_eq!(creation["launchType"], "FARGATE");
+        assert_eq!(creation["platformVersion"], "LATEST");
+        assert_eq!(
+            creation["networkConfiguration"]["awsvpcConfiguration"]["assignPublicIp"],
+            "ENABLED"
+        );
+        assert!(creation.get("loadBalancers").is_none());
+        assert_eq!(
+            creation["tags"],
+            json!([
+                {"key": "team", "value": "web"},
+                {"key": "statespace.com/app", "value": "shop-prod"},
+                {"key": "statespace.com/experiment", "value": "checkout"},
+                {"key": "statespace.com/commit", "value": ARM},
+            ])
+        );
+        let registration = ecs
+            .registrations
+            .iter()
+            .find(|registration| registration["family"] == arm_name.as_str())
+            .unwrap();
+        let container = &registration["containerDefinitions"][0];
+        assert_eq!(container["image"], fargate_digest('2'));
+        assert_eq!(
+            container["environment"],
+            json!([{"name": "MODE", "value": "prod"}])
+        );
+        assert_eq!(registration["cpu"], "256");
+        assert_eq!(
+            registration["executionRoleArn"],
+            "arn:aws:iam::123456789012:role/shop-execution"
+        );
+        assert!(registration.get("taskDefinitionArn").is_none());
+        assert!(!registration.to_string().contains("STATESPACE_"));
+        assert!(ecs.services.contains_key(&reference_name));
+    }
+
+    // The arm gets the experiment and arm headers; live gets neither.
+    let body = get(&arm_subject).unwrap();
+    assert_eq!(body["headers"]["x-statespace-experiment"], "checkout");
+    assert_eq!(body["headers"]["x-statespace-arm"], ARM);
+    assert_eq!(
+        body["headers"]["x-statespace-subject"],
+        arm_subject.as_str()
+    );
+    let body = get(&reference_subject).unwrap();
+    assert_eq!(body["headers"]["x-statespace-arm"], LIVE);
+    let body = get(&live_subject).unwrap();
+    assert_eq!(body["name"], "live");
+    assert!(body["headers"].get("x-statespace-arm").is_none());
+
+    // The report names live's image by the digest its tasks run, and every
+    // unit ready. The units' CloudWatch Logs are recorded and redacted.
+    wait_until(
+        30,
+        "a report with both units ready and their output",
+        || {
+            let state = state.lock().unwrap();
+            let ready = state.reports().iter().any(|report| {
+                report["orchestrator"] == "fargate"
+                    && report["live_image"] == fargate_digest('1').as_str()
+                    && report["units"].as_array().is_some_and(|units| {
+                        units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
+                    })
+            });
+            ready
+                && state
+                    .rows("events")
+                    .iter()
+                    .any(|row| row["name"] == "signup" && row["arm"] == ARM)
+                && state
+                    .rows("stdout")
+                    .iter()
+                    .any(|row| row["text"] == "FATAL out of memory")
+        },
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .rows("stdout")
+            .iter()
+            .all(|row| !row["text"].as_str().unwrap().contains("4242424242424242"))
+    );
+
+    // When checkout stops, its services and task definitions go, and its
+    // subjects go to live.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(30, "the units are deleted", || {
+        let ecs = ecs.lock().unwrap();
+        ecs.deletions.len() == 2 && ecs.deregistered.len() == 2
+    });
+    {
+        let ecs = ecs.lock().unwrap();
+        assert!(
+            ecs.deletions
+                .iter()
+                .all(|deletion| deletion["force"] == true)
+        );
+        assert_eq!(ecs.services["shop"]["status"], "ACTIVE", "live stays");
+        assert!(!ecs.deregistered.contains(&live_arn.to_owned()));
+    }
+    wait_until(30, "the arm's subjects go to live", || {
+        get(&arm_subject).is_some_and(|body| body["name"] == "live")
+    });
+}
