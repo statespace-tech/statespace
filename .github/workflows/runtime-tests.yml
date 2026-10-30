@@ -163,8 +163,11 @@ jobs:
     if: ${{ !contains(format(',{0},', inputs.skip), ',fly,') }}
     runs-on: ubuntu-latest
     # The environment holds FLY_API_TOKEN, a deploy token of the test app only. Its
-    # deployment rules let only main and v* tags use it. Fly.io has no GitHub OIDC.
-    environment: fly-runtime-test
+    # branch rules let only main and v* tags use it. Fly.io has no GitHub OIDC. The
+    # job deploys nothing, so GitHub records no deployment.
+    environment:
+      name: fly-runtime-test
+      deployment: false
     # One run at a time uses the test app.
     concurrency:
       group: fly-runtime-test
