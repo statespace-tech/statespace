@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       skip:
-        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun)"
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun,fargate)"
         required: false
         default: ""
 

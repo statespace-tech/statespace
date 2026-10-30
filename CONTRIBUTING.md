@@ -73,6 +73,40 @@ cargo test --locked --test cli gcp_cloudrun -- --nocapture
 cargo test --locked --test cli gcp_sweeper -- --nocapture
 ```
 
+The Fargate tests use stand-ins for ECS, EC2, and CloudWatch Logs. They run
+with `cargo test`.
+
+The real Fargate test runs `ssp proxy fargate` in a sandbox account of AWS.
+Use only a sandbox account. Never use a production account or an account of
+a customer. The test does these steps:
+
+1. It makes sure that the AWS credentials are of
+   `STATESPACE_TEST_AWS_ACCOUNT`. If not, it stops before it makes anything.
+2. It uses the default VPC. When the account has no default VPC, it makes a
+   small VPC with public subnets and an internet gateway, without a NAT
+   gateway.
+3. It makes a security group that lets only your IP address connect to
+   port 8000, an ECR repository, a log group, and a cluster. It pushes three
+   images of `examples/app`, and runs one as the service. Each name is
+   `statespace-test-<run id>`.
+4. It runs the proxy on your machine with your credentials, and with
+   `--unit-ip public`. It starts an experiment with two arms, deploys a new
+   live, and stops the experiment.
+5. It deletes what it made, also when it fails. The sweeper deletes what
+   runs older than three hours left.
+
+The test needs Docker and the AWS CLI. The tasks use the execution role
+`statespace-test-task-execution` of the account.
+
+```shell
+export STATESPACE_FARGATE_TESTS=1
+export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
+export STATESPACE_TEST_AWS_REGION=us-east-1
+cargo test --locked --test cli aws_sweeper -- --nocapture
+cargo test --locked --test cli aws_fargate -- --nocapture
+cargo test --locked --test cli aws_sweeper -- --nocapture
+```
+
 Run the CLI against a local service by setting its URL.
 
 ```shell

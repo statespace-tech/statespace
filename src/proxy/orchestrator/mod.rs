@@ -1,9 +1,11 @@
 //! Orchestrators run the units of experiments beside live: on Docker, Cloud
-//! Run, or Kubernetes. A new orchestrator is a new module and a new
-//! subcommand of `ssp proxy`.
+//! Run, Kubernetes, or ECS on Fargate. A new orchestrator is a new module and
+//! a new subcommand of `ssp proxy`.
 
+mod aws;
 pub mod cloudrun;
 pub mod docker;
+pub mod fargate;
 mod kube;
 pub mod kubernetes;
 
@@ -109,7 +111,8 @@ pub struct Line {
 pub type OutputStream = mpsc::Receiver<Line>;
 
 pub trait Orchestrator: Send + Sync + 'static {
-    /// The name the report gives: `docker`, `cloudrun`, or `kubernetes`.
+    /// The name the report gives: `docker`, `cloudrun`, `kubernetes`, or
+    /// `fargate`.
     fn name(&self) -> &'static str;
     /// The image that live runs now, by digest.
     fn live(&self) -> impl Future<Output = anyhow::Result<Image>> + Send;

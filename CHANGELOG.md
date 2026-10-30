@@ -4,6 +4,17 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
+### Added
+
+- `ssp proxy fargate` runs the arms of experiments on ECS Fargate. Each unit
+  is an ECS service in live's cluster, from a copy of live's task definition
+  with another image. The proxy sends to the tasks' IP addresses, reads
+  output from CloudWatch Logs, and uses the AWS default chain for
+  credentials. `examples/fargate` has the proxy's task definition, service,
+  and policy.
+- The runtime tests also run `ssp proxy fargate` on real ECS Fargate in a
+  sandbox account of AWS.
+
 ### Fixed
 
 - Cloud Run: a deploy of a new live gets all the traffic again while units run. The

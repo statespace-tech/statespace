@@ -319,6 +319,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         kubernetes: KubernetesArgs,
     },
+    /// Run the arms of experiments as copies of an ECS service on Fargate.
+    Fargate {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        fargate: FargateArgs,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -397,6 +404,47 @@ pub struct KubernetesArgs {
     /// The app's container in the pod. Defaults to the first container.
     #[arg(long)]
     pub container: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct FargateArgs {
+    /// The ECS cluster of the service.
+    #[arg(long)]
+    pub cluster: String,
+    /// The ECS service that runs live.
+    #[arg(long)]
+    pub service: String,
+    /// The AWS region of the cluster. Defaults to the region of the AWS
+    /// configuration, such as `AWS_REGION`.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// Where the proxy sends live traffic, such as the URL of live's load
+    /// balancer. Defaults to live's Service Connect name.
+    #[arg(long)]
+    pub live_url: Option<String>,
+    /// The app's container in the task definition. Defaults to the first
+    /// container with a port mapping.
+    #[arg(long)]
+    pub container: Option<String>,
+    /// Which IP address of a unit's task the proxy sends to. Use `public`
+    /// only when the proxy runs outside the VPC of the tasks.
+    #[arg(long, value_enum, default_value_t = UnitIp::Private)]
+    pub unit_ip: UnitIp,
+    /// The ECS API. For tests.
+    #[arg(long, env = "AWS_ENDPOINT_URL_ECS", hide = true)]
+    pub ecs_api: Option<String>,
+    /// The EC2 API. For tests.
+    #[arg(long, env = "AWS_ENDPOINT_URL_EC2", hide = true)]
+    pub ec2_api: Option<String>,
+    /// The CloudWatch Logs API. For tests.
+    #[arg(long, env = "AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", hide = true)]
+    pub logs_api: Option<String>,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnitIp {
+    Private,
+    Public,
 }
 
 #[cfg(test)]
@@ -519,6 +567,25 @@ mod tests {
                 "shop",
                 "--namespace",
                 "prod",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "fargate",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--cluster",
+                "shop",
+                "--service",
+                "shop",
+                "--region",
+                "us-east-1",
+                "--live-url",
+                "http://shop.internal",
+                "--unit-ip",
+                "public",
             ],
         ] {
             Cli::try_parse_from(&arguments)

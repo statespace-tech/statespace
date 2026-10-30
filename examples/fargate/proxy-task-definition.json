@@ -1,0 +1,40 @@
+{
+  "family": "statespace-proxy",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "256",
+  "memory": "512",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/statespace-proxy",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/statespace-proxy-execution",
+  "containerDefinitions": [
+    {
+      "name": "proxy",
+      "image": "ghcr.io/statespace-tech/statespace:0.4.0",
+      "essential": true,
+      "command": [
+        "proxy", "fargate",
+        "--cluster", "shop",
+        "--service", "shop",
+        "--region", "us-east-1",
+        "--live-url", "http://internal-shop-123456789.us-east-1.elb.amazonaws.com"
+      ],
+      "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+      "environment": [{"name": "STATESPACE_APP", "value": "shop-prod"}],
+      "secrets": [
+        {
+          "name": "STATESPACE_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:statespace-token"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/statespace-proxy",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "proxy",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}
