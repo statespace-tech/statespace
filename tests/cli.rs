@@ -2,10 +2,11 @@
 //! Cloud, Fly.io, Docker, and Kubernetes. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
 //! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
-//! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`.
+//! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real Fly.io
+//! test runs in a dedicated Fly.io app when `STATESPACE_FLY_TESTS=1`.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
@@ -3610,4 +3611,601 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         unit_tags(&sandbox.service(&name)).is_empty()
     });
     assert_eq!(sandbox.service(&name)["traffic"], before["traffic"]);
+}
+
+// ---------------------------------------------------------------------------
+// The proxy on a real Fly.io app.
+
+/// Calls the Machines API for the test app.
+struct FlyClient {
+    app: String,
+    authorization: String,
+    client: reqwest::blocking::Client,
+}
+
+impl FlyClient {
+    fn new(app: &str, token: &str) -> Self {
+        let token = token.trim();
+        let authorization = if token.starts_with("FlyV1 ") || token.starts_with("Bearer ") {
+            token.to_owned()
+        } else if token.starts_with("fm") {
+            format!("FlyV1 {token}")
+        } else {
+            format!("Bearer {token}")
+        };
+        Self {
+            app: app.to_owned(),
+            authorization,
+            client: reqwest::blocking::Client::builder()
+                .timeout(Duration::from_secs(60))
+                .build()
+                .unwrap(),
+        }
+    }
+
+    fn call(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Value) {
+        let mut request = self
+            .client
+            .request(
+                method.parse().unwrap(),
+                format!("https://api.machines.dev{path}"),
+            )
+            .header("authorization", &self.authorization);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().unwrap();
+        let status = response.status().as_u16();
+        let text = response.text().unwrap_or_default();
+        (
+            status,
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
+    }
+
+    /// The Machines of the app that are not destroyed.
+    fn machines(&self) -> Vec<Value> {
+        let (status, machines) = self.call("GET", &format!("/v1/apps/{}/machines", self.app), None);
+        assert_eq!(status, 200, "{machines}");
+        machines
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|machine| {
+                !matches!(machine["state"].as_str(), Some("destroyed" | "destroying"))
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn destroy(&self, id: &str) {
+        let (status, body) = self.call(
+            "DELETE",
+            &format!("/v1/apps/{}/machines/{id}?force=true", self.app),
+            None,
+        );
+        if status != 200 && status != 404 {
+            eprintln!("could not destroy Machine {id}: {status} {body}");
+        }
+    }
+
+    /// Destroy every Machine of the test app that is older than
+    /// `SWEEP_AFTER`. Only the dedicated test app is ever swept.
+    fn sweep(&self) {
+        let now = chrono::Utc::now();
+        let limit = chrono::TimeDelta::from_std(SWEEP_AFTER).unwrap();
+        for machine in self.machines() {
+            let old = machine["created_at"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .is_some_and(|created| now - created.with_timezone(&chrono::Utc) > limit);
+            if old {
+                let id = machine["id"].as_str().unwrap();
+                eprintln!("sweeping Machine {id} ({})", machine["name"]);
+                self.destroy(id);
+            }
+        }
+    }
+}
+
+/// Stop the test before it touches anything when the token is not the
+/// test app's own: the app must be the configured one, in the configured
+/// organization, and the token must reach no other app.
+fn fly_guard(fly: &FlyClient, organization: Option<&str>) {
+    assert!(
+        fly.app.starts_with("statespace-"),
+        "STATESPACE_TEST_FLY_APP must name the dedicated test app, whose name starts with statespace-"
+    );
+    let (status, app) = fly.call("GET", &format!("/v1/apps/{}", fly.app), None);
+    assert_eq!(status, 200, "the token cannot read {}: {app}", fly.app);
+    assert_eq!(app["name"], fly.app.as_str());
+    let slug = app["organization"]["slug"].as_str().unwrap_or_default();
+    if let Some(organization) = organization {
+        assert_eq!(slug, organization, "{} is in another organization", fly.app);
+    }
+    let (status, apps) = fly.call("GET", &format!("/v1/apps?org_slug={slug}"), None);
+    if status == 200 {
+        let names: Vec<&str> = apps["apps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|app| app["name"].as_str())
+            .collect();
+        assert!(
+            names.iter().all(|name| *name == fly.app),
+            "the token reaches other apps ({names:?}); use a deploy token of {} only",
+            fly.app
+        );
+    }
+}
+
+fn flyctl(arguments: &[&str]) -> String {
+    let output = std::process::Command::new("fly")
+        .args(arguments)
+        .env("FLY_NO_UPDATE_CHECK", "1")
+        .output()
+        .expect("flyctl is installed as fly");
+    assert!(
+        output.status.success(),
+        "fly {arguments:?}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// Destroys what the test made, and old leftovers, when the test ends.
+struct FlyCleanup {
+    fly: FlyClient,
+    run: String,
+    id: String,
+    made: Arc<Mutex<HashSet<String>>>,
+}
+
+impl Drop for FlyCleanup {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let logs = std::process::Command::new("fly")
+                .args(["logs", "--app", &self.fly.app, "--no-tail"])
+                .env("FLY_NO_UPDATE_CHECK", "1")
+                .output();
+            if let Ok(logs) = logs {
+                eprintln!("fly logs:\n{}", String::from_utf8_lossy(&logs.stdout));
+            }
+        }
+        let made = self.made.lock().unwrap().clone();
+        for machine in self.fly.machines() {
+            let metadata = &machine["config"]["metadata"];
+            let id = machine["id"].as_str().unwrap();
+            if made.contains(id)
+                || metadata["statespace.com/app"] == self.run.as_str()
+                || metadata[TEST_LABEL] == self.id.as_str()
+            {
+                self.fly.destroy(id);
+            }
+        }
+        self.fly.sweep();
+    }
+}
+
+/// Expose a local port on the internet with a Cloudflare quick tunnel, so
+/// the proxy on Fly.io reaches the stand-in for Statespace.
+fn quick_tunnel(port: u16) -> (Process, String) {
+    let mut child = std::process::Command::new("cloudflared")
+        .args(["tunnel", "--no-autoupdate", "--url"])
+        .arg(format!("http://127.0.0.1:{port}"))
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cloudflared is installed");
+    let stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let pattern = regex::Regex::new(r"https://[a-z0-9-]+\.trycloudflare\.com").unwrap();
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(found) = pattern.find(&line) {
+                let _ = sender.send(found.as_str().to_owned());
+            }
+        }
+    });
+    let process = Process(child);
+    let url = receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("cloudflared prints the tunnel's URL");
+    let client = client();
+    wait_until(120, "the tunnel answers", || {
+        client
+            .get(format!("{url}/v1/whoami"))
+            .send()
+            .is_ok_and(|response| response.status() == 200)
+    });
+    (process, url)
+}
+
+/// `count` subjects whose points fall in `[start, end)` with the salt `salt-1`.
+fn subjects_in(start: f64, end: f64, count: usize) -> Vec<String> {
+    (0..100_000)
+        .map(|index| format!("sid_{index}"))
+        .filter(|subject| {
+            let point = bucket("salt-1", subject);
+            start <= point && point < end
+        })
+        .take(count)
+        .collect()
+}
+
+/// The proxy on a real Fly.io app: live runs as Machines that `fly deploy`
+/// made; the proxy runs as a Machine of the same app and reaches the
+/// stand-in for Statespace through a quick tunnel; each arm runs as a
+/// Machine without services. Needs `fly`, `docker`, `cloudflared`, a Linux
+/// `ssp` binary, `FLY_API_TOKEN`, and `STATESPACE_TEST_FLY_APP`.
+/// The dedicated Fly.io test app and its token, when
+/// `STATESPACE_FLY_TESTS=1`, after the guard.
+fn fly_sandbox() -> Option<(FlyClient, String)> {
+    if std::env::var("STATESPACE_FLY_TESTS").as_deref() != Ok("1") {
+        eprintln!(
+            "skipped: set STATESPACE_FLY_TESTS=1, FLY_API_TOKEN, and STATESPACE_TEST_FLY_APP \
+             to run the Fly.io test"
+        );
+        return None;
+    }
+    let app = std::env::var("STATESPACE_TEST_FLY_APP")
+        .expect("set STATESPACE_TEST_FLY_APP to the dedicated Fly.io test app");
+    let token = std::env::var("FLY_API_TOKEN").expect("set FLY_API_TOKEN to a deploy token");
+    let fly = FlyClient::new(&app, &token);
+    fly_guard(
+        &fly,
+        std::env::var("STATESPACE_TEST_FLY_ORG")
+            .ok()
+            .filter(|organization| !organization.is_empty())
+            .as_deref(),
+    );
+    Some((fly, token))
+}
+
+/// The sweeper: destroys the Machines of the Fly.io test app that are older
+/// than three hours. CI runs it before and after the tests.
+#[test]
+fn fly_sweeper_destroys_old_test_machines() {
+    if let Some((fly, _)) = fly_sandbox() {
+        fly.sweep();
+    }
+}
+
+#[test]
+fn fly_proxies_run_arms_on_a_real_app() {
+    let Some((fly, token)) = fly_sandbox() else {
+        return;
+    };
+    let app = fly.app.clone();
+    let region = std::env::var("STATESPACE_TEST_FLY_REGION")
+        .ok()
+        .filter(|region| !region.is_empty())
+        .unwrap_or_else(|| "iad".into());
+    let id = format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    let run = format!("{TEST_LABEL}-{id}");
+    eprintln!("run {id}: app {run} on the Fly.io app {app} in {region}");
+    fly.sweep();
+    let made = Arc::new(Mutex::new(HashSet::new()));
+    let _cleanup = FlyCleanup {
+        fly: FlyClient::new(&app, &token),
+        run: run.clone(),
+        id: id.clone(),
+        made: made.clone(),
+    };
+    let ips = flyctl(&["ips", "list", "--app", &app, "--json"]);
+    assert!(
+        ips.contains("private"),
+        "{app} has no private Flycast address: run fly ips allocate-v6 --private --app {app}"
+    );
+    flyctl(&["auth", "docker"]);
+
+    // Images: three commits of the example app, and ssp.
+    let push = |tag: &str, context: &Path, arguments: &[&str]| -> String {
+        let reference = format!("registry.fly.io/{app}:{run}-{tag}");
+        let context = context.to_str().unwrap();
+        let mut build = vec![
+            "build",
+            "--quiet",
+            "--platform",
+            "linux/amd64",
+            "--provenance=false",
+            "--tag",
+            &reference,
+        ];
+        build.extend_from_slice(arguments);
+        build.push(context);
+        docker(&build);
+        docker(&["push", "--quiet", &reference]);
+        docker(&[
+            "image",
+            "inspect",
+            "--format",
+            "{{index .RepoDigests 0}}",
+            &reference,
+        ])
+    };
+    let example = Path::new("examples/app");
+    let live_digest = push("live", example, &["--build-arg", "GREETING=hello"]);
+    let arm_digest = push("arm", example, &["--build-arg", "GREETING=hi"]);
+    let new_live_digest = push("live2", example, &["--build-arg", "GREETING=hey"]);
+    let binary = std::env::var("STATESPACE_TEST_SSP_BINARY")
+        .unwrap_or_else(|_| "target/x86_64-unknown-linux-musl/release/ssp".into());
+    assert!(
+        Path::new(&binary).exists(),
+        "no linux/amd64 ssp at {binary}: run cargo build --release --locked \
+         --target x86_64-unknown-linux-musl, or set STATESPACE_TEST_SSP_BINARY"
+    );
+    let ssp_context = tempfile::tempdir().unwrap();
+    std::fs::copy("Dockerfile", ssp_context.path().join("Dockerfile")).unwrap();
+    std::fs::create_dir_all(ssp_context.path().join("image/amd64")).unwrap();
+    std::fs::copy(&binary, ssp_context.path().join("image/amd64/ssp")).unwrap();
+    let ssp_digest = push("ssp", ssp_context.path(), &[]);
+
+    // Live: Machines that fly deploy makes and owns, as a customer's.
+    let directory = tempfile::tempdir().unwrap();
+    let fly_toml = directory.path().join("fly.toml");
+    std::fs::write(
+        &fly_toml,
+        format!(
+            r#"app = "{app}"
+primary_region = "{region}"
+
+[env]
+  SHARED = "from-live"
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 8000
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 0
+
+  [[services.ports]]
+    port = 8081
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    interval = "5s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "get"
+    path = "/"
+"#
+        ),
+    )
+    .unwrap();
+    let deploy = |image: &str| {
+        flyctl(&[
+            "deploy",
+            "--app",
+            &app,
+            "--config",
+            fly_toml.to_str().unwrap(),
+            "--image",
+            image,
+            "--yes",
+            "--wait-timeout",
+            "5m",
+        ]);
+    };
+    deploy(&live_digest);
+    let live_machines = || -> Vec<Value> {
+        fly.machines()
+            .into_iter()
+            .filter(|machine| machine["config"]["metadata"]["fly_process_group"] == "app")
+            .collect()
+    };
+    let live_ids: Vec<String> = live_machines()
+        .iter()
+        .map(|machine| machine["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(!live_ids.is_empty(), "fly deploy made no Machine");
+    made.lock().unwrap().extend(live_ids.iter().cloned());
+    let digest_of = |image: &str| image.split_once('@').unwrap().1.to_owned();
+    for machine in live_machines() {
+        assert_eq!(machine["image_ref"]["digest"], digest_of(&live_digest));
+    }
+
+    // The stand-in for Statespace, reached through a quick tunnel.
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": run, "salt": "salt-1", "settings_hash": "h",
+            "settings": {"overrides": false, "redact": []},
+            "live": {"commit": LIVE, "image": live_digest},
+            "experiments": [{
+                "name": "checkout", "version": 1, "state": "running",
+                "subject": null, "eligibility": null,
+                "events": [{"name": "visit", "source": "stdout",
+                            "match": "stdout.json.event == \"visit\""}],
+                "arms": [
+                    {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
+                ],
+            }],
+            "lease": null, "poll_interval_seconds": 2,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let api_port: u16 = api.rsplit(':').next().unwrap().parse().unwrap();
+    let (_tunnel, tunnel_url) = quick_tunnel(api_port);
+
+    // The proxy: a Machine of the same app with the app's public ports, so
+    // it reaches the units over the private network.
+    let (status, proxy) = fly.call(
+        "POST",
+        &format!("/v1/apps/{app}/machines"),
+        Some(&json!({
+            "name": format!("{run}-proxy"),
+            "region": region,
+            "config": {
+                "image": ssp_digest,
+                "init": {"cmd": [
+                    "proxy", "fly", "--app", run, "--fly-app", app,
+                    "--live-url", format!("http://{app}.flycast:8081"),
+                ]},
+                "env": {
+                    "STATESPACE_API": tunnel_url,
+                    "STATESPACE_TOKEN": "runtime-1",
+                    "FLY_API_TOKEN": token,
+                },
+                "guest": {"cpu_kind": "shared", "cpus": 1, "memory_mb": 256},
+                "services": [{
+                    "protocol": "tcp", "internal_port": 8080,
+                    "ports": [
+                        {"port": 443, "handlers": ["tls", "http"]},
+                        {"port": 80, "handlers": ["http"]},
+                    ],
+                }],
+                "restart": {"policy": "no"},
+                "metadata": {TEST_LABEL: id},
+            },
+        })),
+    );
+    assert_eq!(status, 200, "{proxy}");
+    made.lock()
+        .unwrap()
+        .insert(proxy["id"].as_str().unwrap().to_owned());
+
+    let public = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap();
+    let get = |subject: &str, path: &str| -> Option<Value> {
+        public
+            .get(format!("https://{app}.fly.dev{path}"))
+            .header("cookie", format!("ssp_sid={subject}"))
+            .header("x-statespace-arm", "spoofed")
+            .send()
+            .ok()?
+            .json()
+            .ok()
+    };
+    let reference_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subjects = subjects_in(0.8, 1.0, 20);
+    wait_until(600, "both arms serve through the proxy", || {
+        get(&reference_subject, "/").is_some_and(|body| body["arm"] == LIVE)
+            && get(&arm_subject, "/").is_some_and(|body| body["arm"] == ARM)
+    });
+
+    // Each arm gets its experiment, arm, and subject, and live's
+    // environment without Statespace variables.
+    let reference = get(&reference_subject, "/checkout").unwrap();
+    let arm = get(&arm_subject, "/checkout").unwrap();
+    assert_eq!(
+        (&reference["greeting"], &arm["greeting"]),
+        (&json!("hello"), &json!("hi"))
+    );
+    for body in [&reference, &arm] {
+        assert_eq!(body["experiment"], "checkout");
+        assert_eq!(body["shared"], "from-live");
+        assert_eq!(body["statespace_variables"], json!([]), "{body}");
+    }
+    assert_eq!(arm["subject"], arm_subject.as_str());
+
+    // The holder reports both units ready and live's image.
+    wait_until(120, "a report with both units ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["orchestrator"] == "fly"
+                && report["live_image"] == live_digest.as_str()
+                && report["units"].as_array().is_some_and(|units| {
+                    [LIVE, ARM].iter().all(|commit| {
+                        units
+                            .iter()
+                            .any(|unit| unit["commit"] == *commit && unit["ready"] == true)
+                    })
+                })
+        })
+    });
+
+    // Units are Machines without services or deploy metadata.
+    let unit_machines = || -> Vec<Value> {
+        fly.machines()
+            .into_iter()
+            .filter(|machine| machine["config"]["metadata"]["statespace.com/app"] == run.as_str())
+            .collect()
+    };
+    let units = unit_machines();
+    assert_eq!(units.len(), 2, "{units:?}");
+    for unit in &units {
+        made.lock()
+            .unwrap()
+            .insert(unit["id"].as_str().unwrap().to_owned());
+        let config = &unit["config"];
+        assert!(config.get("services").is_none(), "{config}");
+        assert!(
+            config["metadata"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| !key.starts_with("fly_")),
+            "{config}"
+        );
+        assert_eq!(config["metadata"]["statespace.com/experiment"], "checkout");
+    }
+
+    // Live traffic never reaches a unit: Fly's proxy sends Flycast
+    // requests only to live's Machines, and the units print no such path.
+    let marker = format!("/live-only-{run}");
+    for subject in &live_subjects {
+        let body = get(subject, &marker).expect("live answers");
+        assert_eq!(body["arm"], Value::Null, "{body}");
+        assert_eq!(body["greeting"], "hello", "{body}");
+    }
+    wait_until(60, "the units' output arrives", || {
+        state.lock().unwrap().rows("stdout").iter().any(|row| {
+            row["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("/checkout")
+        })
+    });
+    std::thread::sleep(Duration::from_secs(20));
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .rows("stdout")
+            .iter()
+            .all(|row| !row["text"].as_str().unwrap_or_default().contains(&marker)),
+        "a unit got live traffic"
+    );
+
+    // A customer deploys live again: fly deploy replaces live's image and
+    // leaves the units as they are.
+    let before: Vec<(Value, Value)> = units
+        .iter()
+        .map(|unit| (unit["id"].clone(), unit["config"]["image"].clone()))
+        .collect();
+    deploy(&new_live_digest);
+    wait_until(300, "live runs the new image", || {
+        get(&live_subjects[0], "/").is_some_and(|body| body["greeting"] == "hey")
+    });
+    let mut after: Vec<(Value, Value)> = unit_machines()
+        .iter()
+        .map(|unit| (unit["id"].clone(), unit["config"]["image"].clone()))
+        .collect();
+    let mut before = before;
+    before.sort_by_key(|(id, _)| id.to_string());
+    after.sort_by_key(|(id, _)| id.to_string());
+    assert_eq!(before, after, "fly deploy changed a unit");
+    assert_eq!(get(&arm_subject, "/").unwrap()["greeting"], "hi");
+    assert_eq!(get(&reference_subject, "/").unwrap()["greeting"], "hello");
+
+    // The experiment stops: its Machines are destroyed, and live gets
+    // every request.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(180, "the units are destroyed", || {
+        unit_machines().is_empty()
+    });
+    assert_eq!(get(&arm_subject, "/").unwrap()["greeting"], "hey");
 }
