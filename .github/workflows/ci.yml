@@ -25,10 +25,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
+      # Only the fast tests. The runtime tests run before a release
+      # (runtime-tests.yml).
       - run: cargo test --locked
-        env:
-          # Runs ssp proxy with real containers; GitHub's runners have Docker.
-          STATESPACE_DOCKER_TESTS: "1"
       - run: cargo package --locked
       - run: sh -n install.sh
       - run: shellcheck install.sh

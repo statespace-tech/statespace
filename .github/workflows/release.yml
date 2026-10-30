@@ -3,6 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A rerun of a release whose runtime tests failed: run it on the tag, and name the
+  # runtimes not to test. The release notes then say so.
+  workflow_dispatch:
+    inputs:
+      skip:
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -46,9 +54,19 @@ jobs:
     needs: main
     uses: ./.github/workflows/ci.yml
 
+  runtime:
+    name: Runtime tests
+    needs: main
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/runtime-tests.yml
+    with:
+      skip: ${{ inputs.skip || '' }}
+
   cli:
     name: CLI (${{ matrix.target }})
-    needs: check
+    needs: [check, runtime]
     strategy:
       fail-fast: false
       matrix:
@@ -197,11 +215,23 @@ jobs:
           path: dist
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME" dist/*
-          --repo "$GITHUB_REPOSITORY"
-          --generate-notes
-          --verify-tag
+          SKIP: ${{ inputs.skip || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes=""
+          IFS=, read -ra skipped <<< "$SKIP"
+          for runtime in "${skipped[@]}"; do
+            runtime=$(echo "$runtime" | xargs)
+            if [[ -n "$runtime" ]]; then
+              notes+="${runtime} not tested for this release"$'\n'
+            fi
+          done
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --generate-notes \
+            --notes "$notes" \
+            --verify-tag
       - name: Remove earlier releases
         env:
           GH_TOKEN: ${{ github.token }}

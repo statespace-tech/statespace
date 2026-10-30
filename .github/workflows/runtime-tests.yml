@@ -1,0 +1,126 @@
+name: Runtime tests
+
+# Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), and Cloud Run
+# in the sandbox project. A v* tag runs them before the release; an admin can run
+# them by hand on main.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      skip:
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun)"
+        required: false
+        default: ""
+  workflow_call:
+    inputs:
+      skip:
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-tests-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  allowed:
+    name: Check who runs the tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require an admin and main or a v tag
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/heads/main | refs/tags/v*) ;;
+            # TODO: remove after merge. Only to check this workflow on its branch.
+            refs/heads/runtime-tests) ;;
+            *) echo "::error::Run the runtime tests on main or a v tag."; exit 1 ;;
+          esac
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .permission)
+          if [[ "$permission" != admin ]]; then
+            echo "::error::Only admins can run the runtime tests."
+            exit 1
+          fi
+
+  docker:
+    name: Docker
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',docker,') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked --test cli docker -- --nocapture
+        env:
+          STATESPACE_DOCKER_TESTS: "1"
+
+  kubernetes:
+    name: Kubernetes
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',kubernetes,') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          cluster_name: ssp-test
+      - run: cargo test --locked --test cli kind -- --nocapture
+        env:
+          STATESPACE_KIND_TESTS: "1"
+
+  cloudrun:
+    name: Cloud Run
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',cloudrun,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_CLOUDRUN_TESTS: "1"
+      STATESPACE_TEST_GCP_PROJECT: ${{ vars.GCP_TEST_PROJECT }}
+      STATESPACE_TEST_GCP_REGION: ${{ vars.GCP_TEST_REGION }}
+      STATESPACE_TEST_GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      STATESPACE_TEST_SSP_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/ssp
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          targets: x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Install musl tools and cloudflared
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          curl --fail --silent --show-error --location --output cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb && rm cloudflared.deb
+      # The image of the proxy that runs as its own Cloud Run service.
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - name: Sweep old test resources
+        run: cargo test --locked --test cli gcp_sweeper -- --nocapture
+      - run: cargo test --locked --test cli gcp_cloudrun -- --nocapture
+      - name: Sweep old test resources
+        if: always()
+        run: cargo test --locked --test cli gcp_sweeper -- --nocapture

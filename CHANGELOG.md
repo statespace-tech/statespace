@@ -12,6 +12,11 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 - Cloud Run: the proxy sends an ID token for the service's URL. Cloud Run refuses an
   ID token for the tag URL at the tag URL.
 
+### Changed
+
+- Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, and real Cloud
+  Run) run before each release, and an admin can run them on `main`.
+
 ## 0.4.0 - 2026-10-29
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of
