@@ -1,8 +1,10 @@
 //! Checks of the `ssp` binary against stand-ins for Statespace, Google
-//! Cloud, Docker, and Kubernetes. The Docker test runs when
+//! Cloud, AWS, Docker, and Kubernetes. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
 //! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
-//! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`.
+//! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
+//! Fargate test runs in a sandbox account of AWS when
+//! `STATESPACE_FARGATE_TESTS=1`.
 
 use std::{
     collections::HashMap,
