@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, bail};
-use aws_config::{BehaviorVersion, Region, meta::region::RegionProviderChain};
+use aws_config::{BehaviorVersion, Region};
 use aws_credential_types::{
     Credentials,
     provider::{ProvideCredentials, SharedCredentialsProvider},
@@ -74,12 +74,12 @@ impl Aws {
                 tls::rustls_provider::CryptoMode::Ring,
             ))
             .build_https();
-        let regions = RegionProviderChain::first_try(region.map(Region::new));
-        let config = aws_config::defaults(BehaviorVersion::latest())
-            .http_client(http_client)
-            .region(regions)
-            .load()
-            .await;
+        let mut loader = aws_config::defaults(BehaviorVersion::latest()).http_client(http_client);
+        // Without --region, the loader's own chain finds the region.
+        if let Some(region) = region {
+            loader = loader.region(Region::new(region));
+        }
+        let config = loader.load().await;
         let region = config
             .region()
             .map(ToString::to_string)

@@ -3603,15 +3603,10 @@ fn fargate_proxies_run_units_as_services() {
         .env("AWS_ENDPOINT_URL_ECS", &endpoint)
         .env("AWS_ENDPOINT_URL_EC2", &endpoint)
         .env("AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", &endpoint)
+        // The region comes from the AWS configuration, not --region.
+        .env("AWS_REGION", "us-east-1")
         .args(["proxy", "fargate", "--app", "shop-prod"])
-        .args([
-            "--cluster",
-            "shop",
-            "--service",
-            "shop",
-            "--region",
-            "us-east-1",
-        ])
+        .args(["--cluster", "shop", "--service", "shop"])
         .args(["--live-url", &format!("http://127.0.0.1:{live}")])
         .args(["--unit-ip", "public"]);
     let (_proxy, port) = spawn_proxy(command);
