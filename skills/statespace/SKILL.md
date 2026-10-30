@@ -77,6 +77,7 @@ This command opens a browser, so the user must run it.
 
 7. Ask the user to add a runtime token and to run `ssp proxy` in front of the
    app. The token shows only once. Do not write it to files that Git tracks.
+   See [Run the proxy](#run-the-proxy).
 
    ```shell
    ssp token add --app <app> --note "<where the proxy runs>" --json
@@ -87,6 +88,116 @@ This command opens a browser, so the user must run it.
    ```shell
    ssp app show <app> --json
    ```
+
+## Run the proxy
+
+The proxy runs in front of live, on the platform of live. Pick the
+subcommand from where live runs:
+
+| Live runs on | Subcommand | Each arm runs as |
+| --- | --- | --- |
+| One machine with Docker | `ssp proxy docker` | A container on the machine |
+| Cloud Run | `ssp proxy cloudrun` | A tagged revision with 0% traffic |
+| Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
+| ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
+| Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
+
+Each subcommand needs `--app` (or `STATESPACE_APP`) and the runtime token
+in `STATESPACE_TOKEN`. Units never get a variable that starts with
+`STATESPACE_`. The other flags tell where live runs:
+
+```shell
+ssp proxy docker     --app shop-dev  --image-file /etc/shop/image
+ssp proxy cloudrun   --app shop-prod --service shop --region us-east1
+ssp proxy kubernetes --app shop-prod --deployment shop --namespace prod
+ssp proxy fargate    --app shop-prod --cluster shop --service shop \
+                     --live-url http://internal-shop.example.com
+ssp proxy fly        --app shop-prod --fly-app shop
+```
+
+The proxy uses the identity of the platform where it runs. Before the
+proxy starts, make sure that this identity has these permissions.
+
+### Docker
+
+- The user of the proxy can use the Docker socket.
+- `--image-file` holds the live image. A change of the file deploys a new
+  live.
+
+### Cloud Run
+
+The proxy runs as its own Cloud Run service. Give its service account:
+
+1. Cloud Run Developer (`roles/run.developer`) on the app's service.
+2. Cloud Run Invoker (`roles/run.invoker`) on the app's service.
+3. Service Account User (`roles/iam.serviceAccountUser`) on the runtime
+   service account of the app's service, so that it can act as it.
+4. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
+   repository of the images. Cloud Run deploys a revision only when the
+   caller can read its image.
+5. Logs Viewer (`roles/logging.viewer`) on the project, to read the output
+   of the arms.
+
+Gotchas:
+
+- Deploy the proxy service with CPU always allocated and one instance at
+  minimum (`--no-cpu-throttling --min-instances 1`). The proxy works
+  between requests: it renews its lease and starts and stops arms.
+- The template of the app's service keeps the name of live's revision. A
+  tool that sends the template back with a new image must clear
+  `template.revision`. `gcloud run deploy` does this.
+
+### Kubernetes
+
+The proxy runs as its own Deployment. Its service account needs a Role
+that can manage Deployments and Services, and read pods and pod logs, in
+the namespace of the app.
+
+### ECS Fargate
+
+The proxy runs as its own ECS service. Its task role needs:
+
+1. The ECS actions `CreateService`, `DeleteService`,
+   `DeleteTaskDefinitions`, `DeregisterTaskDefinition`,
+   `DescribeServices`, `DescribeTaskDefinition`, `DescribeTasks`,
+   `ListServices`, `ListTaskDefinitions`, `ListTasks`,
+   `RegisterTaskDefinition`, `TagResource`, and `UpdateService`.
+2. `iam:PassRole` on the task role and the execution role of live, for
+   `ecs-tasks.amazonaws.com`.
+3. `logs:FilterLogEvents` on the log group of live. Live's container must
+   log with `awslogs`.
+
+Gotchas:
+
+- Set `--live-url` to live's internal load balancer. Without it, the proxy
+  uses live's first Service Connect name.
+- The arms use the security group of live. Let the security group of the
+  proxy connect to the app's port.
+- Use `--unit-ip public` only when the proxy runs outside the VPC, such as
+  in a test. It also needs `ec2:DescribeNetworkInterfaces`.
+
+### Fly.io
+
+The proxy runs as its own Fly.io app in the same organization as the app,
+such as `shop-statespace` in front of `shop`. Give it:
+
+1. `FLY_API_TOKEN`: a deploy token of the app, from
+   `fly tokens create deploy -a shop`. Renew it before it expires.
+2. A private Flycast address on the app, from
+   `fly ips allocate-v6 --private -a shop`. Live traffic goes to
+   `http://shop.flycast`.
+
+Gotchas:
+
+- The app must listen on `[::]`. Arms have no services, so Fly.io sends
+  them no public or Flycast traffic. The proxy reaches each arm on its
+  private IPv6 address (6PN).
+- Fly.io must pull the image of each arm. Push the builds to
+  `registry.fly.io/shop` or to a public registry.
+- Arms get the secrets of the app. Never set a secret that starts with
+  `STATESPACE_` on the app.
+- Remove the public addresses of the app, so that all visitors go through
+  the proxy.
 
 ## Starter statespace.toml
 
