@@ -2,8 +2,10 @@
 //! revision of the same service with 0% traffic and the tag
 //! `ssp-<experiment>-<commit 12>`, cut with a short hash when the tag is too
 //! long. A new revision copies the service's template and changes only the
-//! image. The proxy sends to the tag URL with a Google ID token, and reads
-//! output from Cloud Logging.
+//! image. Then the service gets its own template and traffic back, so a
+//! deploy of the customer still moves live. The proxy sends to the tag URL
+//! with a Google ID token for the service's URL, and reads output from Cloud
+//! Logging.
 //!
 //! The proxy uses the Cloud Run Admin API v2 with the credentials of the
 //! metadata server: the service account of the proxy's own service.
@@ -244,6 +246,24 @@ impl CloudRun {
         Ok(digest.to_owned())
     }
 
+    /// Give the service its template and traffic from `before`, with the tag
+    /// of the new revision. Cloud Run takes the change only after it made the
+    /// new revision.
+    async fn restore(&self, before: &Value, revision: &str, tag: &str) -> anyhow::Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while self.get_revision(revision).await.is_err() {
+            if Instant::now() > deadline {
+                bail!("revision {revision} did not appear in 60 seconds");
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        let mut service = self.get_service().await?;
+        if restore(&mut service, before, revision, tag) {
+            self.update_service(&service).await?;
+        }
+        Ok(())
+    }
+
     /// The revision behind a tag of the service.
     fn tagged(service: &Value, tag: &str) -> Option<(String, String)> {
         service["trafficStatuses"]
@@ -307,12 +327,20 @@ impl Orchestrator for CloudRun {
             self.service,
             rand::random::<u32>() & 0xff_ffff
         );
+        let before = service.clone();
         new_revision(&mut service, unit, &name, &tag)?;
         self.update_service(&service).await?;
         eprintln!(
             "[ssp] creating revision {name} with tag {tag} for {}",
             unit.key()
         );
+        if let Err(error) = self.restore(&before, &name, &tag).await {
+            eprintln!(
+                "[ssp] could not give {} its own template and traffic back, so its traffic \
+                 stays on the revision that has it now: {error:#}",
+                self.service
+            );
+        }
         Ok(String::new())
     }
 
@@ -409,8 +437,10 @@ impl Orchestrator for CloudRun {
         stream
     }
 
+    /// An ID token for the service's URL. Cloud Run accepts it at every tag
+    /// URL of the service, and refuses one for the tag URL itself.
     async fn credential(&self, address: &str) -> Option<(HeaderName, HeaderValue)> {
-        match self.token(Some(address)).await {
+        match self.token(Some(&self.live_address)).await {
             Ok(token) => Some((
                 HeaderName::from_static(AUTHORIZATION),
                 HeaderValue::from_str(&format!("Bearer {token}")).ok()?,
@@ -650,8 +680,16 @@ fn revision_ready(revision: &Value) -> bool {
 /// and `tag`. Traffic that follows the latest revision is pinned to the
 /// revision it has now, so the new revision gets none.
 pub fn new_revision(service: &mut Value, unit: &Unit, name: &str, tag: &str) -> anyhow::Result<()> {
-    let latest = service["latestReadyRevision"]
-        .as_str()
+    // `latestReadyRevision` can name an older revision than the one that
+    // gets the latest's traffic.
+    let latest = service["trafficStatuses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|status| status["type"] == LATEST)
+        .and_then(|status| status["revision"].as_str())
+        .filter(|name| !name.is_empty())
+        .or_else(|| service["latestReadyRevision"].as_str())
         .map(short_name)
         .context("the service has no ready revision")?;
     let template = &mut service["template"];
@@ -680,6 +718,34 @@ pub fn new_revision(service: &mut Value, unit: &Unit, name: &str, tag: &str) -> 
     traffic.push(json!({"type": REVISION, "revision": name, "percent": 0, "tag": tag}));
     service["traffic"] = json!(traffic);
     Ok(())
+}
+
+/// Change `service`, after the revision `revision` of a unit exists, back to
+/// the template and traffic of `before`, with the unit's `tag`. The template
+/// is named after the revision it made, so Cloud Run makes no new revision,
+/// and traffic that follows the latest revision follows live again. Returns
+/// false, and changes nothing, when the template of `before` is a unit's:
+/// then the pinned traffic stays.
+pub fn restore(service: &mut Value, before: &Value, revision: &str, tag: &str) -> bool {
+    let mut template = before["template"].clone();
+    if template["labels"].get(EXPERIMENT_LABEL).is_some() {
+        return false;
+    }
+    if template["revision"].as_str().is_none_or(str::is_empty) {
+        let Some(made) = before["latestCreatedRevision"].as_str() else {
+            return false;
+        };
+        template["revision"] = json!(short_name(made));
+    }
+    let mut traffic: Vec<Value> = before["traffic"].as_array().cloned().unwrap_or_default();
+    if traffic.is_empty() {
+        traffic.push(json!({"type": LATEST, "percent": 100}));
+    }
+    traffic.retain(|target| target["tag"] != tag);
+    traffic.push(json!({"type": REVISION, "revision": revision, "percent": 0, "tag": tag}));
+    service["template"] = template;
+    service["traffic"] = json!(traffic);
+    true
 }
 
 fn encode(value: &str) -> String {

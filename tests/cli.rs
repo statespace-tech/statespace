@@ -1039,6 +1039,10 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                     .iter()
                     .map(|target| {
                         let mut status = target.clone();
+                        // The latest revision is the one the template names.
+                        if target["type"] == "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST" {
+                            status["revision"] = template["revision"].clone();
+                        }
                         if let Some(tag) = target["tag"].as_str() {
                             status["uri"] = json!(if tag.contains(&LIVE[..12]) {
                                 google.reference.clone()
@@ -1049,6 +1053,10 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                         status
                     })
                     .collect();
+                if let Some(name) = template["revision"].as_str() {
+                    google.service["latestCreatedRevision"] =
+                        json!(format!("{SERVICE}/revisions/{name}"));
+                }
                 google.service["traffic"] = body["traffic"].clone();
                 google.service["template"] = body["template"].clone();
                 google.service["trafficStatuses"] = json!(statuses);
@@ -1112,6 +1120,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
             "name": SERVICE,
             "uri": format!("http://127.0.0.1:{live}"),
             "latestReadyRevision": format!("{SERVICE}/revisions/shop-00001-abc"),
+            "latestCreatedRevision": format!("{SERVICE}/revisions/shop-00001-abc"),
             "labels": {"team": "web"},
             "template": {"containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
                                          "ports": [{"containerPort": 8080}]}]},
@@ -1217,8 +1226,10 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     });
 
     // The lease holder made one tagged revision for each unit, with 0%
-    // traffic, also for the starting experiment, and pinned live's traffic
-    // to the revision it has.
+    // traffic, also for the starting experiment. While it made each
+    // revision, live's traffic was pinned to the revision it has; then the
+    // service got its own template and traffic back, so a deploy still
+    // moves live.
     let reference_tag = format!("ssp-checkout-{}", &LIVE[..12]);
     let arm_tag = format!("ssp-checkout-{}", &ARM[..12]);
     let landing_tag = format!("ssp-us-landing-{}", &LANDING[..12]);
@@ -1230,12 +1241,28 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
             .all(|tag| traffic.iter().any(|target| target["tag"] == tag.as_str()))
     });
     let patches = test.google.lock().unwrap().patches.clone();
+    assert!(patches.iter().all(|patch| {
+        patch["template"]["labels"]
+            .get("statespace-experiment")
+            .is_none()
+            || patch["traffic"]
+                .as_array()
+                .unwrap()
+                .contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+                        "revision": "shop-00001-abc", "percent": 100}))
+    }));
     let last = patches.last().unwrap();
     let traffic = last["traffic"].as_array().unwrap();
     assert!(
-        traffic.contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-                                     "revision": "shop-00001-abc", "percent": 100})),
+        traffic.contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100})),
         "{traffic:?}"
+    );
+    assert_eq!(
+        last["template"],
+        json!({"containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
+                               "ports": [{"containerPort": 8080}]}],
+               "revision": "shop-00001-abc"}),
+        "the template is live's again"
     );
     assert!(
         traffic
@@ -1258,7 +1285,7 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     );
 
     // The arm gets the experiment and arm headers and a Google ID token for
-    // its URL; the app keeps its own Authorization header.
+    // the service's URL; the app keeps its own Authorization header.
     let (arm_body, arm_response) = get(&arm_subject, "/checkout").unwrap();
     let headers = &arm_body["headers"];
     assert_eq!(headers["x-statespace-experiment"], "checkout");
@@ -1266,10 +1293,10 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     assert_eq!(headers["x-statespace-subject"], arm_subject.as_str());
     assert!(headers.get("x-statespace-side").is_none());
     assert_eq!(headers["authorization"], "Bearer the-app's-own");
-    let arm_url = test.google.lock().unwrap().arm.clone();
+    let live_url = test.google.lock().unwrap().service["uri"].clone();
     assert_eq!(
         headers["x-serverless-authorization"],
-        format!("Bearer id-for-{arm_url}")
+        format!("Bearer id-for-{}", live_url.as_str().unwrap())
     );
     assert_eq!(arm_response["cache-control"], "private, max-age=60");
     let (reference_body, _) = get(&reference_subject, "/").unwrap();

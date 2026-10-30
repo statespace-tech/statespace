@@ -356,14 +356,17 @@ Account User on the app's runtime service account. To read output, give it
 Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
 give it Cloud Run Invoker on the app's service too.
 
-The first unit pins the service's traffic to the revision that has it now,
-so that new revisions of units get no traffic. After you deploy a new live,
-send the traffic to it. The tags of the units stay.
+While the proxy makes the revision of a unit, it pins the service's traffic
+to the revision that has it now. When the revision exists, the proxy gives
+the service its own template and traffic again, and adds only the tag. Thus
+a deploy of a new live gets all the traffic, as before, and the tags of the
+units stay. The service's template keeps the name of live's revision.
 
-```shell
-gcloud run deploy shop --image ghcr.io/acme/shop@sha256:3333…
-gcloud run services update-traffic shop --to-latest
-```
+The proxy uses an ID token for the service's URL. Cloud Run accepts it at
+each tag URL of the service.
+
+The proxy works between requests. Deploy it with CPU that is always
+allocated and with one instance at minimum.
 
 ### Kubernetes
 

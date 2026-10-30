@@ -2,6 +2,16 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- Cloud Run: a deploy of a new live gets all the traffic again while units run. The
+  proxy pins live's traffic only while it makes the revision of a unit. Then it gives
+  the service its own template and traffic, and adds only the unit's tag.
+- Cloud Run: the proxy sends an ID token for the service's URL. Cloud Run refuses an
+  ID token for the tag URL at the tag URL.
+
 ## 0.4.0 - 2026-10-29
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of

@@ -42,8 +42,13 @@ with 0% traffic and a tag.
      --service-account "$proxy" \
      --set-secrets STATESPACE_TOKEN=statespace-token:latest \
      --set-env-vars STATESPACE_APP=shop-prod \
+     --no-cpu-throttling --min-instances 1 \
      --args proxy,cloudrun,--service,shop,--region,us-east1
    ```
+
+   The proxy works between requests: it renews its lease, starts and stops arms, and
+   sends records. Thus it needs CPU that is always allocated, and one instance at
+   minimum.
 
 4. Point the load balancer or the domain mapping at `statespace-proxy` instead of
    `shop`.
@@ -57,19 +62,31 @@ with 0% traffic and a tag.
 - The tag and the service name together have at most 46 characters. A longer tag
   is cut and ends with a short hash. The labels `statespace-experiment` and
   `statespace-commit` of the revision keep the full values.
-- The first time, the proxy pins the traffic of `shop` to the revision that has it
-  now, so a new revision gets none.
-- The proxy sends each request to the tag URL, with an ID token in the header
-  `X-Serverless-Authorization`. The app keeps its own `Authorization` header.
+- While the proxy makes the revision, it pins the traffic of `shop` to the revision
+  that has it now, so the new revision gets none. When the revision exists, the
+  proxy gives `shop` its own template and traffic again, and adds only the tag.
+- The proxy sends each request to the tag URL, with an ID token for the URL of
+  `shop` in the header `X-Serverless-Authorization`. The app keeps its own
+  `Authorization` header.
 - The proxy reads the output of the arms from Cloud Logging.
 - When an experiment stops, the proxy removes the tags of its arms and deletes their
   revisions.
 
-Because the traffic of `shop` is pinned, a deploy does not move traffic by itself.
-Deploy a new live, then send the traffic to it. The tags of the arms stay.
+Deploy a new live as usual. The new revision gets all the traffic, and the tags of
+the arms stay.
 
 ```shell
 gcloud run deploy shop --region us-east1 --image ghcr.io/acme/shop@sha256:3333…
+```
+
+The template of `shop` keeps the name of live's revision. A tool that sends the
+template back with a new image must clear `template.revision`, as `gcloud run deploy`
+does.
+
+If an earlier version of the proxy pinned the traffic of `shop`, send the traffic to
+the latest revision one time:
+
+```shell
 gcloud run services update-traffic shop --region us-east1 --to-latest
 ```
 
