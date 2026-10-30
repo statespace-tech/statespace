@@ -352,8 +352,10 @@ the most traffic.
 
 The proxy uses the service account of its own service. Give that account
 the role Cloud Run Developer on the app's service, and the role Service
-Account User on the app's runtime service account. To read output, give it
-Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
+Account User on the app's runtime service account. When the images are in
+Artifact Registry, give it Artifact Registry Reader on their repository:
+Cloud Run deploys a revision only when the caller can read its image. To
+read output, give it Logs Viewer. The proxy sends an ID token in `X-Serverless-Authorization`, so
 give it Cloud Run Invoker on the app's service too.
 
 While the proxy makes the revision of a unit, it pins the service's traffic

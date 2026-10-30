@@ -21,6 +21,9 @@ with 0% traffic and a tag.
    gcloud iam service-accounts add-iam-policy-binding \
      shop@acme.iam.gserviceaccount.com \
      --member "serviceAccount:$proxy" --role roles/iam.serviceAccountUser
+   # Deploy the images of the arms. Cloud Run checks that the caller can read them.
+   gcloud artifacts repositories add-iam-policy-binding shop --location us-east1 \
+     --member "serviceAccount:$proxy" --role roles/artifactregistry.reader
    # Read the output of the arms.
    gcloud projects add-iam-policy-binding acme \
      --member "serviceAccount:$proxy" --role roles/logging.viewer
