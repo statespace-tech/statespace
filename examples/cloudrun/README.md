@@ -71,7 +71,9 @@ with 0% traffic and a tag.
 - The proxy sends each request to the tag URL, with an ID token for the URL of
   `shop` in the header `X-Serverless-Authorization`. The app keeps its own
   `Authorization` header.
-- The proxy reads the output of the arms from Cloud Logging.
+- The proxy reads the output of the arms from Cloud Logging, with one query for all
+  arms every 5 seconds. When Cloud Logging asks it to slow down, it waits and loses
+  no line.
 - When an experiment stops, the proxy removes the tags of its arms and deletes their
   revisions.
 

@@ -90,9 +90,15 @@ fn answer(mut stream: TcpStream, handler: &dyn Fn(&Received) -> Answer) {
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned())),
     };
     let (status, content_type, body) = handler(&received);
+    // A stand-in that answers 429 asks to wait a second.
+    let retry_after = if status == 429 {
+        "retry-after: 1\r\n"
+    } else {
+        ""
+    };
     let _ = write!(
         stream,
-        "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\n\
+        "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\n{retry_after}\
          cache-control: public, max-age=60\r\ncontent-length: {}\r\n\
          connection: close\r\n\r\n{body}",
         body.len()
@@ -402,7 +408,15 @@ impl Drop for Process {
 
 /// Start a proxy that listens on a port of its choice, and return it with
 /// the port it printed. Its other output is dropped.
-fn spawn_proxy(mut command: std::process::Command) -> (Process, u16) {
+fn spawn_proxy(command: std::process::Command) -> (Process, u16) {
+    let (process, port, _) = spawn_logged_proxy(command);
+    (process, port)
+}
+
+/// Start a proxy as `spawn_proxy` does, and keep what it prints.
+fn spawn_logged_proxy(
+    mut command: std::process::Command,
+) -> (Process, u16, Arc<Mutex<Vec<String>>>) {
     let mut child = command
         .args(["--listen", "127.0.0.1:0"])
         .stdout(Stdio::null())
@@ -411,11 +425,14 @@ fn spawn_proxy(mut command: std::process::Command) -> (Process, u16) {
         .unwrap();
     let stderr = child.stderr.take().unwrap();
     let (sender, receiver) = std::sync::mpsc::channel();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let lines = log.clone();
     std::thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
             if std::env::var_os("SSP_TEST_LOGS").is_some() {
                 eprintln!("{line}");
             }
+            lines.lock().unwrap().push(line.clone());
             if let Some(port) = line
                 .split_once("listening on 127.0.0.1:")
                 .and_then(|(_, port)| port.trim().parse::<u16>().ok())
@@ -428,7 +445,7 @@ fn spawn_proxy(mut command: std::process::Command) -> (Process, u16) {
     let port = receiver
         .recv_timeout(Duration::from_secs(60))
         .expect("the proxy listens");
-    (process, port)
+    (process, port, log)
 }
 
 fn digest(character: char) -> String {
@@ -986,6 +1003,8 @@ struct Google {
     arm: String,
     patches: Vec<Value>,
     id_tokens: Vec<String>,
+    /// The filter of each query of Cloud Logging.
+    log_queries: Vec<String>,
 }
 
 const SERVICE: &str = "projects/acme/locations/us-east1/services/shop";
@@ -1077,23 +1096,31 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
-                let revision = filter
-                    .split("revision_name=\"")
-                    .nth(1)
-                    .and_then(|rest| rest.split('"').next())
-                    .unwrap_or_default()
-                    .to_owned();
+                google.log_queries.push(filter.clone());
+                // The first query is too many, as Cloud Logging says when the
+                // project reads more than its quota.
+                if google.log_queries.len() == 1 {
+                    return json_answer(429, &json!({"error": {"message": "quota"}}));
+                }
                 let log =
                     |stream: &str| format!("projects/acme/logs/run.googleapis.com%2F{stream}");
-                json_answer(
-                    200,
-                    &json!({"entries": [
-                        {"insertId": format!("{revision}-1"), "timestamp": "2099-01-01T00:00:00Z",
-                         "logName": log("stdout"), "jsonPayload": {"event": "signup", "card": "4242424242424242"}},
-                        {"insertId": format!("{revision}-2"), "timestamp": "2099-01-01T00:00:01Z",
-                         "logName": log("stderr"), "textPayload": "FATAL out of memory"},
-                    ]}),
-                )
+                let entries: Vec<Value> = filter
+                    .split("revision_name=\"")
+                    .skip(1)
+                    .filter_map(|rest| rest.split('"').next())
+                    .flat_map(|revision| {
+                        let resource = json!({"labels": {"revision_name": revision}});
+                        [
+                            json!({"insertId": format!("{revision}-1"), "timestamp": "2099-01-01T00:00:00Z",
+                                   "resource": resource, "logName": log("stdout"),
+                                   "jsonPayload": {"event": "signup", "card": "4242424242424242"}}),
+                            json!({"insertId": format!("{revision}-2"), "timestamp": "2099-01-01T00:00:01Z",
+                                   "resource": resource, "logName": log("stderr"),
+                                   "textPayload": "FATAL out of memory"}),
+                        ]
+                    })
+                    .collect();
+                json_answer(200, &json!({"entries": entries}))
             }
             _ => json_answer(
                 404,
@@ -1138,6 +1165,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
         arm: format!("http://127.0.0.1:{arm}"),
         patches: Vec::new(),
         id_tokens: Vec::new(),
+        log_queries: Vec::new(),
     }));
     let google_host = google(google_state.clone());
     let state = Arc::new(Mutex::new(Statespace {
@@ -1362,6 +1390,36 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
                 .iter()
                 .any(|row| row["name"] == "checkout")
     });
+
+    // One query of Cloud Logging reads the output of all three units. The
+    // first answer is 429: the proxy waits as asked and loses no line. The
+    // stand-in gives the same lines to each query, and each line arrives
+    // once.
+    wait_until(30, "the output of every unit", || {
+        test.statespace.lock().unwrap().rows("stdout").len() >= 3
+    });
+    std::thread::sleep(Duration::from_secs(12));
+    {
+        let queries = test.google.lock().unwrap().log_queries.clone();
+        assert!(
+            queries
+                .iter()
+                .any(|filter| filter.matches("revision_name=").count() == 3),
+            "{queries:?}"
+        );
+        let state = test.statespace.lock().unwrap();
+        for table in ["stdout", "stderr"] {
+            let mut units: Vec<String> = state
+                .rows(table)
+                .iter()
+                .map(|row| format!("{}:{}", row["experiment"], row["arm"]))
+                .collect();
+            units.sort();
+            let all = units.len();
+            units.dedup();
+            assert_eq!((all, units.len()), (3, 3), "{table}: {units:?}");
+        }
+    }
     let state = test.statespace.lock().unwrap();
     let runs = state.rows("runs");
     assert!(runs.iter().any(|run| run["experiment"] == "checkout"
@@ -2990,7 +3048,7 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
             &name,
         ])
         .args(["--region", &sandbox.region, "--project", &sandbox.project]);
-    let (proxy, port) = spawn_proxy(command);
+    let (proxy, port, log) = spawn_logged_proxy(command);
     run.processes.push(proxy);
     let proxy_url = format!("http://127.0.0.1:{port}");
     let mut live = Value::Null;
@@ -3019,6 +3077,23 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     );
     assert_eq!(arm["shared"], "from-the-service");
     assert_eq!(arm["experiment"], "checkout");
+    // The output of both arms arrives from Cloud Logging, read with one
+    // query for all units, and Cloud Logging never asks the proxy to slow
+    // down.
+    let output_of_both_arms = |state: &Arc<Mutex<Statespace>>| {
+        let state = state.lock().unwrap();
+        let stdout = state.rows("stdout");
+        [LIVE, ARM].iter().all(|commit| {
+            stdout.iter().any(|row| {
+                row["arm"] == *commit && row["text"].as_str().unwrap_or_default().contains("visit")
+            })
+        })
+    };
+    wait_until(180, "the output of both arms arrives", || {
+        let _ = visit(&proxy_url, &arm_subject, &[]);
+        let _ = visit(&proxy_url, &reference_subject, &[]);
+        output_of_both_arms(&state)
+    });
     let during = sandbox.service(&name);
     let tags = unit_tags(&during);
     assert_eq!(tags.len(), 2, "{tags:?}");
@@ -3181,6 +3256,13 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     );
     let mut proxy = run.processes.pop().unwrap();
     assert!(proxy.stop().is_some_and(|status| status.success()));
+    let log = log.lock().unwrap();
+    assert!(
+        !log.iter().any(|line| line.contains("429")
+            || line.contains("slow down")
+            || line.contains("could not read the output")),
+        "{log:?}"
+    );
 
     // b. The proxy as its own Cloud Run service, with the credentials of the
     // metadata server. It reaches the stand-in through a quick tunnel.
@@ -3221,6 +3303,7 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         reqwest::blocking::get(format!("{public}/v1/runtime/apps/shop-prod"))
             .is_ok_and(|response| response.status() == 200)
     });
+    state.lock().unwrap().received.clear();
     state.lock().unwrap().config["experiments"] = checkout;
     let proxy_service = sandbox.create_service(
         &format!("{name}-proxy"),
@@ -3257,6 +3340,15 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     );
     let arm = visit(&proxy_url, &arm_subject, &caller).unwrap();
     assert_eq!(arm["authorization"], "Bearer the-app's-own");
+    wait_until(
+        180,
+        "the output of both arms arrives from the proxy on Cloud Run",
+        || {
+            let _ = visit(&proxy_url, &arm_subject, &caller);
+            let _ = visit(&proxy_url, &reference_subject, &caller);
+            output_of_both_arms(&state)
+        },
+    );
     assert_eq!(
         visit(&proxy_url, &live_subject, &caller).unwrap()["greeting"],
         "hey"

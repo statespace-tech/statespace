@@ -12,7 +12,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -53,7 +56,14 @@ pub struct CloudRun {
     tokens: Mutex<HashMap<String, (String, Instant)>>,
     /// Revisions that were ready, which never change after.
     ready: Mutex<HashMap<String, (Unit, String)>>,
+    /// Where the lines of each unit go, by tag.
+    listeners: Listeners,
+    /// Whether the reader of the units' lines runs.
+    reading: AtomicBool,
 }
+
+/// Where the lines of each unit go, by the unit's tag.
+type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<Line>>>>;
 
 impl CloudRun {
     pub async fn new(arguments: CloudRunArgs) -> anyhow::Result<Self> {
@@ -78,6 +88,8 @@ impl CloudRun {
             live_address: String::new(),
             tokens: Mutex::default(),
             ready: Mutex::default(),
+            listeners: Listeners::default(),
+            reading: AtomicBool::new(false),
         };
         cloudrun.project = match arguments.project {
             Some(project) => project,
@@ -419,21 +431,30 @@ impl Orchestrator for CloudRun {
         Ok(running)
     }
 
+    /// The lines of a unit. One reader reads the lines of every unit of the
+    /// service with one query per poll, and gives each unit its own.
     fn output(&self, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let tag = tag(&unit.key(), &self.service);
-        let this = Reader {
-            client: self.client.clone(),
-            logging_api: self.logging_api.clone(),
-            project: self.project.clone(),
-            service: self.service.clone(),
-        };
-        let token = TokenSource {
-            metadata: self.metadata.clone(),
-            client: self.client.clone(),
-        };
-        let path = format!("{}/v2/{}", self.run_api, self.path);
-        tokio::spawn(async move { this.read(tag, path, token, sender).await });
+        self.listeners
+            .lock()
+            .expect("never poisoned")
+            .insert(tag, sender);
+        if !self.reading.swap(true, Ordering::SeqCst) {
+            let reader = Reader {
+                client: self.client.clone(),
+                logging_api: self.logging_api.clone(),
+                project: self.project.clone(),
+                service: self.service.clone(),
+                service_url: format!("{}/v2/{}", self.run_api, self.path),
+                tokens: TokenSource {
+                    metadata: self.metadata.clone(),
+                    client: self.client.clone(),
+                },
+                listeners: self.listeners.clone(),
+            };
+            tokio::spawn(reader.run());
+        }
         stream
     }
 
@@ -479,71 +500,145 @@ impl TokenSource {
     }
 }
 
-/// Reads a unit's lines from Cloud Logging.
+/// How often the reader asks Cloud Logging for new lines.
+const POLL: Duration = Duration::from_secs(5);
+/// The longest wait after Cloud Logging asks the reader to slow down.
+const MOST_BACK_OFF: Duration = Duration::from_secs(300);
+
+/// Why a poll of Cloud Logging read nothing.
+enum PollError {
+    /// Cloud Logging answered 429. It may say how long to wait.
+    Throttled(Option<Duration>),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for PollError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<reqwest::Error> for PollError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+/// Where the reader is in the log: the time of the newest line it gave,
+/// and the lines at or after that time that it gave already.
+struct Cursor {
+    since: String,
+    seen: HashSet<String>,
+}
+
+impl Cursor {
+    fn new() -> Self {
+        Self {
+            since: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            seen: HashSet::new(),
+        }
+    }
+
+    /// Whether `entry` is new. Each line is given once, also when a poll
+    /// starts again from `since` after a failure.
+    fn take(&mut self, entry: &Value) -> bool {
+        let id = entry["insertId"].as_str().unwrap_or_default();
+        let time = entry["timestamp"].as_str().unwrap_or_default();
+        if !self.seen.insert(format!("{time}/{id}")) {
+            return false;
+        }
+        if time > self.since.as_str() {
+            self.since = time.to_owned();
+        }
+        if self.seen.len() > 50_000 {
+            let cut = self.since.clone();
+            self.seen.retain(|key| key.as_str() >= cut.as_str());
+        }
+        true
+    }
+}
+
+/// Reads the lines of every unit of the service from Cloud Logging, with
+/// one query per poll, and sends each line to its unit.
 struct Reader {
     client: reqwest::Client,
     logging_api: String,
     project: String,
     service: String,
+    service_url: String,
+    tokens: TokenSource,
+    listeners: Listeners,
 }
 
 impl Reader {
-    async fn read(
-        self,
-        tag: String,
-        service_url: String,
-        tokens: TokenSource,
-        sender: mpsc::Sender<Line>,
-    ) {
-        let mut since = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        let mut seen: HashSet<String> = HashSet::new();
-        while !sender.is_closed() {
-            if let Err(error) = self
-                .poll(&tag, &service_url, &tokens, &sender, &mut since, &mut seen)
-                .await
-            {
-                eprintln!("[ssp] could not read the output of {tag}: {error:#}");
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
+    async fn run(self) {
+        let mut cursor = Cursor::new();
+        let mut back_off = POLL;
+        loop {
+            let listeners: Vec<(String, mpsc::Sender<Line>)> = {
+                let mut listeners = self.listeners.lock().expect("never poisoned");
+                listeners.retain(|_, sender| !sender.is_closed());
+                listeners
+                    .iter()
+                    .map(|(tag, sender)| (tag.clone(), sender.clone()))
+                    .collect()
+            };
+            let wait = if listeners.is_empty() {
+                POLL
+            } else {
+                match self.poll(&listeners, &mut cursor).await {
+                    Ok(()) => {
+                        back_off = POLL;
+                        POLL
+                    }
+                    // Wait as Cloud Logging asks, or longer each time. The
+                    // cursor stays, so the next poll loses no line.
+                    Err(PollError::Throttled(asked)) => {
+                        back_off = (back_off * 2).min(MOST_BACK_OFF);
+                        let wait = asked.unwrap_or(back_off).min(MOST_BACK_OFF);
+                        eprintln!(
+                            "[ssp] Cloud Logging asks the proxy to slow down; reading output again in {}s",
+                            wait.as_secs()
+                        );
+                        wait
+                    }
+                    Err(PollError::Failed(error)) => {
+                        eprintln!("[ssp] could not read the output of the units: {error:#}");
+                        POLL
+                    }
+                }
+            };
+            tokio::time::sleep(wait).await;
         }
     }
 
     async fn poll(
         &self,
-        tag: &str,
-        service_url: &str,
-        tokens: &TokenSource,
-        sender: &mpsc::Sender<Line>,
-        since: &mut String,
-        seen: &mut HashSet<String>,
-    ) -> anyhow::Result<()> {
-        let token = tokens.token().await?;
+        listeners: &[(String, mpsc::Sender<Line>)],
+        cursor: &mut Cursor,
+    ) -> Result<(), PollError> {
+        let token = self.tokens.token().await?;
         let service: Value = self
             .client
-            .get(service_url)
+            .get(&self.service_url)
             .bearer_auth(&token)
             .send()
             .await?
             .json()
             .await?;
-        let Some((revision, _)) = CloudRun::tagged(&service, tag) else {
+        // The revision of each unit, and where its lines go.
+        let mut senders: HashMap<String, mpsc::Sender<Line>> = HashMap::new();
+        for (tag, sender) in listeners {
+            if let Some((revision, _)) = CloudRun::tagged(&service, tag) {
+                senders.insert(short_name(&revision), sender.clone());
+            }
+        }
+        if senders.is_empty() {
             return Ok(());
-        };
-        let revision = short_name(&revision);
-        let log = |stream: &str| {
-            format!(
-                "projects/{}/logs/run.googleapis.com%2F{stream}",
-                self.project
-            )
-        };
-        let filter = format!(
-            "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"{}\" \
-             AND resource.labels.revision_name=\"{revision}\" \
-             AND (logName=\"{}\" OR logName=\"{}\") AND timestamp>=\"{since}\"",
-            self.service,
-            log("stdout"),
-            log("stderr"),
-        );
+        }
+        let mut revisions: Vec<&str> = senders.keys().map(String::as_str).collect();
+        revisions.sort_unstable();
+        let filter = log_filter(&self.project, &self.service, &revisions, &cursor.since);
         let mut page: Option<String> = None;
         loop {
             let mut body = json!({
@@ -562,28 +657,31 @@ impl Reader {
                 .json(&body)
                 .send()
                 .await?;
-            if !response.status().is_success() {
-                bail!("Cloud Logging answered {}", response.status());
+            let status = response.status();
+            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                let asked = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok())
+                    .map(Duration::from_secs);
+                return Err(PollError::Throttled(asked));
+            }
+            if !status.is_success() {
+                return Err(anyhow::anyhow!("Cloud Logging answered {status}").into());
             }
             let listed: Value = response.json().await?;
             for entry in listed["entries"].as_array().into_iter().flatten() {
-                let id = entry["insertId"].as_str().unwrap_or_default().to_owned();
-                let time = entry["timestamp"].as_str().unwrap_or_default().to_owned();
-                if !seen.insert(format!("{time}/{id}")) {
+                if !cursor.take(entry) {
                     continue;
                 }
-                if time > *since {
-                    *since = time;
+                let revision = entry["resource"]["labels"]["revision_name"]
+                    .as_str()
+                    .unwrap_or_default();
+                if let (Some(sender), Some(line)) = (senders.get(revision), entry_line(entry)) {
+                    // A unit that stopped reading drops its lines.
+                    let _ = sender.send(line).await;
                 }
-                if let Some(line) = entry_line(entry)
-                    && sender.send(line).await.is_err()
-                {
-                    return Ok(());
-                }
-            }
-            if seen.len() > 50_000 {
-                let cut = since.clone();
-                seen.retain(|key| key.as_str() >= cut.as_str());
             }
             page = listed["nextPageToken"].as_str().map(str::to_owned);
             if page.is_none() {
@@ -591,6 +689,23 @@ impl Reader {
             }
         }
     }
+}
+
+/// The Cloud Logging filter for the standard output and error of
+/// `revisions` of `service`, from `since` on.
+fn log_filter(project: &str, service: &str, revisions: &[&str], since: &str) -> String {
+    let log = |stream: &str| format!("projects/{project}/logs/run.googleapis.com%2F{stream}");
+    let revisions = revisions
+        .iter()
+        .map(|revision| format!("resource.labels.revision_name=\"{revision}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"{service}\" \
+         AND ({revisions}) AND (logName=\"{}\" OR logName=\"{}\") AND timestamp>=\"{since}\"",
+        log("stdout"),
+        log("stderr"),
+    )
 }
 
 /// The line of a log entry: its text, or its JSON payload as one line.
@@ -847,6 +962,36 @@ mod tests {
         let long = tag(&arm().key(), "shop-checkout-service-eu-west");
         assert!(long.len() <= 46 - 29, "{long}");
         assert!(long.starts_with("ssp-chec"), "{long}");
+    }
+
+    #[test]
+    fn reads_every_unit_with_one_filter_and_gives_each_line_once() {
+        let filter = log_filter(
+            "acme",
+            "shop",
+            &["shop-ssp-1", "shop-ssp-2"],
+            "2026-10-30T00:00:00Z",
+        );
+        assert!(
+            filter.contains(
+                "AND (resource.labels.revision_name=\"shop-ssp-1\" \
+                 OR resource.labels.revision_name=\"shop-ssp-2\") AND"
+            ),
+            "{filter}"
+        );
+        assert!(filter.contains("resource.labels.service_name=\"shop\""));
+        assert!(filter.ends_with("timestamp>=\"2026-10-30T00:00:00Z\""));
+        let mut cursor = Cursor {
+            since: "2026-10-30T00:00:00Z".into(),
+            seen: HashSet::new(),
+        };
+        let first = json!({"insertId": "a", "timestamp": "2026-10-30T00:00:01Z"});
+        let second = json!({"insertId": "b", "timestamp": "2026-10-30T00:00:01Z"});
+        assert!(cursor.take(&first));
+        assert!(cursor.take(&second), "two lines at one time");
+        // A poll again from the cursor, as after a 429, gives nothing twice.
+        assert!(!cursor.take(&first));
+        assert_eq!(cursor.since, "2026-10-30T00:00:01Z");
     }
 
     #[test]

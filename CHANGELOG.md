@@ -9,6 +9,9 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 - Cloud Run: a deploy of a new live gets all the traffic again while units run. The
   proxy pins live's traffic only while it makes the revision of a unit. Then it gives
   the service its own template and traffic, and adds only the unit's tag.
+- Cloud Run: the proxy reads the output of all units with one Cloud Logging query
+  every 5 seconds, not one query for each unit. When Cloud Logging answers 429, the
+  proxy waits as it asks, or longer each time, and loses no line.
 - Cloud Run: the proxy sends an ID token for the service's URL. Cloud Run refuses an
   ID token for the tag URL at the tag URL.
 
