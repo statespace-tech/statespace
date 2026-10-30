@@ -18,6 +18,10 @@ include = ["src/**", "tests/**", "Cargo.lock", "CHANGELOG.md", "LICENSE", "NOTIC
 name = "ssp"
 path = "src/main.rs"
 
+[[bin]]
+name = "statespace"
+path = "src/bin/statespace.rs"
+
 [dependencies]
 anyhow = "1"
 bytes = "1"

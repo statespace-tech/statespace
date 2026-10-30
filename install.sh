@@ -65,8 +65,10 @@ fi
 tar -xzf "${temporary_dir}/${archive}" -C "$temporary_dir"
 mkdir -p "$install_dir"
 install -m 0755 "${temporary_dir}/ssp" "${install_dir}/ssp"
+# `statespace` is the same program as `ssp`.
+ln -sf ssp "${install_dir}/statespace"
 
-echo "Installed ssp to ${install_dir}/ssp"
+echo "Installed ssp (also as statespace) to ${install_dir}"
 case ":${PATH}:" in
   *":${install_dir}:"*) ;;
   *) echo "Add ${install_dir} to PATH to run ssp." ;;

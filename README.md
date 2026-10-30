@@ -37,6 +37,9 @@ Install the CLI on macOS or Linux.
 curl -fsSL https://statespace.com/install.sh | bash
 ```
 
+The command is `ssp`. `statespace` is the same program, so
+`statespace experiment list` and `ssp experiment list` do the same thing.
+
 Give this prompt to your coding agent:
 
 ```text

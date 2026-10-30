@@ -9,6 +9,8 @@ the old model stays.
 
 ### Added
 
+- `statespace` is a second name for `ssp`. `cargo install` installs both, and
+  `install.sh` and the image add `statespace` as a link to `ssp`.
 - `ssp app add | remove | list | show <name>`. `ssp app add` reads the repository from
   the Git remote `origin` and the folder from the nearest `statespace.toml`, or takes
   `--repo` and `--path`, and prints what it detected.
