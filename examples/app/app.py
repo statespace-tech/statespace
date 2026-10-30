@@ -3,6 +3,7 @@ the request, and prints a JSON line for every subject it serves."""
 
 import json
 import os
+import socket
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -38,5 +39,18 @@ class Handler(BaseHTTPRequestHandler):
         print(f"{self.command} {self.path}", file=sys.stderr, flush=True)
 
 
+class DualStackServer(ThreadingHTTPServer):
+    # Listen on IPv6 and IPv4. Fly.io's private network is IPv6 only.
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
+
+
 port = int(sys.argv[1] if len(sys.argv) > 1 else os.environ.get("PORT", "8000"))
-ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
+try:
+    server = DualStackServer(("::", port), Handler)
+except OSError:
+    server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+server.serve_forever()

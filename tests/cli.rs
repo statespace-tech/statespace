@@ -1,5 +1,5 @@
 //! Checks of the `ssp` binary against stand-ins for Statespace, Google
-//! Cloud, Docker, and Kubernetes. The Docker test runs when
+//! Cloud, Fly.io, Docker, and Kubernetes. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
 //! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`.
@@ -185,7 +185,13 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
         state.received.push(received.clone());
         let path = received.path.as_str();
         match (received.method.as_str(), path) {
-            ("GET", "/v1/runtime/apps/shop-prod") => json_answer(200, &state.config),
+            ("GET", path)
+                if state.config["app"]
+                    .as_str()
+                    .is_some_and(|app| path == format!("/v1/runtime/apps/{app}")) =>
+            {
+                json_answer(200, &state.config)
+            }
             ("GET", path) if path.starts_with("/v1/runtime/apps/") => {
                 json_answer(404, &json!({"error": "no app shop-gone"}))
             }
@@ -1642,6 +1648,335 @@ fn proxies_without_overrides_still_remove_them() {
     assert_eq!(body["query"], "");
     assert!(body["headers"].get("ssp-arm").is_none());
     assert_eq!(body["headers"]["cookie"], format!("ssp_sid={live_subject}"));
+}
+
+// ---------------------------------------------------------------------------
+// The proxy on Fly.io, against a stand-in for the Machines API and the logs
+// API.
+
+/// The Machines of the Fly.io app `shop`.
+struct FlyApi {
+    machines: Vec<Value>,
+    /// The bodies of the Machines the proxy created.
+    created: Vec<Value>,
+    /// `<machine id>?<query>` of each delete.
+    destroyed: Vec<String>,
+    /// Where every unit listens: the port of live's service.
+    unit_port: u16,
+}
+
+const FLY_TOKEN: &str = "FlyV1 fm2_test";
+
+fn fly_api(state: Arc<Mutex<FlyApi>>) -> String {
+    let port = serve(move |received| {
+        let mut fly = state.lock().unwrap();
+        assert_eq!(received.headers["authorization"], FLY_TOKEN);
+        let path = received.path.as_str();
+        match (received.method.as_str(), path) {
+            ("GET", "/v1/apps/shop") => json_answer(
+                200,
+                &json!({"name": "shop", "organization": {"slug": "acme"}}),
+            ),
+            ("GET", "/v1/apps/shop/machines") => {
+                let active: Vec<Value> = fly
+                    .machines
+                    .iter()
+                    .filter(|machine| machine["state"] != "destroyed")
+                    .cloned()
+                    .collect();
+                json_answer(200, &json!(active))
+            }
+            ("POST", "/v1/apps/shop/machines") => {
+                let body = received.body.clone();
+                fly.created.push(body.clone());
+                let config = &body["config"];
+                let digest = config["image"]
+                    .as_str()
+                    .and_then(|image| image.split_once('@'))
+                    .map(|(_, digest)| digest)
+                    .unwrap_or_default();
+                // The starting experiment's unit fails its health check.
+                let status = if config["metadata"]["statespace.com/experiment"] == "us-landing" {
+                    json!({"name": "service-0-0", "status": "critical",
+                           "output": "connection refused"})
+                } else {
+                    json!({"name": "service-0-0", "status": "passing", "output": "200 OK"})
+                };
+                let machine = json!({
+                    "id": format!("unit{}", fly.machines.len()),
+                    "name": body["name"],
+                    "state": "started",
+                    "region": body["region"],
+                    "private_ip": "127.0.0.1",
+                    "image_ref": {"registry": "ghcr.io", "repository": "acme/shop",
+                                  "digest": digest},
+                    "config": config,
+                    "checks": [status],
+                });
+                fly.machines.push(machine.clone());
+                json_answer(200, &machine)
+            }
+            ("DELETE", path) if path.starts_with("/v1/apps/shop/machines/") => {
+                let id = path.rsplit('/').next().unwrap().to_owned();
+                fly.destroyed.push(format!("{id}?{}", received.query));
+                for machine in &mut fly.machines {
+                    if machine["id"] == id.as_str() {
+                        machine["state"] = json!("destroyed");
+                    }
+                }
+                json_answer(200, &json!({"ok": true}))
+            }
+            ("GET", "/api/v1/apps/shop/logs") => {
+                // One page of lines for every unit, then nothing new.
+                if received.query.contains("next_token=done") {
+                    return json_answer(200, &json!({"data": [], "meta": {"next_token": "done"}}));
+                }
+                let mut data = Vec::new();
+                for machine in &fly.machines {
+                    let id = machine["id"].as_str().unwrap();
+                    if !id.starts_with("unit") {
+                        continue;
+                    }
+                    let entry = |provider: &str, message: &str| {
+                        json!({"id": format!("{id}-{provider}"), "type": "logs", "attributes": {
+                            "timestamp": "2099-01-01T00:00:00Z", "message": message,
+                            "level": "info", "instance": id, "region": "iad",
+                            "meta": {"instance": id, "region": "iad",
+                                     "event": {"provider": provider}},
+                        }})
+                    };
+                    data.push(entry("runner", "Pulling container image"));
+                    data.push(entry(
+                        "app",
+                        r#"{"event": "visit", "card": "4242424242424242"}"#,
+                    ));
+                }
+                json_answer(200, &json!({"data": data, "meta": {"next_token": "done"}}))
+            }
+            _ => json_answer(404, &json!({"error": format!("no route {path}")})),
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A live Machine of `shop`, by `fly deploy`.
+fn fly_live_machine(id: &str, group: &str, image: char, port: u16) -> Value {
+    json!({
+        "id": id,
+        "name": format!("shop-{id}"),
+        "state": "started",
+        "region": "iad",
+        "private_ip": "fdaa:0:1:a7b::2",
+        "image_ref": {"registry": "ghcr.io", "repository": "acme/shop", "tag": "main",
+                      "digest": format!("sha256:{}", image.to_string().repeat(64))},
+        "config": {
+            "image": "ghcr.io/acme/shop:main",
+            "guest": {"cpu_kind": "shared", "cpus": 1, "memory_mb": 512},
+            "env": {"MODE": "prod", "STATESPACE_OLD": "x"},
+            "services": [{
+                "protocol": "tcp", "internal_port": port,
+                "ports": [{"port": 443, "handlers": ["tls", "http"]}],
+                "checks": [{"type": "http", "path": "/", "interval": "10s"}],
+            }],
+            "mounts": [{"volume": "vol_1", "path": "/data"}],
+            "metadata": {"fly_platform_version": "v2", "fly_process_group": group,
+                         "fly_release_id": "r1"},
+        },
+        "checks": [{"name": "servicecheck-00-http-8000", "status": "passing"}],
+    })
+}
+
+#[test]
+fn fly_proxies_run_units_as_machines_without_services() {
+    let live = echo("live");
+    let units = echo("unit");
+    let fly = Arc::new(Mutex::new(FlyApi {
+        machines: vec![
+            fly_live_machine("live1", "app", '1', units),
+            fly_live_machine("live2", "app", '1', units),
+            // Another process group is not live.
+            fly_live_machine("worker1", "worker", '9', units),
+        ],
+        created: Vec::new(),
+        destroyed: Vec::new(),
+        unit_port: units,
+    }));
+    let fly_url = fly_api(fly.clone());
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
+            "settings": {"overrides": false, "redact": ["\\b\\d{16}\\b"]},
+            "live": {"commit": LIVE, "image": digest('1')},
+            "experiments": [
+                {"name": "checkout", "version": 3, "state": "running",
+                 "subject": null, "eligibility": null,
+                 "events": [{"name": "visit", "source": "stdout",
+                             "match": "stdout.json.event == \"visit\""}],
+                 "arms": [
+                     {"commit": LIVE, "image": digest('1'), "ranges": [[0.0, 0.4]]},
+                     {"commit": ARM, "image": digest('2'), "ranges": [[0.4, 0.8]]},
+                 ]},
+                {"name": "us-landing", "version": 1, "state": "starting",
+                 "subject": "request.headers[\"x-user-id\"]", "eligibility": null,
+                 "events": [],
+                 "arms": [{"commit": LANDING, "image": digest('3'), "ranges": [[0.8, 1.0]]}]},
+            ],
+            "lease": null, "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("FLY_API_TOKEN", FLY_TOKEN)
+        .env("STATESPACE_FLY_API", &fly_url)
+        .env("STATESPACE_FLY_LOGS_API", &fly_url)
+        .args(["proxy", "fly", "--app", "shop-prod", "--fly-app", "shop"])
+        .args(["--live-url", &format!("http://127.0.0.1:{live}")]);
+    let (_proxy, port) = spawn_proxy(command);
+
+    let reference_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+    let get = |subject: &str| -> Option<Value> {
+        send(
+            port,
+            "GET",
+            "/checkout",
+            &[
+                ("cookie", &format!("ssp_sid={subject}")),
+                ("x-statespace-arm", "spoofed"),
+            ],
+        )?
+        .json()
+        .ok()
+    };
+    wait_until(60, "both arms of checkout serve", || {
+        get(&arm_subject).is_some_and(|body| {
+            body["name"] == "unit" && body["headers"]["x-statespace-arm"] == ARM
+        }) && get(&reference_subject).is_some_and(|body| {
+            body["name"] == "unit" && body["headers"]["x-statespace-arm"] == LIVE
+        })
+    });
+    let arm = get(&arm_subject).unwrap();
+    assert_eq!(arm["headers"]["x-statespace-experiment"], "checkout");
+    assert_eq!(arm["headers"]["x-statespace-subject"], arm_subject.as_str());
+    // Live gets the rest, without an arm.
+    let body = get(&live_subject).unwrap();
+    assert_eq!(body["name"], "live");
+    assert!(body["headers"].get("x-statespace-arm").is_none());
+
+    // One Machine for each unit, also for the starting experiment: a copy
+    // of live with the unit's image, without services, mounts, deploy
+    // metadata, or Statespace variables.
+    wait_until(30, "a Machine for every unit", || {
+        fly.lock().unwrap().created.len() == 3
+    });
+    let created = fly.lock().unwrap().created.clone();
+    let by_name = |name: &str| {
+        created
+            .iter()
+            .find(|body| body["name"] == name)
+            .unwrap_or_else(|| panic!("no Machine {name}: {created:?}"))
+            .clone()
+    };
+    let arm_machine = by_name(&format!("ssp-checkout-{}", &ARM[..12]));
+    by_name(&format!("ssp-checkout-{}", &LIVE[..12]));
+    by_name(&format!("ssp-us-landing-{}", &LANDING[..12]));
+    assert_eq!(arm_machine["region"], "iad");
+    let config = &arm_machine["config"];
+    assert_eq!(config["image"], digest('2'));
+    assert_eq!(config["guest"]["memory_mb"], 512);
+    assert_eq!(config["env"], json!({"MODE": "prod"}));
+    assert!(config.get("services").is_none() && config.get("mounts").is_none());
+    let unit_port = fly.lock().unwrap().unit_port;
+    assert_eq!(
+        config["checks"]["service-0-0"],
+        json!({"type": "http", "path": "/", "interval": "10s", "port": unit_port})
+    );
+    assert_eq!(
+        config["metadata"],
+        json!({
+            "statespace.com/app": "shop-prod",
+            "statespace.com/experiment": "checkout",
+            "statespace.com/commit": ARM,
+            "statespace.com/image": digest('2'),
+            "statespace.com/port": unit_port.to_string(),
+        })
+    );
+
+    // Reports name live's image; the unit whose check fails is not ready.
+    wait_until(30, "a report with every unit", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                let ready = |commit: &str| {
+                    units.iter().any(|unit| {
+                        unit["experiment"] == "checkout"
+                            && unit["commit"] == commit
+                            && unit["ready"] == true
+                    })
+                };
+                ready(LIVE)
+                    && ready(ARM)
+                    && units.iter().any(|unit| {
+                        unit["experiment"] == "us-landing"
+                            && unit["ready"] == false
+                            && unit["reason"] == "check service-0-0 is critical: connection refused"
+                    })
+            })
+        })
+    });
+    let report = state.lock().unwrap().reports().pop().unwrap();
+    assert_eq!(report["orchestrator"], "fly");
+    assert_eq!(report["live_image"], digest('1'));
+
+    // The app's lines arrive, redacted; Fly's own lines do not.
+    wait_until(30, "output and events of checkout", || {
+        let state = state.lock().unwrap();
+        state
+            .rows("events")
+            .iter()
+            .any(|row| row["name"] == "visit" && row["experiment"] == "checkout")
+    });
+    {
+        let state = state.lock().unwrap();
+        let stdout = state.rows("stdout");
+        assert!(stdout.iter().all(|row| {
+            let text = row["text"].as_str().unwrap();
+            !text.contains("4242424242424242") && !text.contains("Pulling")
+        }));
+        assert!(stdout.iter().any(|row| row["arm"] == ARM));
+    }
+
+    // When checkout stops, the holder destroys the Machines of its units.
+    state.lock().unwrap().config["experiments"]
+        .as_array_mut()
+        .unwrap()
+        .remove(0);
+    wait_until(30, "the Machines of checkout are destroyed", || {
+        let fly = fly.lock().unwrap();
+        fly.machines.iter().all(|machine| {
+            machine["config"]["metadata"]["statespace.com/experiment"] != "checkout"
+                || machine["state"] == "destroyed"
+        })
+    });
+    let destroyed = fly.lock().unwrap().destroyed.clone();
+    assert_eq!(destroyed.len(), 2, "{destroyed:?}");
+    assert!(destroyed.iter().all(|query| query.ends_with("?force=true")));
+    assert_eq!(get(&arm_subject).unwrap()["name"], "live");
+    // Live's Machines are never touched.
+    let fly = fly.lock().unwrap();
+    assert!(
+        fly.machines
+            .iter()
+            .filter(|machine| machine["id"].as_str().unwrap().starts_with("live"))
+            .all(|machine| machine["state"] == "started")
+    );
 }
 
 // ---------------------------------------------------------------------------

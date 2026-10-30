@@ -319,6 +319,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         kubernetes: KubernetesArgs,
     },
+    /// Run the arms of experiments as Machines of a Fly.io app.
+    Fly {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        fly: FlyArgs,
+    },
 }
 
 #[derive(Args, Clone)]
@@ -397,6 +404,48 @@ pub struct KubernetesArgs {
     /// The app's container in the pod. Defaults to the first container.
     #[arg(long)]
     pub container: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct FlyArgs {
+    /// The Fly.io app whose Machines run live.
+    #[arg(long)]
+    pub fly_app: String,
+    /// The region of new Machines. Defaults to the region of a live Machine.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// The process group of live. Fly.io calls the group of an app without
+    /// `[processes]` `app`.
+    #[arg(long, default_value = "app")]
+    pub process_group: String,
+    /// The port the app listens on. Defaults to the internal port of live's
+    /// first service.
+    #[arg(long)]
+    pub port: Option<u16>,
+    /// Where the proxy sends live traffic. Defaults to
+    /// `http://<fly app>.flycast`.
+    #[arg(long)]
+    pub live_url: Option<String>,
+    /// A Fly.io token that can manage the Machines of the app, such as a
+    /// deploy token.
+    #[arg(long, env = "FLY_API_TOKEN", hide_env_values = true)]
+    pub fly_token: String,
+    /// The Fly.io Machines API. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_FLY_API",
+        hide = true,
+        default_value = "https://api.machines.dev"
+    )]
+    pub machines_api: String,
+    /// The Fly.io API that serves logs. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_FLY_LOGS_API",
+        hide = true,
+        default_value = "https://api.fly.io"
+    )]
+    pub logs_api: String,
 }
 
 #[cfg(test)]
@@ -519,6 +568,40 @@ mod tests {
                 "shop",
                 "--namespace",
                 "prod",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "fly",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--fly-app",
+                "shop",
+                "--fly-token",
+                "f",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "fly",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--fly-app",
+                "shop",
+                "--fly-token",
+                "f",
+                "--region",
+                "iad",
+                "--process-group",
+                "web",
+                "--port",
+                "8000",
+                "--live-url",
+                "http://shop.flycast",
             ],
         ] {
             Cli::try_parse_from(&arguments)
