@@ -1,7 +1,8 @@
 //! Checks of the `ssp` binary against stand-ins for Statespace, Google
 //! Cloud, Docker, and Kubernetes. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
-//! when `STATESPACE_KIND_TESTS=1`.
+//! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
+//! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`.
 
 use std::{
     collections::HashMap,
@@ -2198,4 +2199,1080 @@ spec:
     ]);
     assert!(!services.contains(&arm_name), "{services}");
     assert!(names().contains(&reference_name));
+}
+
+// ---------------------------------------------------------------------------
+// The proxy on real Cloud Run, in a sandbox project of Google Cloud.
+
+/// The label of every resource that a Cloud Run test makes. Its value is the
+/// run id: the start of the run in Unix seconds, in hex.
+const TEST_LABEL: &str = "statespace-test";
+/// How old the resources of a run are before the sweeper deletes them.
+const SWEEP_AFTER: Duration = Duration::from_secs(3 * 60 * 60);
+const CLOUD_PLATFORM: &str = "https://www.googleapis.com/auth/cloud-platform";
+
+/// The sandbox project of the Cloud Run tests, and the credentials that
+/// reach it: the Application Default Credentials of the machine.
+struct Sandbox {
+    project: String,
+    region: String,
+    /// The service account that runs the test services, may call them, and
+    /// signs the ID tokens of the proxy on this machine.
+    account: String,
+    /// `<region>-docker.pkg.dev/<project>/<repository>`.
+    registry: String,
+    credentials: Value,
+    token: Mutex<Option<(String, Instant)>>,
+    client: reqwest::blocking::Client,
+}
+
+/// The sandbox, or `None` when the Cloud Run tests do not run. Panics when
+/// the credentials are of another project, before anything is made.
+fn sandbox() -> Option<Sandbox> {
+    if std::env::var("STATESPACE_CLOUDRUN_TESTS").as_deref() != Ok("1") {
+        eprintln!(
+            "skipped: set STATESPACE_CLOUDRUN_TESTS=1 and STATESPACE_TEST_GCP_PROJECT to run \
+             the Cloud Run tests"
+        );
+        return None;
+    }
+    let project = std::env::var("STATESPACE_TEST_GCP_PROJECT")
+        .expect("set STATESPACE_TEST_GCP_PROJECT to the sandbox project");
+    let region =
+        std::env::var("STATESPACE_TEST_GCP_REGION").unwrap_or_else(|_| "us-east1".to_owned());
+    let path = std::env::var_os("GOOGLE_APPLICATION_CREDENTIALS").map_or_else(
+        || {
+            Path::new(&std::env::var("HOME").unwrap())
+                .join(".config/gcloud/application_default_credentials.json")
+        },
+        Into::into,
+    );
+    let credentials: Value = serde_json::from_slice(
+        &std::fs::read(&path)
+            .unwrap_or_else(|error| panic!("no credentials at {}: {error}", path.display())),
+    )
+    .unwrap();
+    // The account guard: the credentials must be of the sandbox project.
+    let impersonated = credentials["service_account_impersonation_url"]
+        .as_str()
+        .or(credentials["client_email"].as_str())
+        .and_then(|text| text.split_once(".iam.gserviceaccount.com"))
+        .and_then(|(start, _)| start.rsplit_once('@'))
+        .map(|(_, project)| project.to_owned());
+    let theirs = credentials["quota_project_id"]
+        .as_str()
+        .or(credentials["project_id"].as_str())
+        .map(str::to_owned)
+        .or(impersonated.clone());
+    assert_eq!(
+        theirs.as_deref(),
+        Some(project.as_str()),
+        "refused: the credentials at {} are not of the sandbox project {project}",
+        path.display()
+    );
+    if let Some(other) = impersonated {
+        assert_eq!(
+            other, project,
+            "refused: the credentials act as an account of {other}"
+        );
+    }
+    let account = std::env::var("STATESPACE_TEST_GCP_SERVICE_ACCOUNT")
+        .ok()
+        .or_else(|| {
+            let url = credentials["service_account_impersonation_url"].as_str()?;
+            let email = url.rsplit('/').next()?.split(':').next()?;
+            Some(email.to_owned())
+        })
+        .expect("set STATESPACE_TEST_GCP_SERVICE_ACCOUNT to a service account of the sandbox");
+    assert!(
+        account.ends_with(&format!("@{project}.iam.gserviceaccount.com")),
+        "refused: {account} is not an account of {project}"
+    );
+    let repository = std::env::var("STATESPACE_TEST_GCP_REPOSITORY")
+        .unwrap_or_else(|_| "statespace-test".to_owned());
+    Some(Sandbox {
+        registry: format!("{region}-docker.pkg.dev/{project}/{repository}"),
+        project,
+        region,
+        account,
+        credentials,
+        token: Mutex::default(),
+        client: reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap(),
+    })
+}
+
+impl Sandbox {
+    /// An access token of the credentials. Tokens are never printed.
+    fn token(&self) -> String {
+        let mut cached = self.token.lock().unwrap();
+        if let Some((token, until)) = &*cached
+            && Instant::now() < *until
+        {
+            return token.clone();
+        }
+        let credentials = &self.credentials;
+        let token = match credentials["type"].as_str() {
+            Some("authorized_user") => {
+                let body: Value = self
+                    .client
+                    .post("https://oauth2.googleapis.com/token")
+                    .form(&[
+                        ("grant_type", "refresh_token"),
+                        ("client_id", credentials["client_id"].as_str().unwrap()),
+                        (
+                            "client_secret",
+                            credentials["client_secret"].as_str().unwrap(),
+                        ),
+                        (
+                            "refresh_token",
+                            credentials["refresh_token"].as_str().unwrap(),
+                        ),
+                    ])
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                    .expect("Google gives an access token for the user")
+                    .json()
+                    .unwrap();
+                body["access_token"].as_str().unwrap().to_owned()
+            }
+            // Workload Identity Federation, as google-github-actions/auth
+            // writes it: a token of GitHub, exchanged for a Google one, which
+            // then acts as the service account.
+            Some("external_account") => {
+                let source = &credentials["credential_source"];
+                let raw = if let Some(file) = source["file"].as_str() {
+                    std::fs::read_to_string(file).unwrap()
+                } else {
+                    let mut request = self.client.get(source["url"].as_str().unwrap());
+                    for (name, value) in source["headers"].as_object().into_iter().flatten() {
+                        request = request.header(name, value.as_str().unwrap());
+                    }
+                    request
+                        .send()
+                        .and_then(reqwest::blocking::Response::error_for_status)
+                        .expect("the credential source gives a token")
+                        .text()
+                        .unwrap()
+                };
+                let subject = match source["format"]["subject_token_field_name"].as_str() {
+                    Some(field) => serde_json::from_str::<Value>(&raw).unwrap()[field]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                    None => raw.trim().to_owned(),
+                };
+                let exchanged: Value = self
+                    .client
+                    .post(credentials["token_url"].as_str().unwrap())
+                    .form(&[
+                        (
+                            "grant_type",
+                            "urn:ietf:params:oauth:grant-type:token-exchange",
+                        ),
+                        ("audience", credentials["audience"].as_str().unwrap()),
+                        ("scope", CLOUD_PLATFORM),
+                        (
+                            "requested_token_type",
+                            "urn:ietf:params:oauth:token-type:access_token",
+                        ),
+                        (
+                            "subject_token_type",
+                            credentials["subject_token_type"].as_str().unwrap(),
+                        ),
+                        ("subject_token", &subject),
+                    ])
+                    .send()
+                    .and_then(reqwest::blocking::Response::error_for_status)
+                    .expect("Security Token Service exchanges the token")
+                    .json()
+                    .unwrap();
+                let federated = exchanged["access_token"].as_str().unwrap().to_owned();
+                match credentials["service_account_impersonation_url"].as_str() {
+                    Some(url) => {
+                        let body: Value = self
+                            .client
+                            .post(url)
+                            .bearer_auth(federated)
+                            .json(&json!({"scope": [CLOUD_PLATFORM]}))
+                            .send()
+                            .and_then(reqwest::blocking::Response::error_for_status)
+                            .expect("the federated identity acts as the service account")
+                            .json()
+                            .unwrap();
+                        body["accessToken"].as_str().unwrap().to_owned()
+                    }
+                    None => federated,
+                }
+            }
+            other => panic!("credentials of type {other:?} are not supported"),
+        };
+        // Tokens last an hour; take a new one well before.
+        *cached = Some((token.clone(), Instant::now() + Duration::from_secs(20 * 60)));
+        token
+    }
+
+    /// Call a Google API. Refuses a URL of any other project.
+    fn call(&self, method: &str, url: &str, body: Option<&Value>) -> Result<Value, (u16, String)> {
+        for (index, _) in url.match_indices("projects/") {
+            let named = url[index + 9..]
+                .split(['/', ':', '?'])
+                .next()
+                .unwrap_or_default();
+            assert!(
+                named == self.project || named == "-",
+                "refused: {url} is not of the sandbox project"
+            );
+        }
+        let mut request = self
+            .client
+            .request(method.parse().unwrap(), url)
+            .bearer_auth(self.token())
+            .header("x-goog-user-project", &self.project);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().map_err(|error| (0, error.to_string()))?;
+        let status = response.status().as_u16();
+        let text = response.text().unwrap_or_default();
+        if !(200..300).contains(&status) {
+            return Err((status, text));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    fn must(&self, method: &str, url: &str, body: Option<&Value>) -> Value {
+        self.call(method, url, body)
+            .unwrap_or_else(|(status, text)| panic!("{method} {url}: {status} {text}"))
+    }
+
+    /// Wait for a long-running operation of `api` to end well.
+    fn wait(&self, api: &str, operation: &Value) -> Value {
+        let mut operation = operation.clone();
+        let deadline = Instant::now() + Duration::from_secs(600);
+        while operation["done"] != true {
+            assert!(Instant::now() < deadline, "timed out: {operation}");
+            std::thread::sleep(Duration::from_secs(2));
+            let name = operation["name"].as_str().unwrap().to_owned();
+            operation = self.must("GET", &format!("{api}/{name}"), None);
+        }
+        assert!(operation.get("error").is_none(), "{operation}");
+        operation
+    }
+
+    fn run_api(&self) -> String {
+        format!(
+            "https://run.googleapis.com/v2/projects/{}/locations/{}",
+            self.project, self.region
+        )
+    }
+
+    fn service(&self, name: &str) -> Value {
+        self.must("GET", &format!("{}/services/{name}", self.run_api()), None)
+    }
+
+    /// Change a service as the Admin API takes it, and wait until Cloud Run
+    /// made the change.
+    fn update(&self, service: &Value) {
+        let name = service["name"].as_str().unwrap();
+        let operation = self.must(
+            "PATCH",
+            &format!("https://run.googleapis.com/v2/{name}"),
+            Some(service),
+        );
+        self.wait("https://run.googleapis.com/v2", &operation);
+    }
+
+    /// A service of the run, with min instances 0 and a small instance
+    /// unless `template` says otherwise.
+    fn create_service(&self, name: &str, run: &str, template: Value) -> Value {
+        let operation = self.must(
+            "POST",
+            &format!("{}/services?serviceId={name}", self.run_api()),
+            Some(&json!({"labels": {TEST_LABEL: run}, "template": template})),
+        );
+        self.wait("https://run.googleapis.com/v2", &operation);
+        // The test account calls the service, and a proxy that runs as it
+        // makes revisions of it.
+        let member = format!("serviceAccount:{}", self.account);
+        let bindings: Vec<Value> = ["roles/run.invoker", "roles/run.developer"]
+            .iter()
+            .map(|role| json!({"role": role, "members": [member]}))
+            .collect();
+        self.must(
+            "POST",
+            &format!("{}/services/{name}:setIamPolicy", self.run_api()),
+            Some(&json!({"policy": {"bindings": bindings}})),
+        );
+        self.service(name)
+    }
+
+    /// An ID token of the test account for `audience`. New permissions take
+    /// a while to reach IAM, so it tries for two minutes.
+    fn id_token(&self, audience: &str) -> String {
+        let url = format!(
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:generateIdToken",
+            self.account
+        );
+        let body = json!({"audience": audience, "includeEmail": true});
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            match self.call("POST", &url, Some(&body)) {
+                Ok(answer) => return answer["token"].as_str().unwrap().to_owned(),
+                Err((status, text)) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "no ID token for {}: {status} {text}",
+                        self.account
+                    );
+                    std::thread::sleep(Duration::from_secs(5));
+                }
+            }
+        }
+    }
+
+    /// The Artifact Registry repository of the tests. It stays between runs;
+    /// the sweeper deletes old images.
+    fn repository(&self) {
+        let api = "https://artifactregistry.googleapis.com/v1";
+        let (_, id) = self.registry.rsplit_once('/').unwrap();
+        let url = format!(
+            "{api}/projects/{}/locations/{}/repositories",
+            self.project, self.region
+        );
+        if self.call("GET", &format!("{url}/{id}"), None).is_ok() {
+            return;
+        }
+        let operation = self.must(
+            "POST",
+            &format!("{url}?repositoryId={id}"),
+            Some(&json!({
+                "format": "DOCKER",
+                "description": "Images of the Statespace CLI runtime tests. The sweeper deletes old ones.",
+                "labels": {TEST_LABEL: "repository"},
+            })),
+        );
+        self.wait(api, &operation);
+    }
+
+    /// Build `context` for linux/amd64, push it as `<package>:<tag>`, and
+    /// return its reference by digest.
+    fn push(
+        &self,
+        package: &str,
+        tag: &str,
+        run: &str,
+        context: &Path,
+        arguments: &[&str],
+    ) -> String {
+        let reference = format!("{}/{package}", self.registry);
+        let metadata = tempfile::NamedTempFile::new().unwrap();
+        let mut command = std::process::Command::new("docker");
+        command
+            .args([
+                "buildx",
+                "build",
+                "--quiet",
+                "--push",
+                "--platform",
+                "linux/amd64",
+            ])
+            // One manifest, so the digest is the one Cloud Run reports.
+            .args(["--provenance=false", "--sbom=false"])
+            .args(["--label", &format!("{TEST_LABEL}={run}")])
+            .args(["--tag", &format!("{reference}:{tag}")])
+            .arg("--metadata-file")
+            .arg(metadata.path())
+            .args(arguments)
+            .arg(context);
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "docker buildx build: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let built: Value =
+            serde_json::from_slice(&std::fs::read(metadata.path()).unwrap()).unwrap();
+        format!(
+            "{reference}@{}",
+            built["containerimage.digest"].as_str().unwrap()
+        )
+    }
+
+    fn docker_login(&self) {
+        let mut login = std::process::Command::new("docker")
+            .args([
+                "login",
+                "--username",
+                "oauth2accesstoken",
+                "--password-stdin",
+            ])
+            .arg(format!("https://{}-docker.pkg.dev", self.region))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        login
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(self.token().as_bytes())
+            .unwrap();
+        let output = login.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "docker login: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Delete the services and images of runs that `old` picks, by run id.
+    fn sweep(&self, old: impl Fn(&str) -> bool) {
+        let mut services = Vec::new();
+        let mut page = String::new();
+        loop {
+            let listed = self.must(
+                "GET",
+                &format!("{}/services?pageSize=100&pageToken={page}", self.run_api()),
+                None,
+            );
+            services.extend(listed["services"].as_array().cloned().unwrap_or_default());
+            match listed["nextPageToken"].as_str() {
+                Some(next) if !next.is_empty() => page = next.to_owned(),
+                _ => break,
+            }
+        }
+        for service in services {
+            let Some(run) = service["labels"][TEST_LABEL].as_str() else {
+                continue;
+            };
+            if old(run) {
+                let name = service["name"].as_str().unwrap();
+                eprintln!("sweeper: deleting {name}");
+                let _ = self.call(
+                    "DELETE",
+                    &format!("https://run.googleapis.com/v2/{name}"),
+                    None,
+                );
+            }
+        }
+        let (_, id) = self.registry.rsplit_once('/').unwrap();
+        let packages = format!(
+            "https://artifactregistry.googleapis.com/v1/projects/{}/locations/{}/repositories/{id}/packages",
+            self.project, self.region
+        );
+        let listed = self.call("GET", &format!("{packages}?pageSize=1000"), None);
+        for package in listed
+            .ok()
+            .and_then(|listed| listed["packages"].as_array().cloned())
+            .unwrap_or_default()
+        {
+            let name = package["name"].as_str().unwrap();
+            let Some(run) = name
+                .rsplit('/')
+                .next()
+                .and_then(|package| package.strip_prefix(&format!("{TEST_LABEL}-")))
+            else {
+                continue;
+            };
+            if old(run) {
+                eprintln!("sweeper: deleting {name}");
+                let _ = self.call(
+                    "DELETE",
+                    &format!("https://artifactregistry.googleapis.com/v1/{name}"),
+                    None,
+                );
+            }
+        }
+    }
+}
+
+/// Whether the run `run` started more than `SWEEP_AFTER` ago.
+fn old_run(run: &str) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    u64::from_str_radix(run, 16)
+        .is_ok_and(|started| now.saturating_sub(started) > SWEEP_AFTER.as_secs())
+}
+
+/// Deletes everything of one run when the test ends, also when it fails.
+struct Run<'a> {
+    sandbox: &'a Sandbox,
+    id: String,
+    processes: Vec<Process>,
+}
+
+impl Drop for Run<'_> {
+    fn drop(&mut self) {
+        self.processes.clear();
+        self.sandbox.sweep(|run| run == self.id);
+    }
+}
+
+/// A service's settings: everything but what Cloud Run reports, the traffic,
+/// and the name of the next revision.
+fn settings(service: &Value) -> Value {
+    let mut settings = service.clone();
+    let object = settings.as_object_mut().unwrap();
+    for field in [
+        "uid",
+        "generation",
+        "createTime",
+        "updateTime",
+        "creator",
+        "lastModifier",
+        "observedGeneration",
+        "terminalCondition",
+        "conditions",
+        "latestReadyRevision",
+        "latestCreatedRevision",
+        "trafficStatuses",
+        "uri",
+        "urls",
+        "reconciling",
+        "etag",
+        "traffic",
+    ] {
+        object.remove(field);
+    }
+    if let Some(template) = settings["template"].as_object_mut() {
+        template.remove("revision");
+    }
+    settings
+}
+
+/// A revision's settings: everything but what Cloud Run reports, its labels,
+/// and its image.
+fn revision_settings(revision: &Value) -> Value {
+    let mut settings = revision.clone();
+    let object = settings.as_object_mut().unwrap();
+    for field in [
+        "name",
+        "uid",
+        "generation",
+        "labels",
+        "createTime",
+        "updateTime",
+        "conditions",
+        "observedGeneration",
+        "logUri",
+        "reconciling",
+        "etag",
+        "creator",
+        "scalingStatus",
+    ] {
+        object.remove(field);
+    }
+    for container in settings["containers"].as_array_mut().into_iter().flatten() {
+        container.as_object_mut().unwrap().remove("image");
+    }
+    settings
+}
+
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut decoded = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && let Some(byte) = text
+                .get(index + 1..index + 3)
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            decoded.push(byte);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).unwrap()
+}
+
+/// A stand-in for the metadata server of Cloud Run, for a proxy on this
+/// machine: it gives the access tokens of the credentials, and ID tokens of
+/// the test account. It keeps each audience it was asked for.
+fn metadata_server(sandbox: Arc<Sandbox>, audiences: Arc<Mutex<Vec<String>>>) -> String {
+    let port = serve(move |received| {
+        assert_eq!(received.headers["metadata-flavor"], "Google");
+        let account = "/computeMetadata/v1/instance/service-accounts/default";
+        match received.path.as_str() {
+            "/computeMetadata/v1/project/project-id" => {
+                (200, "text/plain", sandbox.project.clone())
+            }
+            path if path == format!("{account}/token") => json_answer(
+                200,
+                &json!({"access_token": sandbox.token(), "expires_in": 300}),
+            ),
+            path if path == format!("{account}/identity") => {
+                let audience = received
+                    .query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("audience="))
+                    .map(percent_decode)
+                    .unwrap_or_default();
+                audiences.lock().unwrap().push(audience.clone());
+                (200, "text/plain", sandbox.id_token(&audience))
+            }
+            _ => json_answer(404, &json!({})),
+        }
+    });
+    format!("127.0.0.1:{port}")
+}
+
+/// A request to `url` for `subject`, as the app's client sends it: with the
+/// app's own Authorization header.
+fn visit(url: &str, subject: &str, extra: &[(&str, String)]) -> Option<Value> {
+    let mut request = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .unwrap()
+        .get(format!("{url}/checkout"))
+        .header("cookie", format!("ssp_sid={subject}"))
+        .header("authorization", "Bearer the-app's-own");
+    for (name, value) in extra {
+        request = request.header(*name, value);
+    }
+    let response = match request.send() {
+        Ok(response) => response,
+        Err(error) => {
+            eprintln!("{url}: {error}");
+            return None;
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        eprintln!("{url}: {status}");
+        return None;
+    }
+    response.json().ok()
+}
+
+/// The tags of the proxy on a service, with their revisions.
+fn unit_tags(service: &Value) -> Vec<(String, String)> {
+    service["trafficStatuses"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|status| {
+            let tag = status["tag"]
+                .as_str()
+                .filter(|tag| tag.starts_with("ssp-"))?;
+            Some((tag.to_owned(), status["revision"].as_str()?.to_owned()))
+        })
+        .collect()
+}
+
+/// The sweeper: deletes the services and images of Cloud Run test runs that
+/// started more than three hours ago. CI runs it before and after the tests.
+#[test]
+fn gcp_sweeper_deletes_old_test_resources() {
+    let Some(sandbox) = sandbox() else {
+        return;
+    };
+    sandbox.sweep(old_run);
+}
+
+/// `ssp proxy cloudrun` against real Cloud Run, first on this machine and
+/// then as its own Cloud Run service: arms run as tagged revisions with 0%
+/// traffic, requests reach them with an ID token while the app keeps its own
+/// Authorization header, a deploy of the customer still moves live, and a
+/// stop leaves the service as it was.
+#[test]
+fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
+    let Some(sandbox) = sandbox() else {
+        return;
+    };
+    let sandbox = Arc::new(sandbox);
+    sandbox.sweep(old_run);
+    let id = format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    let mut run = Run {
+        sandbox: &sandbox,
+        id: id.clone(),
+        processes: Vec::new(),
+    };
+    let name = format!("{TEST_LABEL}-{id}");
+    eprintln!("run {id}: service {name} in {}", sandbox.region);
+
+    // The app: three images of the example app that differ by greeting.
+    sandbox.repository();
+    sandbox.docker_login();
+    let app = Path::new("examples/app");
+    let image = |greeting: &str| {
+        sandbox.push(
+            &name,
+            greeting,
+            &id,
+            app,
+            &["--build-arg", &format!("GREETING={greeting}")],
+        )
+    };
+    let live_digest = image("hello");
+    let arm_digest = image("hi");
+    let new_live_digest = image("hey");
+
+    // a. The app runs as live: deployed by tag, as a customer does.
+    let before = sandbox.create_service(
+        &name,
+        &id,
+        json!({
+            "serviceAccount": sandbox.account,
+            "scaling": {"minInstanceCount": 0, "maxInstanceCount": 2},
+            "containers": [{
+                "image": format!("{}/{name}:hello", sandbox.registry),
+                "ports": [{"containerPort": 8000}],
+                "env": [{"name": "SHARED", "value": "from-the-service"}],
+                "resources": {"limits": {"cpu": "1", "memory": "512Mi"}, "cpuIdle": true},
+            }],
+        }),
+    );
+    let live_url = before["uri"].as_str().unwrap().to_owned();
+
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
+            "settings": {"overrides": false, "redact": []},
+            "live": {"commit": LIVE, "image": live_digest},
+            "experiments": [],
+            "lease": null, "poll_interval_seconds": 2,
+        }),
+        ..Statespace::default()
+    }));
+    let checkout = json!([{
+        "name": "checkout", "version": 1, "state": "running",
+        "subject": null, "eligibility": null, "events": [],
+        "arms": [
+            {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
+            {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
+        ],
+    }]);
+    let api = statespace(state.clone());
+    let reference_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+    let greeting = |body: &Option<Value>| {
+        body.as_ref().and_then(|body| {
+            Some((
+                body["arm"].as_str()?.to_owned(),
+                body["greeting"].as_str()?.to_owned(),
+            ))
+        })
+    };
+
+    // b. The proxy on this machine, with the machine's credentials.
+    let audiences = Arc::new(Mutex::new(Vec::new()));
+    let metadata = metadata_server(sandbox.clone(), audiences.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-secret")
+        .env("GCE_METADATA_HOST", &metadata)
+        .args([
+            "proxy",
+            "cloudrun",
+            "--app",
+            "shop-prod",
+            "--service",
+            &name,
+        ])
+        .args(["--region", &sandbox.region, "--project", &sandbox.project]);
+    let (proxy, port) = spawn_proxy(command);
+    run.processes.push(proxy);
+    let proxy_url = format!("http://127.0.0.1:{port}");
+    let mut live = Value::Null;
+    wait_until(300, "live answers through the proxy", || {
+        visit(&proxy_url, &live_subject, &[])
+            .map(|body| live = body)
+            .is_some()
+    });
+    assert_eq!(live["greeting"], "hello");
+    assert_eq!(live["arm"], Value::Null);
+    assert_eq!(live["authorization"], "Bearer the-app's-own");
+
+    // c. Each arm is a tagged revision with 0% traffic, and serves through
+    // its tag URL.
+    state.lock().unwrap().config["experiments"] = checkout.clone();
+    wait_until(600, "both arms serve through their tag URLs", || {
+        greeting(&visit(&proxy_url, &reference_subject, &[]))
+            == Some((LIVE.to_owned(), "hello".to_owned()))
+            && greeting(&visit(&proxy_url, &arm_subject, &[]))
+                == Some((ARM.to_owned(), "hi".to_owned()))
+    });
+    let arm = visit(&proxy_url, &arm_subject, &[]).unwrap();
+    assert_eq!(
+        arm["authorization"], "Bearer the-app's-own",
+        "the app keeps its own header"
+    );
+    assert_eq!(arm["shared"], "from-the-service");
+    assert_eq!(arm["experiment"], "checkout");
+    let during = sandbox.service(&name);
+    let tags = unit_tags(&during);
+    assert_eq!(tags.len(), 2, "{tags:?}");
+    for status in during["trafficStatuses"].as_array().unwrap() {
+        if status["tag"]
+            .as_str()
+            .is_some_and(|tag| tag.starts_with("ssp-"))
+        {
+            assert_eq!(status["percent"].as_u64().unwrap_or(0), 0, "{status}");
+        }
+    }
+    // RISK 1: live still follows the latest revision, and the template is
+    // live's again.
+    let mut expected = before["traffic"].as_array().unwrap().clone();
+    for (tag, revision) in &tags {
+        expected.push(json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
+                             "revision": revision, "tag": tag}));
+    }
+    let mut traffic = during["traffic"].as_array().unwrap().clone();
+    let key = |target: &Value| target["tag"].as_str().unwrap_or_default().to_owned();
+    traffic.sort_by_key(key);
+    expected.sort_by_key(key);
+    assert_eq!(traffic, expected, "traffic");
+    // RISK 2: the changes keep every setting of the service, and an arm's
+    // revision has every setting of live's but the image and the labels.
+    assert_eq!(
+        settings(&during),
+        settings(&before),
+        "the service keeps its settings"
+    );
+    let live_revision = sandbox.must(
+        "GET",
+        &format!(
+            "https://run.googleapis.com/v2/{}",
+            before["latestReadyRevision"].as_str().unwrap()
+        ),
+        None,
+    );
+    for (_, revision) in &tags {
+        let unit = sandbox.must(
+            "GET",
+            &format!("{}/services/{name}/revisions/{revision}", sandbox.run_api()),
+            None,
+        );
+        assert_eq!(revision_settings(&unit), revision_settings(&live_revision));
+        assert!(
+            unit["labels"]["statespace-experiment"] == "checkout",
+            "{}",
+            unit["labels"]
+        );
+    }
+    // ID tokens are for the service's URL: Cloud Run takes them at every tag
+    // URL of the service.
+    assert!(
+        audiences
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|audience| *audience == live_url),
+        "{:?}",
+        audiences.lock().unwrap()
+    );
+    let tag_url = during["trafficStatuses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|status| status["uri"].as_str().filter(|_| status["tag"].is_string()))
+        .unwrap()
+        .to_owned();
+    let direct = |audience: &str| {
+        reqwest::blocking::Client::new()
+            .get(&tag_url)
+            .header(
+                "x-serverless-authorization",
+                format!("Bearer {}", sandbox.id_token(audience)),
+            )
+            .send()
+            .unwrap()
+            .status()
+            .as_u16()
+    };
+    let (for_service, for_tag) = (direct(&live_url), direct(&tag_url));
+    eprintln!(
+        "a tag URL answers {for_service} to a token for the service, {for_tag} to one for the tag"
+    );
+    assert_eq!(for_service, 200);
+
+    // d. RISK 1: the customer deploys a new live with the Admin API, as
+    // `gcloud run deploy` does. All of live's traffic moves to it; the arms
+    // keep their tags.
+    let mut deploy = sandbox.service(&name);
+    deploy["template"]["containers"][0]["image"] =
+        json!(format!("{}/{name}:hey", sandbox.registry));
+    deploy["template"]
+        .as_object_mut()
+        .unwrap()
+        .remove("revision");
+    sandbox.update(&deploy);
+    let deployed = sandbox.service(&name);
+    let newest = deployed["latestCreatedRevision"]
+        .as_str()
+        .unwrap()
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    eprintln!("after the deploy: {}", deployed["trafficStatuses"]);
+    assert!(
+        deployed["trafficStatuses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|status| { status["revision"] == newest.as_str() && status["percent"] == 100 }),
+        "the new revision gets all of live's traffic: {}",
+        deployed["trafficStatuses"]
+    );
+    assert_eq!(unit_tags(&deployed), tags);
+    wait_until(180, "live is the new image", || {
+        visit(&proxy_url, &live_subject, &[]).is_some_and(|body| body["greeting"] == "hey")
+    });
+    assert_eq!(
+        greeting(&visit(&proxy_url, &arm_subject, &[])),
+        Some((ARM.to_owned(), "hi".to_owned()))
+    );
+    wait_until(120, "the proxy reports the new live", || {
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report["live_image"] == new_live_digest.as_str())
+    });
+
+    // f. The experiment stops: the tags and revisions go, and the service is
+    // as the customer left it.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(180, "the tags are removed", || {
+        unit_tags(&sandbox.service(&name)).is_empty()
+    });
+    wait_until(180, "the revisions are deleted", || {
+        tags.iter().all(|(_, revision)| {
+            sandbox
+                .call(
+                    "GET",
+                    &format!("{}/services/{name}/revisions/{revision}", sandbox.run_api()),
+                    None,
+                )
+                .is_err_and(|(status, _)| status == 404)
+        })
+    });
+    let after = sandbox.service(&name);
+    assert_eq!(
+        after["traffic"], before["traffic"],
+        "traffic is as before the test"
+    );
+    assert_eq!(settings(&after), settings(&deployed));
+    assert_eq!(
+        visit(&proxy_url, &arm_subject, &[]).unwrap()["arm"],
+        Value::Null
+    );
+    let mut proxy = run.processes.pop().unwrap();
+    assert!(proxy.stop().is_some_and(|status| status.success()));
+
+    // b. The proxy as its own Cloud Run service, with the credentials of the
+    // metadata server. It reaches the stand-in through a quick tunnel.
+    let Ok(binary) = std::env::var("STATESPACE_TEST_SSP_BINARY") else {
+        eprintln!(
+            "not run: set STATESPACE_TEST_SSP_BINARY to a linux/amd64 ssp to run the proxy on Cloud Run"
+        );
+        return;
+    };
+    let context = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(context.path().join("image/amd64")).unwrap();
+    std::fs::copy(&binary, context.path().join("image/amd64/ssp")).unwrap();
+    std::fs::copy("Dockerfile", context.path().join("Dockerfile")).unwrap();
+    let ssp_image = sandbox.push(&name, "ssp", &id, context.path(), &[]);
+    let mut tunnel = std::process::Command::new("cloudflared")
+        .args(["tunnel", "--no-autoupdate", "--url", &api])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cloudflared runs");
+    let stderr = tunnel.stderr.take().unwrap();
+    run.processes.push(Process(tunnel));
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            if let Some(start) = line.find("https://")
+                && line.contains(".trycloudflare.com")
+            {
+                let url = line[start..].split_whitespace().next().unwrap().to_owned();
+                let _ = sender.send(url);
+            }
+        }
+    });
+    let public = receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("a quick tunnel");
+    wait_until(120, "the tunnel reaches the stand-in", || {
+        reqwest::blocking::get(format!("{public}/v1/runtime/apps/shop-prod"))
+            .is_ok_and(|response| response.status() == 200)
+    });
+    state.lock().unwrap().config["experiments"] = checkout;
+    let proxy_service = sandbox.create_service(
+        &format!("{name}-proxy"),
+        &id,
+        json!({
+            "serviceAccount": sandbox.account,
+            // The proxy works between requests: CPU always, one instance.
+            "scaling": {"minInstanceCount": 1, "maxInstanceCount": 1},
+            "containers": [{
+                "image": ssp_image,
+                "args": ["proxy", "cloudrun", "--app", "shop-prod", "--service", &name,
+                         "--region", &sandbox.region],
+                "env": [
+                    {"name": "STATESPACE_API", "value": public},
+                    {"name": "STATESPACE_TOKEN", "value": "runtime-secret"},
+                ],
+                "ports": [{"containerPort": 8080}],
+                "resources": {"limits": {"cpu": "1", "memory": "512Mi"}, "cpuIdle": false},
+            }],
+        }),
+    );
+    let proxy_url = proxy_service["uri"].as_str().unwrap().to_owned();
+    let token = sandbox.id_token(&proxy_url);
+    let caller = [("x-serverless-authorization", format!("Bearer {token}"))];
+    wait_until(
+        600,
+        "both arms serve through the proxy on Cloud Run",
+        || {
+            greeting(&visit(&proxy_url, &reference_subject, &caller))
+                == Some((LIVE.to_owned(), "hello".to_owned()))
+                && greeting(&visit(&proxy_url, &arm_subject, &caller))
+                    == Some((ARM.to_owned(), "hi".to_owned()))
+        },
+    );
+    let arm = visit(&proxy_url, &arm_subject, &caller).unwrap();
+    assert_eq!(arm["authorization"], "Bearer the-app's-own");
+    assert_eq!(
+        visit(&proxy_url, &live_subject, &caller).unwrap()["greeting"],
+        "hey"
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report["orchestrator"] == "cloudrun"
+                && report["live_image"] == new_live_digest.as_str())
+    );
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(180, "the tags are removed", || {
+        unit_tags(&sandbox.service(&name)).is_empty()
+    });
+    assert_eq!(sandbox.service(&name)["traffic"], before["traffic"]);
 }

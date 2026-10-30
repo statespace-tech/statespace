@@ -18,6 +18,8 @@ class Handler(BaseHTTPRequestHandler):
                 "subject": subject,
                 "greeting": os.environ.get("GREETING", "hello"),
                 "shared": os.environ.get("SHARED"),
+                # The app's own credential. The proxy never changes it.
+                "authorization": self.headers.get("authorization"),
                 # Names only: the proxy never passes its own settings on.
                 "statespace_variables": sorted(
                     name for name in os.environ if name.startswith("STATESPACE_")
