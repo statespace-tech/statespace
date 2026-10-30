@@ -7,6 +7,9 @@ name: Runtime tests
 on:
   push:
     tags: ["v*"]
+    # TODO: remove after merge. GitHub runs "Run workflow" only for a workflow that it
+    # knows, and it knows a workflow of a branch only after the workflow ran there.
+    branches: ["runtime-tests"]
   workflow_dispatch:
     inputs:
       skip:
