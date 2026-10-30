@@ -4469,6 +4469,15 @@ fn aws_fargate_proxies_run_arms_as_services() {
         "--retention-in-days",
         "1",
     ]);
+    // A new account has no service-linked role for ECS yet.
+    if let Err(error) = sandbox.try_aws(&[
+        "iam",
+        "create-service-linked-role",
+        "--aws-service-name",
+        "ecs.amazonaws.com",
+    ]) {
+        assert!(error.contains("has been taken"), "{error}");
+    }
     let cluster = sandbox.aws(&[
         "ecs",
         "create-cluster",
@@ -4524,7 +4533,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         "awsvpcConfiguration={{subnets=[{}],securityGroups=[{group}],assignPublicIp=ENABLED}}",
         subnets.join(",")
     );
-    sandbox.aws(&[
+    let create_service = [
         "ecs",
         "create-service",
         "--cluster",
@@ -4543,7 +4552,18 @@ fn aws_fargate_proxies_run_arms_as_services() {
         "SERVICE",
         "--tags",
         &tag_list,
-    ]);
+    ];
+    // A new service-linked role takes a moment to work.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        match sandbox.try_aws(&create_service) {
+            Ok(_) => break,
+            Err(error) if error.contains("service linked role") && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_secs(10));
+            }
+            Err(error) => panic!("aws ecs create-service: {error}"),
+        }
+    }
     let mut live_url = String::new();
     wait_until(600, "live runs and answers", || {
         let Some(ip) = sandbox
