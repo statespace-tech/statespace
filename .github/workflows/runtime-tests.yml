@@ -8,9 +8,6 @@ name: Runtime tests
 on:
   push:
     tags: ["v*"]
-    # TODO: remove after merge. GitHub runs "Run workflow" only for a workflow that it
-    # knows, and it knows a workflow of a branch only after the workflow ran there.
-    branches: ["runtime-tests"]
   workflow_dispatch:
     inputs:
       skip:
@@ -45,10 +42,6 @@ jobs:
           set -euo pipefail
           case "$GITHUB_REF" in
             refs/heads/main | refs/tags/v*) ;;
-            # TODO: remove after merge. Only to check this workflow on its branch.
-            refs/heads/runtime-tests) ;;
-            # TODO: remove after merge. Only to check the Fargate job on its branch.
-            refs/heads/fargate) ;;
             *) echo "::error::Run the runtime tests on main or a v tag."; exit 1 ;;
           esac
           permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$GITHUB_ACTOR/permission" --jq .permission)
@@ -189,9 +182,11 @@ jobs:
         id: setup
         shell: bash
         run: |
+          # A missing token fails the job, as any untested runtime does. To release
+          # without Fly.io, run with skip: fly; the release notes then say so.
           if [[ -z "$FLY_API_TOKEN" || -z "$STATESPACE_TEST_FLY_APP" ]]; then
-            echo "::warning::Fly.io not tested: set the secret FLY_API_TOKEN and the variable FLY_TEST_APP of the environment fly-runtime-test."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Fly.io not tested: set the secret FLY_API_TOKEN and the variable FLY_TEST_APP of the environment fly-runtime-test, or run with skip: fly."
+            exit 1
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
