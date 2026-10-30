@@ -3754,3 +3754,1052 @@ fn fargate_proxies_run_units_as_services() {
         get(&arm_subject).is_some_and(|body| body["name"] == "live")
     });
 }
+
+// ---------------------------------------------------------------------------
+// The proxy on ECS Fargate, in the AWS sandbox account. It runs when
+// `STATESPACE_FARGATE_TESTS=1`, with `STATESPACE_TEST_AWS_ACCOUNT` and AWS
+// credentials of that account. It uses the `aws` and `docker` commands.
+
+/// How old the resources of a test run must be before the sweeper deletes
+/// them.
+const AWS_SWEEP_AFTER: Duration = Duration::from_secs(3 * 3600);
+/// The tag every resource of a test run carries, with the run as its value.
+const AWS_TEST_TAG: &str = "statespace-test";
+
+struct AwsSandbox {
+    account: String,
+    region: String,
+}
+
+impl AwsSandbox {
+    /// The sandbox, when the test runs. It stops the test when the
+    /// credentials are not of the sandbox account.
+    fn connect() -> Option<Self> {
+        if std::env::var("STATESPACE_FARGATE_TESTS").as_deref() != Ok("1") {
+            eprintln!(
+                "skipped: set STATESPACE_FARGATE_TESTS=1 and STATESPACE_TEST_AWS_ACCOUNT, \
+                 with AWS credentials of that account, to run the Fargate test"
+            );
+            return None;
+        }
+        let account = std::env::var("STATESPACE_TEST_AWS_ACCOUNT")
+            .expect("set STATESPACE_TEST_AWS_ACCOUNT to the sandbox account");
+        let region =
+            std::env::var("STATESPACE_TEST_AWS_REGION").unwrap_or_else(|_| "us-east-1".into());
+        let sandbox = Self { account, region };
+        let identity = sandbox.aws(&["sts", "get-caller-identity"]);
+        assert_eq!(
+            identity["Account"], sandbox.account,
+            "the AWS credentials are not of the sandbox account; stopping"
+        );
+        Some(sandbox)
+    }
+
+    /// Run `aws` and return its JSON output, or its error.
+    fn try_aws(&self, arguments: &[&str]) -> Result<Value, String> {
+        let output = std::process::Command::new("aws")
+            .args(arguments)
+            .args(["--region", &self.region, "--output", "json"])
+            .env("AWS_PAGER", "")
+            .output()
+            .map_err(|error| format!("could not run aws: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    fn aws(&self, arguments: &[&str]) -> Value {
+        self.try_aws(arguments)
+            .unwrap_or_else(|error| panic!("aws {}: {error}", arguments.join(" ")))
+    }
+
+    fn registry(&self) -> String {
+        format!("{}.dkr.ecr.{}.amazonaws.com", self.account, self.region)
+    }
+
+    /// Log Docker in to the account's registry. The password goes through
+    /// a pipe and is never printed.
+    fn docker_login(&self) {
+        let password = std::process::Command::new("aws")
+            .args(["ecr", "get-login-password", "--region", &self.region])
+            .output()
+            .unwrap();
+        assert!(
+            password.status.success(),
+            "aws ecr get-login-password failed"
+        );
+        let mut login = std::process::Command::new("docker")
+            .args([
+                "login",
+                "--username",
+                "AWS",
+                "--password-stdin",
+                &self.registry(),
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        login
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(&password.stdout)
+            .unwrap();
+        assert!(login.wait().unwrap().success(), "docker login failed");
+    }
+
+    /// Build the example app with a greeting, push it with a tag, and
+    /// return the tag reference and the digest reference.
+    fn push(&self, repository: &str, tag: &str, greeting: &str) -> (String, String) {
+        let reference = format!("{}/{repository}:{tag}", self.registry());
+        docker(&[
+            "build",
+            "--quiet",
+            "--platform",
+            "linux/amd64",
+            "--build-arg",
+            &format!("GREETING={greeting}"),
+            "--tag",
+            &reference,
+            "examples/app",
+        ]);
+        docker(&["push", "--quiet", &reference]);
+        let digest = docker(&[
+            "image",
+            "inspect",
+            "--format",
+            "{{index .RepoDigests 0}}",
+            &reference,
+        ]);
+        (reference, digest)
+    }
+
+    /// The services of a cluster that are not deleted yet.
+    fn services(&self, cluster: &str) -> Vec<Value> {
+        let arns = self
+            .try_aws(&["ecs", "list-services", "--cluster", cluster])
+            .map(|listed| {
+                listed["serviceArns"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        let mut services = Vec::new();
+        for chunk in arns.chunks(10) {
+            let mut arguments = vec![
+                "ecs",
+                "describe-services",
+                "--include",
+                "TAGS",
+                "--cluster",
+                cluster,
+                "--services",
+            ];
+            arguments.extend(chunk.iter().filter_map(Value::as_str));
+            if let Ok(described) = self.try_aws(&arguments) {
+                services.extend(
+                    described["services"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        services
+    }
+
+    fn service(&self, cluster: &str, name: &str) -> Value {
+        self.aws(&[
+            "ecs",
+            "describe-services",
+            "--include",
+            "TAGS",
+            "--cluster",
+            cluster,
+            "--services",
+            name,
+        ])["services"][0]
+            .clone()
+    }
+
+    /// The tasks of a service that run.
+    fn tasks(&self, cluster: &str, service: &str) -> Vec<Value> {
+        let listed = self.aws(&[
+            "ecs",
+            "list-tasks",
+            "--cluster",
+            cluster,
+            "--service-name",
+            service,
+            "--desired-status",
+            "RUNNING",
+        ]);
+        let arns: Vec<&str> = listed["taskArns"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if arns.is_empty() {
+            return Vec::new();
+        }
+        let mut arguments = vec!["ecs", "describe-tasks", "--cluster", cluster, "--tasks"];
+        arguments.extend(arns);
+        self.aws(&arguments)["tasks"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The public IP address of a task.
+    fn public_ip(&self, task: &Value) -> Option<String> {
+        let eni = task["attachments"][0]["details"]
+            .as_array()?
+            .iter()
+            .find(|detail| detail["name"] == "networkInterfaceId")?["value"]
+            .as_str()?
+            .to_owned();
+        let described = self.aws(&[
+            "ec2",
+            "describe-network-interfaces",
+            "--network-interface-ids",
+            &eni,
+        ]);
+        described["NetworkInterfaces"][0]["Association"]["PublicIp"]
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    /// Delete the resources of every test run that `select` picks: ECS
+    /// services and clusters, task definitions, security groups, ECR
+    /// repositories, log groups, and VPCs that a test made.
+    fn sweep(&self, select: impl Fn(&str) -> bool) {
+        // Clusters, after their services.
+        let clusters = self.aws(&["ecs", "list-clusters"])["clusterArns"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for cluster in clusters.iter().filter_map(Value::as_str) {
+            let name = cluster.rsplit('/').next().unwrap_or_default();
+            if !name.starts_with("statespace-test-") || !select(name) {
+                continue;
+            }
+            eprintln!("sweeping cluster {name}");
+            for service in self.services(cluster) {
+                if service["status"] == "ACTIVE" {
+                    let _ = self.try_aws(&[
+                        "ecs",
+                        "delete-service",
+                        "--cluster",
+                        cluster,
+                        "--service",
+                        service["serviceArn"].as_str().unwrap_or_default(),
+                        "--force",
+                    ]);
+                }
+            }
+            let deadline = Instant::now() + Duration::from_secs(600);
+            while Instant::now() < deadline {
+                match self.try_aws(&["ecs", "delete-cluster", "--cluster", cluster]) {
+                    Ok(_) => break,
+                    Err(error) if error.contains("ClusterNotFound") => break,
+                    Err(_) => std::thread::sleep(Duration::from_secs(10)),
+                }
+            }
+        }
+        // Task definitions: live's family and the units' families start
+        // with the run's name.
+        for status in ["ACTIVE", "INACTIVE"] {
+            let families = self.aws(&[
+                "ecs",
+                "list-task-definition-families",
+                "--family-prefix",
+                "statespace-test-",
+                "--status",
+                "ALL",
+            ])["families"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            for family in families.iter().filter_map(Value::as_str) {
+                if !select(family) {
+                    continue;
+                }
+                let arns = self.aws(&[
+                    "ecs",
+                    "list-task-definitions",
+                    "--family-prefix",
+                    family,
+                    "--status",
+                    status,
+                ])["taskDefinitionArns"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let arns: Vec<&str> = arns.iter().filter_map(Value::as_str).collect();
+                if status == "ACTIVE" {
+                    for arn in &arns {
+                        let _ = self.try_aws(&[
+                            "ecs",
+                            "deregister-task-definition",
+                            "--task-definition",
+                            arn,
+                        ]);
+                    }
+                }
+                for chunk in arns.chunks(10) {
+                    let mut arguments =
+                        vec!["ecs", "delete-task-definitions", "--task-definitions"];
+                    arguments.extend(chunk);
+                    let _ = self.try_aws(&arguments);
+                }
+            }
+        }
+        // Security groups, once the tasks' network interfaces are gone.
+        let groups = self.aws(&[
+            "ec2",
+            "describe-security-groups",
+            "--filters",
+            "Name=group-name,Values=statespace-test-*",
+        ])["SecurityGroups"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for group in &groups {
+            let name = group["GroupName"].as_str().unwrap_or_default();
+            if !select(name) {
+                continue;
+            }
+            eprintln!("sweeping security group {name}");
+            let id = group["GroupId"].as_str().unwrap_or_default();
+            let deadline = Instant::now() + Duration::from_secs(600);
+            while Instant::now() < deadline {
+                match self.try_aws(&["ec2", "delete-security-group", "--group-id", id]) {
+                    Ok(_) => break,
+                    Err(error) if error.contains("NotFound") => break,
+                    Err(_) => std::thread::sleep(Duration::from_secs(10)),
+                }
+            }
+        }
+        // ECR repositories with their images.
+        let repositories = self.aws(&["ecr", "describe-repositories"])["repositories"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for repository in &repositories {
+            let name = repository["repositoryName"].as_str().unwrap_or_default();
+            if name.starts_with("statespace-test-") && select(name) {
+                eprintln!("sweeping repository {name}");
+                let _ = self.try_aws(&[
+                    "ecr",
+                    "delete-repository",
+                    "--repository-name",
+                    name,
+                    "--force",
+                ]);
+            }
+        }
+        // Log groups.
+        let groups = self.aws(&[
+            "logs",
+            "describe-log-groups",
+            "--log-group-name-prefix",
+            "/statespace-test/",
+        ])["logGroups"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for group in &groups {
+            let name = group["logGroupName"].as_str().unwrap_or_default();
+            if select(name.trim_start_matches("/statespace-test/")) {
+                eprintln!("sweeping log group {name}");
+                let _ = self.try_aws(&["logs", "delete-log-group", "--log-group-name", name]);
+            }
+        }
+        // VPCs that a test made when the account had no default VPC.
+        let vpcs = self.aws(&[
+            "ec2",
+            "describe-vpcs",
+            "--filters",
+            &format!("Name=tag-key,Values={AWS_TEST_TAG}"),
+        ])["Vpcs"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for vpc in &vpcs {
+            let run = vpc["Tags"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|tag| tag["Key"] == AWS_TEST_TAG)
+                .and_then(|tag| tag["Value"].as_str())
+                .unwrap_or_default();
+            if select(run) {
+                self.delete_vpc(vpc["VpcId"].as_str().unwrap_or_default());
+            }
+        }
+    }
+
+    fn delete_vpc(&self, vpc: &str) {
+        eprintln!("sweeping VPC {vpc}");
+        let filter = format!("Name=vpc-id,Values={vpc}");
+        let subnets = self.aws(&["ec2", "describe-subnets", "--filters", &filter])["Subnets"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for subnet in &subnets {
+            let id = subnet["SubnetId"].as_str().unwrap_or_default();
+            let _ = self.try_aws(&["ec2", "delete-subnet", "--subnet-id", id]);
+        }
+        let gateways = self.aws(&[
+            "ec2",
+            "describe-internet-gateways",
+            "--filters",
+            &format!("Name=attachment.vpc-id,Values={vpc}"),
+        ])["InternetGateways"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for gateway in &gateways {
+            let id = gateway["InternetGatewayId"].as_str().unwrap_or_default();
+            let _ = self.try_aws(&[
+                "ec2",
+                "detach-internet-gateway",
+                "--internet-gateway-id",
+                id,
+                "--vpc-id",
+                vpc,
+            ]);
+            let _ = self.try_aws(&[
+                "ec2",
+                "delete-internet-gateway",
+                "--internet-gateway-id",
+                id,
+            ]);
+        }
+        let tables =
+            self.aws(&["ec2", "describe-route-tables", "--filters", &filter])["RouteTables"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+        for table in &tables {
+            let main = table["Associations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|association| association["Main"] == true);
+            if !main {
+                let id = table["RouteTableId"].as_str().unwrap_or_default();
+                let _ = self.try_aws(&["ec2", "delete-route-table", "--route-table-id", id]);
+            }
+        }
+        let _ = self.try_aws(&["ec2", "delete-vpc", "--vpc-id", vpc]);
+    }
+
+    /// Public subnets for the test's tasks: those of the default VPC, or of
+    /// a small VPC with an internet gateway and no NAT gateway.
+    fn subnets(&self, run: &str) -> (String, Vec<String>) {
+        let vpcs = self.aws(&[
+            "ec2",
+            "describe-vpcs",
+            "--filters",
+            "Name=is-default,Values=true",
+        ]);
+        if let Some(vpc) = vpcs["Vpcs"][0]["VpcId"].as_str() {
+            let subnets = self.aws(&[
+                "ec2",
+                "describe-subnets",
+                "--filters",
+                &format!("Name=vpc-id,Values={vpc}"),
+                "Name=default-for-az,Values=true",
+            ])["Subnets"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            let subnets: Vec<String> = subnets
+                .iter()
+                // Fargate does not run in every zone, such as use1-az3.
+                .filter(|subnet| subnet["AvailabilityZoneId"] != "use1-az3")
+                .filter_map(|subnet| subnet["SubnetId"].as_str().map(str::to_owned))
+                .take(3)
+                .collect();
+            if !subnets.is_empty() {
+                return (vpc.to_owned(), subnets);
+            }
+        }
+        eprintln!("the account has no default VPC; creating {run}");
+        let tags = |kind: &str| {
+            format!(
+                "ResourceType={kind},Tags=[{{Key={AWS_TEST_TAG},Value={run}}},{{Key=Name,Value={run}}}]"
+            )
+        };
+        let vpc = self.aws(&[
+            "ec2",
+            "create-vpc",
+            "--cidr-block",
+            "10.42.0.0/16",
+            "--tag-specifications",
+            &tags("vpc"),
+        ])["Vpc"]["VpcId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let gateway = self.aws(&[
+            "ec2",
+            "create-internet-gateway",
+            "--tag-specifications",
+            &tags("internet-gateway"),
+        ])["InternetGateway"]["InternetGatewayId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.aws(&[
+            "ec2",
+            "attach-internet-gateway",
+            "--internet-gateway-id",
+            &gateway,
+            "--vpc-id",
+            &vpc,
+        ]);
+        let table = self.aws(&[
+            "ec2",
+            "create-route-table",
+            "--vpc-id",
+            &vpc,
+            "--tag-specifications",
+            &tags("route-table"),
+        ])["RouteTable"]["RouteTableId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        self.aws(&[
+            "ec2",
+            "create-route",
+            "--route-table-id",
+            &table,
+            "--destination-cidr-block",
+            "0.0.0.0/0",
+            "--gateway-id",
+            &gateway,
+        ]);
+        let zones = self.aws(&[
+            "ec2",
+            "describe-availability-zones",
+            "--filters",
+            "Name=state,Values=available",
+        ])["AvailabilityZones"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        let mut subnets = Vec::new();
+        for (index, zone) in zones
+            .iter()
+            .filter(|zone| zone["ZoneId"] != "use1-az3")
+            .take(2)
+            .enumerate()
+        {
+            let subnet = self.aws(&[
+                "ec2",
+                "create-subnet",
+                "--vpc-id",
+                &vpc,
+                "--cidr-block",
+                &format!("10.42.{index}.0/24"),
+                "--availability-zone",
+                zone["ZoneName"].as_str().unwrap(),
+                "--tag-specifications",
+                &tags("subnet"),
+            ])["Subnet"]["SubnetId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            self.aws(&[
+                "ec2",
+                "associate-route-table",
+                "--route-table-id",
+                &table,
+                "--subnet-id",
+                &subnet,
+            ]);
+            subnets.push(subnet);
+        }
+        (vpc, subnets)
+    }
+}
+
+/// `statespace-test-<unix seconds>-<GitHub run or random>`.
+fn aws_run_name() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let run = std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| format!("{:06x}", rand_suffix()));
+    format!("statespace-test-{now}-{run}")
+}
+
+/// Whether a name of a test run's resource is older than
+/// `AWS_SWEEP_AFTER`. Names that do not carry a time are never old.
+fn old_aws_run(name: &str) -> bool {
+    let Some(seconds) = name
+        .strip_prefix("statespace-test-")
+        .and_then(|rest| rest.split('-').next())
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+    else {
+        return false;
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    now.saturating_sub(seconds) > AWS_SWEEP_AFTER.as_secs()
+}
+
+/// Deletes everything of a test run when the test ends, also on failure.
+struct AwsCleanup<'a> {
+    sandbox: &'a AwsSandbox,
+    run: String,
+}
+
+impl Drop for AwsCleanup<'_> {
+    fn drop(&mut self) {
+        let run = self.run.clone();
+        self.sandbox.sweep(|name| name.starts_with(&run));
+    }
+}
+
+#[test]
+fn aws_sweeper_deletes_old_test_resources() {
+    let Some(sandbox) = AwsSandbox::connect() else {
+        return;
+    };
+    sandbox.sweep(old_aws_run);
+}
+
+/// The proxy on the CI runner orchestrates a real Fargate service: it reads
+/// live's digest, starts both arms of an experiment as ECS services, sends
+/// each arm its requests with the right headers, keeps the arms through a
+/// redeploy of live, records their CloudWatch Logs, and deletes them when
+/// the experiment stops. The tasks have public IP addresses, and a security
+/// group opens the app's port to the runner only.
+#[test]
+fn aws_fargate_proxies_run_arms_as_services() {
+    let Some(sandbox) = AwsSandbox::connect() else {
+        return;
+    };
+    let run = aws_run_name();
+    eprintln!("test run {run} in {}", sandbox.region);
+    let cleanup = AwsCleanup {
+        sandbox: &sandbox,
+        run: run.clone(),
+    };
+    let tag_list = format!("key={AWS_TEST_TAG},value={run}");
+    let (vpc, subnets) = sandbox.subnets(&run);
+
+    // Only the runner reaches the tasks.
+    let runner_ip = reqwest::blocking::get("https://checkip.amazonaws.com")
+        .unwrap()
+        .text()
+        .unwrap()
+        .trim()
+        .to_owned();
+    let group = sandbox.aws(&[
+        "ec2",
+        "create-security-group",
+        "--group-name",
+        &run,
+        "--description",
+        "Statespace Fargate test: the runner reaches the app",
+        "--vpc-id",
+        &vpc,
+        "--tag-specifications",
+        &format!("ResourceType=security-group,Tags=[{{Key={AWS_TEST_TAG},Value={run}}}]"),
+    ])["GroupId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sandbox.aws(&[
+        "ec2",
+        "authorize-security-group-ingress",
+        "--group-id",
+        &group,
+        "--protocol",
+        "tcp",
+        "--port",
+        "8000",
+        "--cidr",
+        &format!("{runner_ip}/32"),
+    ]);
+
+    // Images of live, the arm, and the next live.
+    sandbox.aws(&[
+        "ecr",
+        "create-repository",
+        "--repository-name",
+        &run,
+        "--tags",
+        &format!("Key={AWS_TEST_TAG},Value={run}"),
+    ]);
+    sandbox.docker_login();
+    let (live_tag, live_digest) = sandbox.push(&run, "live", "hello");
+    let (_, arm_digest) = sandbox.push(&run, "arm", "hi");
+    let (next_tag, next_digest) = sandbox.push(&run, "next", "hey");
+    eprintln!("pushed {live_digest}, {arm_digest}, and {next_digest}");
+
+    let log_group = format!("/statespace-test/{run}");
+    sandbox.aws(&[
+        "logs",
+        "create-log-group",
+        "--log-group-name",
+        &log_group,
+        "--tags",
+        &format!("{AWS_TEST_TAG}={run}"),
+    ]);
+    sandbox.aws(&[
+        "logs",
+        "put-retention-policy",
+        "--log-group-name",
+        &log_group,
+        "--retention-in-days",
+        "1",
+    ]);
+    let cluster = sandbox.aws(&[
+        "ecs",
+        "create-cluster",
+        "--cluster-name",
+        &run,
+        "--tags",
+        &tag_list,
+    ])["cluster"]["clusterArn"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let definition = |image: &str| {
+        json!({
+            "family": run,
+            "requiresCompatibilities": ["FARGATE"],
+            "networkMode": "awsvpc",
+            "cpu": "256",
+            "memory": "512",
+            "executionRoleArn": format!(
+                "arn:aws:iam::{}:role/statespace-test-task-execution", sandbox.account
+            ),
+            "containerDefinitions": [{
+                "name": "app",
+                "image": image,
+                "essential": true,
+                "command": ["python3", "/app/app.py", "8000"],
+                "portMappings": [{"containerPort": 8000, "protocol": "tcp"}],
+                "environment": [{"name": "SHARED", "value": "from-live"}],
+                "logConfiguration": {"logDriver": "awslogs", "options": {
+                    "awslogs-group": log_group,
+                    "awslogs-region": sandbox.region,
+                    "awslogs-stream-prefix": "app",
+                }},
+            }],
+            "tags": [{"key": AWS_TEST_TAG, "value": run}],
+        })
+        .to_string()
+    };
+    let register = |image: &str| -> String {
+        sandbox.aws(&[
+            "ecs",
+            "register-task-definition",
+            "--cli-input-json",
+            &definition(image),
+        ])["taskDefinition"]["taskDefinitionArn"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    // Live runs a tag, as many customers deploy; the proxy reports the digest.
+    let live_definition = register(&live_tag);
+    let network = format!(
+        "awsvpcConfiguration={{subnets=[{}],securityGroups=[{group}],assignPublicIp=ENABLED}}",
+        subnets.join(",")
+    );
+    sandbox.aws(&[
+        "ecs",
+        "create-service",
+        "--cluster",
+        &cluster,
+        "--service-name",
+        &run,
+        "--task-definition",
+        &live_definition,
+        "--desired-count",
+        "1",
+        "--launch-type",
+        "FARGATE",
+        "--network-configuration",
+        &network,
+        "--propagate-tags",
+        "SERVICE",
+        "--tags",
+        &tag_list,
+    ]);
+    let mut live_url = String::new();
+    wait_until(600, "live runs and answers", || {
+        let Some(ip) = sandbox
+            .tasks(&cluster, &run)
+            .iter()
+            .filter(|task| task["lastStatus"] == "RUNNING")
+            .find_map(|task| sandbox.public_ip(task))
+        else {
+            std::thread::sleep(Duration::from_secs(5));
+            return false;
+        };
+        live_url = format!("http://{ip}:8000");
+        let answers = reqwest::blocking::Client::new()
+            .get(&live_url)
+            .timeout(Duration::from_secs(5))
+            .send()
+            .is_ok_and(|response| response.status().is_success());
+        if !answers {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        answers
+    });
+    eprintln!("live answers at {live_url}");
+
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
+            "settings": {"overrides": false, "redact": []},
+            "live": {"commit": LIVE, "image": live_digest},
+            "experiments": [{
+                "name": "checkout", "version": 1, "state": "running",
+                "subject": null, "eligibility": null,
+                "events": [{"name": "visit", "source": "stdout",
+                            "match": "stdout.json.event == \"visit\""}],
+                "arms": [
+                    {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
+                ],
+            }],
+            "lease": null, "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-secret")
+        .env("AWS_REGION", &sandbox.region)
+        .args(["proxy", "fargate", "--app", "shop-prod"])
+        .args(["--cluster", &run, "--service", &run])
+        .args(["--live-url", &live_url, "--unit-ip", "public"]);
+    let (proxy, port) = spawn_proxy(command);
+    let get = |subject: &str| -> Option<Value> {
+        send(
+            port,
+            "GET",
+            "/checkout",
+            &[
+                ("cookie", &format!("ssp_sid={subject}")),
+                ("x-statespace-arm", "spoofed"),
+            ],
+        )?
+        .json()
+        .ok()
+    };
+    let reference_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+
+    // Live's image is reported by the digest its task runs.
+    wait_until(120, "the report names live's digest", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["orchestrator"] == "fargate" && report["live_image"] == live_digest.as_str()
+        })
+    });
+
+    // Each arm runs as its own service, from a copy of live's task
+    // definition, tagged with the app, experiment, and commit.
+    let reference_name = format!("{run}-ssp-checkout-{}", &LIVE[..12]);
+    let arm_name = format!("{run}-ssp-checkout-{}", &ARM[..12]);
+    wait_until(120, "both arms are services", || {
+        let names: Vec<String> = sandbox
+            .services(&cluster)
+            .iter()
+            .filter(|service| service["status"] == "ACTIVE")
+            .filter_map(|service| service["serviceName"].as_str().map(str::to_owned))
+            .collect();
+        names.contains(&reference_name) && names.contains(&arm_name)
+    });
+    let arm_service = sandbox.service(&cluster, &arm_name);
+    let tags = &arm_service["tags"];
+    for (key, value) in [
+        ("statespace.com/app", "shop-prod"),
+        ("statespace.com/experiment", "checkout"),
+        ("statespace.com/commit", ARM),
+        (AWS_TEST_TAG, run.as_str()),
+    ] {
+        assert!(
+            tags.as_array()
+                .unwrap()
+                .contains(&json!({"key": key, "value": value})),
+            "{key} in {tags}"
+        );
+    }
+    assert_eq!(arm_service["desiredCount"], 1);
+    assert_eq!(arm_service["launchType"], "FARGATE");
+    assert_eq!(
+        arm_service["networkConfiguration"]["awsvpcConfiguration"]["securityGroups"],
+        json!([group])
+    );
+    let arm_definition = sandbox.aws(&[
+        "ecs",
+        "describe-task-definition",
+        "--task-definition",
+        arm_service["taskDefinition"].as_str().unwrap(),
+    ])["taskDefinition"]
+        .clone();
+    assert_eq!(arm_definition["family"], arm_name.as_str());
+    let container = &arm_definition["containerDefinitions"][0];
+    assert_eq!(container["image"], arm_digest.as_str());
+    assert_eq!(
+        container["environment"],
+        json!([{"name": "SHARED", "value": "from-live"}])
+    );
+    assert_eq!(
+        container["logConfiguration"]["options"]["awslogs-group"],
+        log_group.as_str()
+    );
+    assert_eq!(
+        (&arm_definition["cpu"], &arm_definition["memory"]),
+        (&json!("256"), &json!("512"))
+    );
+
+    // The arms become ready and get their requests with the right headers.
+    wait_until(600, "both arms serve", || {
+        let served = get(&arm_subject).is_some_and(|body| body["arm"] == ARM)
+            && get(&reference_subject).is_some_and(|body| body["arm"] == LIVE);
+        if !served {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        served
+    });
+    let arm = get(&arm_subject).unwrap();
+    let reference = get(&reference_subject).unwrap();
+    let live = get(&live_subject).unwrap();
+    assert_eq!(arm["experiment"], "checkout");
+    assert_eq!(arm["subject"], arm_subject.as_str());
+    assert_eq!(reference["experiment"], "checkout");
+    assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
+    assert_eq!(live["experiment"], Value::Null);
+    assert_eq!(
+        (
+            reference["greeting"].as_str(),
+            arm["greeting"].as_str(),
+            live["greeting"].as_str()
+        ),
+        (Some("hello"), Some("hi"), Some("hello"))
+    );
+    for body in [&reference, &arm] {
+        assert_eq!(body["shared"], "from-live");
+        assert_eq!(body["statespace_variables"], json!([]), "{body}");
+    }
+    wait_until(60, "the holder reports both units ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
+            })
+        })
+    });
+
+    // The arm's output arrives from CloudWatch Logs.
+    wait_until(180, "the arm's visit lines arrive", || {
+        let _ = get(&arm_subject);
+        let found = state
+            .lock()
+            .unwrap()
+            .rows("events")
+            .iter()
+            .any(|row| row["name"] == "visit" && row["arm"] == ARM);
+        if !found {
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        found
+    });
+
+    // The customer deploys a new live, as `aws ecs update-service` does.
+    // The arms keep serving, and the proxy reports the new digest.
+    let next_definition = register(&next_tag);
+    sandbox.aws(&[
+        "ecs",
+        "update-service",
+        "--cluster",
+        &cluster,
+        "--service",
+        &run,
+        "--task-definition",
+        &next_definition,
+    ]);
+    let arm_definition_before = sandbox.service(&cluster, &arm_name)["taskDefinition"].clone();
+    wait_until(600, "the report names the new live digest", || {
+        assert!(
+            get(&arm_subject).is_some_and(|body| body["arm"] == ARM && body["greeting"] == "hi"),
+            "the arm stops serving while live deploys"
+        );
+        assert!(
+            get(&reference_subject).is_some_and(|body| body["arm"] == LIVE),
+            "the reference stops serving while live deploys"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report["live_image"] == next_digest.as_str())
+    });
+    let arm_service = sandbox.service(&cluster, &arm_name);
+    assert_eq!(arm_service["taskDefinition"], arm_definition_before);
+    assert_eq!(arm_service["status"], "ACTIVE");
+
+    // The experiment stops: the arms' services and task definitions go.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(180, "the arms' services are deleted", || {
+        let gone = sandbox
+            .services(&cluster)
+            .iter()
+            .filter(|service| service["status"] == "ACTIVE")
+            .all(|service| service["serviceName"] == run.as_str());
+        if !gone {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        gone
+    });
+    for family in [&reference_name, &arm_name] {
+        let active = sandbox.aws(&[
+            "ecs",
+            "list-task-definitions",
+            "--family-prefix",
+            family,
+            "--status",
+            "ACTIVE",
+        ]);
+        assert_eq!(active["taskDefinitionArns"], json!([]), "{family}");
+    }
+    wait_until(60, "the holder reports no unit", || {
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .last()
+            .is_some_and(|report| report["units"] == json!([]))
+    });
+
+    // The proxy stops before the cleanup deletes the rest.
+    drop(proxy);
+    drop(cleanup);
+}
