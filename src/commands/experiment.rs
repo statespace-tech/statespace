@@ -169,7 +169,7 @@ fn share_of(experiment: &Value, commit: &str) -> Option<f64> {
 ///   − a1b2c3d   0.05
 ///   + f6a7b8c   0.05
 ///     c0ffee1   0.06   (reference)
-///   total 0.11 of max_share 0.2
+///   total 0.11 of max_traffic 0.2
 /// ```
 fn arm_list(experiment: &Value, change: Option<&Change<'_>>) -> String {
     let arms: Vec<&Value> = experiment["arms"]
@@ -251,9 +251,9 @@ fn arm_list(experiment: &Value, change: Option<&Change<'_>>) -> String {
     }
     let total: f64 = arms.iter().filter_map(|arm| arm["share"].as_f64()).sum();
     out.push_str(&format!(
-        "  total {} of max_share {}\n",
+        "  total {} of max_traffic {}\n",
         fraction(total),
-        experiment["definition"]["max_share"]
+        experiment["definition"]["max_traffic"]
             .as_f64()
             .map_or_else(|| "-".into(), fraction)
     ));
@@ -527,8 +527,8 @@ fn show(experiment: &Value) -> String {
                 .map_or_else(|| "everyone".into(), str::to_owned),
         ),
         (
-            "max_share",
-            definition["max_share"]
+            "max_traffic",
+            definition["max_traffic"]
                 .as_f64()
                 .map_or_else(|| "-".into(), fraction),
         ),
@@ -777,7 +777,7 @@ mod tests {
     fn experiment(arms: &[(&str, f64)]) -> Value {
         json!({
             "name": "checkout", "app": "shop-prod", "state": "stopped", "reason": null,
-            "version": 2, "definition": {"subject": null, "eligibility": null, "max_share": 0.2},
+            "version": 2, "definition": {"subject": null, "eligibility": null, "max_traffic": 0.2},
             "reference": LIVE,
             "arms": arms.iter().map(|(commit, share)| json!({"commit": commit, "share": share}))
                 .collect::<Vec<_>>(),
@@ -800,7 +800,7 @@ mod tests {
              \x20 − a1b2c3d   0.05\n\
              \x20 + f6a7b8c   0.05\n\
              \x20 ~ c0ffee1   0.06   (was 0.05) (reference)\n\
-             \x20 total 0.11 of max_share 0.2\n\
+             \x20 total 0.11 of max_traffic 0.2\n\
              Next: ssp experiment start checkout\n"
         );
         assert_eq!(
@@ -808,7 +808,7 @@ mod tests {
             "checkout · shop-prod · stopped\n\
              \x20   c0ffee1   0.05   (reference)\n\
              \x20   a1b2c3d   0.05\n\
-             \x20 total 0.1 of max_share 0.2\n"
+             \x20 total 0.1 of max_traffic 0.2\n"
         );
     }
 

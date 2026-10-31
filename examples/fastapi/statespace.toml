@@ -28,11 +28,11 @@ value = 'events["purchase"].lines / requests'
 # Experiments, in priority order. Set the arms with
 # ssp experiment update price --arm <commit>=<share>.
 [experiment.price]
-max_share = 0.2
+max_traffic = 0.2
 
 # The staging copy: all traffic may go to arms, and testers may pick one.
 [app.shop-dev]
 overrides = true
 
 [app.shop-dev.experiment.price]
-max_share = 1.0
+max_traffic = 1.0

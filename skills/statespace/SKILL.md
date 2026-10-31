@@ -242,14 +242,14 @@ value = '100.0 * events["signup"].subjects / subjects'
 # Who may enter. The default is everyone.
 # eligibility = 'request.headers["cf-ipcountry"] == "US"'
 # The most that the shares of its arms add up to.
-max_share = 0.2
+max_traffic = 0.2
 
 # Settings for one app replace the shared settings.
 # [app.shop-dev]
 # overrides = true
 #
 # [app.shop-dev.experiment.signup]
-# max_share = 1.0
+# max_traffic = 1.0
 ```
 
 - Experiment names have 1 to 40 lowercase letters, digits, and `-`.
@@ -370,7 +370,7 @@ match = 'request.path == "/checkout/coupon"'
 - Output events have `.lines` only. Request events have `.lines` and
   `.subjects`.
 - A release that changes a shared event, or the event, `subject`,
-  `eligibility`, or `max_share` of an experiment, stops the experiment. A
+  `eligibility`, or `max_traffic` of an experiment, stops the experiment. A
   change of a metric stops nothing.
 
 ## Rules

@@ -159,7 +159,7 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
         "name": name, "app": "shop-prod", "state": state, "reason": null, "version": 3,
         "definition": {
             "subject": if name == "us-landing" { json!("request.headers[\"x-user-id\"]") } else { Value::Null },
-            "eligibility": null, "max_share": 0.2,
+            "eligibility": null, "max_traffic": 0.2,
         },
         "reference": LIVE,
         "headline": {"label": "purchase rate %", "values": {LIVE: 2.8, ARM: 3.4}},
@@ -613,7 +613,7 @@ fn app_add_detects_the_repository_and_folder() {
     std::fs::create_dir_all(folder.join("src")).unwrap();
     std::fs::write(
         folder.join("statespace.toml"),
-        "[experiment.checkout]\nmax_share = 0.2\n",
+        "[experiment.checkout]\nmax_traffic = 0.2\n",
     )
     .unwrap();
     let state = Arc::new(Mutex::new(Statespace::default()));
@@ -794,7 +794,7 @@ fn experiments_update_start_and_stop() {
          \x20 − a1b2c3d   0.05\n\
          \x20 + b2c3d4e   0.05\n\
          \x20 ~ 9f1ce8a   0.06   (was 0.05) (reference)\n\
-         \x20 total 0.11 of max_share 0.2\n\
+         \x20 total 0.11 of max_traffic 0.2\n\
          Next: ssp experiment start checkout\n"
     );
     // Without --arm, it prints the arms and changes nothing.
@@ -804,7 +804,10 @@ fn experiments_update_start_and_stop() {
         stdout.contains("    9f1ce8a   0.05   (reference)"),
         "{stdout}"
     );
-    assert!(stdout.contains("  total 0.1 of max_share 0.2"), "{stdout}");
+    assert!(
+        stdout.contains("  total 0.1 of max_traffic 0.2"),
+        "{stdout}"
+    );
     // Shares are fractions.
     for (share, message) in [
         (

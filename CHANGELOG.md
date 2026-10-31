@@ -52,10 +52,10 @@ the old model stays.
   `--repo` and `--path`, and prints what it detected.
 - `ssp experiment list | show | update | start | stop`. An experiment is an
   `[experiment.<name>]` table in `statespace.toml`, with `subject`, `eligibility`,
-  `max_share`, and its own events and metrics.
+  `max_traffic`, and its own events and metrics.
 - `ssp experiment update <name> --arm <commit>=<share>` changes only the arms that it
   names. `=0` removes an arm. Shares are fractions: `5` and `5%` fail. It prints the
-  change, the full list with the reference, and the total of `max_share`.
+  change, the full list with the reference, and the total of `max_traffic`.
 - `ssp experiment start` begins a new version, waits until each arm is ready, and prints
   each arm, or the reason per arm when one is not ready. It tells which running
   experiments can claim the same requests.
