@@ -539,7 +539,7 @@ fn show(experiment: &Value) -> String {
             format!(
                 "statespace.toml of {} in {}",
                 short(commit),
-                text(&experiment["source"]["path"])
+                crate::output::folder(&experiment["source"]["path"])
             ),
         ));
     }

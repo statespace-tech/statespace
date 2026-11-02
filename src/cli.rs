@@ -300,6 +300,8 @@ pub enum DbCommand {
     Url {
         #[command(flatten)]
         account: AccountFlag,
+        #[command(flatten)]
+        verify: VerifyFlag,
     },
     /// Give your SQL login a new password. The old password stops at once,
     /// and its sessions end.
@@ -307,8 +309,21 @@ pub enum DbCommand {
         #[command(flatten)]
         account: AccountFlag,
         #[command(flatten)]
+        verify: VerifyFlag,
+        #[command(flatten)]
         note: Note,
     },
+}
+
+/// How the client checks the server.
+#[derive(Args)]
+pub struct VerifyFlag {
+    /// Verify the server's certificate with the system trust store
+    /// (`sslmode=verify-full&sslrootcert=system`, libpq 16 and later). By
+    /// default the connection string has `sslmode=require`: encrypted, and
+    /// the server is not verified.
+    #[arg(long)]
+    pub verify: bool,
 }
 
 /// What every `ssp proxy` subcommand takes.

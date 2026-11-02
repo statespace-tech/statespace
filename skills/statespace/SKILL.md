@@ -385,6 +385,10 @@ apps whose GitHub repository the person can read. It needs the session of
 psql "$(ssp db url)"
 ```
 
+The connection string has `sslmode=require`: the connection is encrypted.
+To also check the server's certificate, use `ssp db url --verify`. It needs
+psql or libpq 16 or later.
+
 Read these views. They need no schema name:
 
 - `experiments`, `versions`, `arms`, and `builds`: the experiments, each

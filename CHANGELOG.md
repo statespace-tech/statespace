@@ -76,7 +76,12 @@ the old model stays.
   `events`. `events.request_id` and `events.log_id` join to `requests` and
   `logs`. The password stays the same until `ssp db rotate --note <why>`,
   which stops the old password and ends its sessions. `--account` names the
-  workspace.
+  workspace. The connection string has `sslmode=require`, so it works with
+  every PostgreSQL client. `--verify` returns
+  `sslmode=verify-full&sslrootcert=system` instead, which checks the server's
+  certificate with the system trust store (libpq 16 and later).
+- The CLI names the root folder of a repository "the root", as the action
+  does. Commands in the root folder find the app that is linked to it.
 - `ssp experiment show` shows the note of each stopped version, in the column
   `NOTE`. When Statespace stops a version, the note says why, such as
   `definition changed in live d00d123`. `--json` has `versions[].stop_note`.

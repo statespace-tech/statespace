@@ -90,6 +90,23 @@ pub fn text(value: &Value) -> String {
     }
 }
 
+/// A folder of the repository in a sentence: `the root` or `folder shop`.
+/// The API names the root `""`, and the CLI names it `.`.
+pub fn folder(path: &Value) -> String {
+    match path.as_str().unwrap_or_default() {
+        "" | "." => "the root".into(),
+        path => format!("folder {path}"),
+    }
+}
+
+/// A folder of the repository in a table: `the root` or `shop`.
+pub fn folder_cell(path: &Value) -> String {
+    match path.as_str().unwrap_or_default() {
+        "" | "." => "the root".into(),
+        path => path.into(),
+    }
+}
+
 /// A list of strings, joined with commas.
 pub fn list(value: &Value) -> String {
     match value.as_array() {
@@ -130,6 +147,11 @@ mod tests {
             "2026-10-15 17:40 UTC"
         );
         assert_eq!(time(&Value::Null), "-");
+        assert_eq!(folder(&json!("")), "the root");
+        assert_eq!(folder(&json!(".")), "the root");
+        assert_eq!(folder(&json!("shop")), "folder shop");
+        assert_eq!(folder_cell(&json!("")), "the root");
+        assert_eq!(folder_cell(&json!("shop")), "shop");
         assert_eq!(short("a1b2c3d4e5"), "a1b2c3d");
         assert_eq!(list(&json!(["a", "b"])), "a, b");
     }

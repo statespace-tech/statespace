@@ -231,6 +231,8 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                      "live": null, "experiments": 0},
                     {"name": "shop-staging", "repo": "acme/shop", "path": "dev",
                      "live": null, "experiments": 0},
+                    {"name": "shop-site", "repo": "acme/shop", "path": "",
+                     "live": null, "experiments": 0},
                 ]}),
             ),
             ("GET", "/v1/apps/shop-prod/experiments") => {
@@ -341,10 +343,10 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                 json_answer(
                     200,
                     &json!({
-                        "url": format!("postgresql://gh_octo:{password}@gh-7.statespace.app:5432/gh_7?sslmode=verify-full"),
+                        "url": format!("postgresql://gh_octo:{password}@gh-7.statespace.app:5432/gh_7?sslmode=require"),
                         "account": received.headers.get("statespace-workspace").cloned().unwrap_or("acme".into()),
                         "host": "gh-7.statespace.app", "port": 5432, "database": "gh_7",
-                        "user": "gh_octo", "password": password, "sslmode": "verify-full",
+                        "user": "gh_octo", "password": password, "sslmode": "require",
                         "apps": ["shop-prod", "shop-dev"],
                     }),
                 )
@@ -724,6 +726,7 @@ fn shop_repository() -> tempfile::TempDir {
         std::fs::create_dir_all(root.join(folder)).unwrap();
         std::fs::write(root.join(folder).join("statespace.toml"), "").unwrap();
     }
+    std::fs::write(root.join("statespace.toml"), "").unwrap();
     directory
 }
 
@@ -766,6 +769,13 @@ fn commands_print_what_they_chose_and_changed() {
     assert!(!ok);
     assert!(
         stderr.contains("acme/shop in folder dev has 2 apps: shop-dev, shop-staging; pass --app"),
+        "{stderr}"
+    );
+    // The API names the root folder "", and the CLI names it ".".
+    let (ok, _, stderr) = ssp(directory.path(), &api, &token, &["token", "add"]);
+    assert!(ok, "{stderr}");
+    assert!(
+        stderr.contains("Using app shop-site, the only app of acme/shop in the root."),
         "{stderr}"
     );
     let elsewhere = tempfile::tempdir().unwrap();
@@ -995,7 +1005,7 @@ fn db_url_prints_only_the_connection_string() {
     assert!(ok, "{stderr}");
     assert_eq!(
         stdout,
-        "postgresql://gh_octo:s3cret@gh-7.statespace.app:5432/gh_7?sslmode=verify-full\n"
+        "postgresql://gh_octo:s3cret@gh-7.statespace.app:5432/gh_7?sslmode=require\n"
     );
     assert!(
         stderr.contains("gh_octo reads shop-prod and shop-dev in acme.")
@@ -1025,6 +1035,27 @@ fn db_url_prints_only_the_connection_string() {
     assert_eq!(
         state.lock().unwrap().received.last().unwrap().headers["statespace-workspace"],
         "globex"
+    );
+
+    // --verify checks the server's certificate with the system trust store.
+    let (ok, stdout, stderr) = ssp(directory.path(), &api, &token, &["db", "url", "--verify"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "postgresql://gh_octo:s3cret@gh-7.statespace.app:5432/gh_7\
+         ?sslmode=verify-full&sslrootcert=system\n"
+    );
+    let (ok, stdout, stderr) = ssp(
+        directory.path(),
+        &api,
+        &token,
+        &["--json", "db", "url", "--verify"],
+    );
+    assert!(ok, "{stderr}");
+    let login = parse(&stdout);
+    assert_eq!(
+        (&login["sslmode"], &login["sslrootcert"]),
+        (&json!("verify-full"), &json!("system"))
     );
 
     // A rotation sends the note and prints the new connection string.

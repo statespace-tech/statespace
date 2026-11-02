@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use crate::{
     api::{Api, segment},
     cli::AppCommand,
-    output::{emit, fields, note, short, table, text, time},
+    output::{emit, fields, folder as folder_label, folder_cell, note, short, table, text, time},
     repo,
 };
 
@@ -31,10 +31,10 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
             emit(&deleted, || {
                 let app = &deleted["deleted"];
                 format!(
-                    "Removed app {name} ({} {}) and all its data: experiments, versions, runs, \
+                    "Removed app {name} ({}, {}) and all its data: experiments, versions, runs, \
                      requests, output, and events.",
                     text(&app["repo"]),
-                    text(&app["path"]),
+                    folder_label(&app["path"]),
                 )
             })
         }
@@ -49,7 +49,7 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
                         vec![
                             text(&app["name"]),
                             text(&app["repo"]),
-                            text(&app["path"]),
+                            folder_cell(&app["path"]),
                             live(&app["live"]),
                             text(&app["experiments"]),
                         ]
@@ -88,22 +88,23 @@ pub fn resolve(api: &Api, flag: Option<String>) -> anyhow::Result<String> {
             app["repo"]
                 .as_str()
                 .is_some_and(|repo| repo.eq_ignore_ascii_case(&repository))
-                && app["path"] == folder.as_str()
+                && folder_cell(&app["path"]) == folder_cell(&json!(folder))
         })
         .filter_map(|app| app["name"].as_str().map(str::to_owned))
         .collect();
+    let place = folder_label(&json!(folder));
     match linked.as_slice() {
         [app] => {
             note(&format!(
-                "Using app {app}, the only app of {repository} in folder {folder}."
+                "Using app {app}, the only app of {repository} in {place}."
             ));
             Ok(app.clone())
         }
         [] => bail!(
-            "no app is linked to {repository} in folder {folder}; pass --app, or add one with ssp app add <name>"
+            "no app is linked to {repository} in {place}; pass --app, or add one with ssp app add <name>"
         ),
         apps => bail!(
-            "{repository} in folder {folder} has {} apps: {}; pass --app",
+            "{repository} in {place} has {} apps: {}; pass --app",
             apps.len(),
             apps.join(", ")
         ),
@@ -144,7 +145,7 @@ fn add(
                     } else {
                         format!("{folder}/statespace.toml")
                     };
-                    detected.push(format!("folder {folder} (from {file})"));
+                    detected.push(format!("{} (from {file})", folder_label(&json!(folder))));
                     folder
                 }
             };
@@ -167,10 +168,10 @@ fn add(
     }
     emit(&app, || {
         format!(
-            "Added app {name} for {} in folder {}.\n\
+            "Added app {name} for {} in {}.\n\
              Next: ssp token add --app {name}, then run ssp proxy in front of the app.",
             text(&app["repo"]),
-            text(&app["path"]),
+            folder_label(&app["path"]),
         )
     })
 }
@@ -200,7 +201,7 @@ fn show(app: &Value) -> String {
     let mut rows = vec![
         ("App", text(&app["name"])),
         ("Repo", text(&app["repo"])),
-        ("Folder", text(&app["path"])),
+        ("Folder", folder_cell(&app["path"])),
     ];
     if !app["note"].is_null() {
         rows.push(("Note", text(&app["note"])));
@@ -265,7 +266,7 @@ fn show(app: &Value) -> String {
             out.push_str(&format!(
                 " (from {} in {})",
                 short(commit),
-                text(&app["source"]["path"])
+                folder_label(&app["source"]["path"])
             ));
         }
         out.push_str(":\n");
