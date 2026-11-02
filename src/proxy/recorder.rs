@@ -183,7 +183,13 @@ impl Recorder {
         );
     }
 
+    /// A unit's event. A unit of an unknown version, such as one that an
+    /// earlier proxy started, has no row: the API needs the version, and one
+    /// bad row would drop its whole batch.
     pub fn lifecycle(&self, origin: &Origin, event: &str, data: Value) {
+        if origin.version.is_none() {
+            return;
+        }
         self.send("lifecycle", origin, json!({ "event": event, "data": data }));
     }
 }
@@ -356,6 +362,21 @@ mod tests {
         let batch = batch(rows.into_iter());
         assert_eq!(count(&batch), 7);
         assert_eq!(batch["stdout"], json!([]));
+    }
+
+    #[test]
+    fn a_lifecycle_row_needs_a_version() {
+        let (sender, mut receiver) = mpsc::channel(4);
+        let recorder = Recorder::with_sender(Some(sender));
+        let stopped = Origin {
+            version: None,
+            ..arm()
+        };
+        recorder.lifecycle(&stopped, "stopped", json!({"image": "x"}));
+        recorder.lifecycle(&arm(), "stopped", json!({"image": "x"}));
+        let (table, row) = receiver.try_recv().unwrap();
+        assert_eq!((table, row["version"].as_i64()), ("lifecycle", Some(3)));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]

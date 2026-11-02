@@ -134,6 +134,9 @@ pub struct Runtime<O> {
     attempts: Mutex<HashMap<(UnitKey, String, bool), Instant>>,
     /// Why the last start of a unit failed, for the report.
     failures: Mutex<HashMap<UnitKey, String>>,
+    /// The version that each unit started for, so that its stop is recorded
+    /// with that version after the experiment no longer runs.
+    versions: Mutex<HashMap<UnitKey, i64>>,
     readers: Mutex<HashMap<UnitKey, (String, JoinHandle<()>)>>,
     /// Problems already printed, so each is printed once.
     noted: Mutex<HashSet<String>>,
@@ -293,6 +296,12 @@ impl<O: Orchestrator> Runtime<O> {
                 continue;
             }
             let origin = Self::origin(&routing, &unit.key());
+            if let Some(version) = origin.version {
+                self.versions
+                    .lock()
+                    .expect("versions are never poisoned")
+                    .insert(unit.key(), version);
+            }
             match self.orchestrator.start(unit).await {
                 Ok(_) => {
                     eprintln!("[ssp] starting {} from {}", unit.key(), unit.image);
@@ -327,10 +336,13 @@ impl<O: Orchestrator> Runtime<O> {
             if wanted.contains(&key) || !self.attempt(&key, &entry.unit.image, false) {
                 continue;
             }
-            let origin = Origin {
-                version: None,
-                ..Self::origin(&routing, &key)
-            };
+            let mut origin = Self::origin(&routing, &key);
+            let started = self
+                .versions
+                .lock()
+                .expect("versions are never poisoned")
+                .remove(&key);
+            origin.version = origin.version.or(started);
             match self.orchestrator.stop(&entry.unit).await {
                 Ok(()) => {
                     eprintln!("[ssp] stopped {key}");
@@ -556,6 +568,7 @@ async fn serve<O: Orchestrator>(
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         attempts: Mutex::default(),
         failures: Mutex::default(),
+        versions: Mutex::default(),
         readers: Mutex::default(),
         noted: Mutex::default(),
     });
