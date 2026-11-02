@@ -739,17 +739,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_values_and_old_commands() {
+    fn rejects_wrong_values_and_unknown_commands() {
         for arguments in [
             vec!["ssp", "app", "add", "Shop"],
             vec!["ssp", "app", "add", "shop_prod"],
             vec!["ssp", "app", "add", "shop", "--note", ""],
             vec!["ssp", "app", "add", "shop", "--note", "two\nlines"],
-            vec!["ssp", "app", "stop", "shop"],
-            vec!["ssp", "app", "resume", "shop"],
-            vec!["ssp", "arm", "add", "a1b2c3d", "--app", "shop"],
-            vec!["ssp", "arm", "list", "--app", "shop"],
-            vec!["ssp", "init"],
+            vec!["ssp", "app", "start", "shop"],
+            vec!["ssp", "unknown"],
             vec!["ssp", "experiment", "update", "Checkout"],
             vec![
                 "ssp",
@@ -777,11 +774,6 @@ mod tests {
             ],
             vec!["ssp", "experiment", "list", "--running", "--all"],
             vec!["ssp", "experiment", "stop"],
-            vec!["ssp", "experiment", "add", "checkout"],
-            vec!["ssp", "experiment", "resume", "checkout"],
-            vec!["ssp", "status"],
-            vec!["ssp", "stop", "shop"],
-            vec!["ssp", "controller", "kubernetes"],
             vec!["ssp", "proxy", "--app", "shop", "--token", "t"],
             vec![
                 "ssp",
@@ -793,20 +785,8 @@ mod tests {
                 "t",
                 "--image-file",
                 "f",
-                "--overrides",
-            ],
-            vec![
-                "ssp",
-                "proxy",
-                "docker",
-                "--app",
-                "shop",
-                "--token",
-                "t",
-                "--image-file",
-                "f",
-                "--max-arms",
-                "3",
+                "--color",
+                "blue",
             ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");

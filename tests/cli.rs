@@ -2123,10 +2123,27 @@ fn fly_proxies_run_units_as_machines_without_services() {
 // The proxy on Docker.
 
 fn docker(arguments: &[&str]) -> String {
-    let output = std::process::Command::new("docker")
+    // A push or pull goes over the network to a registry: try it again after a
+    // short wait, so one dropped connection does not fail the test.
+    let attempts = if matches!(arguments.first(), Some(&"push" | &"pull")) {
+        4
+    } else {
+        1
+    };
+    let mut output = std::process::Command::new("docker")
         .args(arguments)
         .output()
         .unwrap();
+    for attempt in 1..attempts {
+        if output.status.success() {
+            break;
+        }
+        std::thread::sleep(Duration::from_secs(2 * attempt));
+        output = std::process::Command::new("docker")
+            .args(arguments)
+            .output()
+            .unwrap();
+    }
     assert!(
         output.status.success(),
         "docker {arguments:?}: {}",
@@ -3675,7 +3692,10 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     assert!(proxy.stop().is_some_and(|status| status.success()));
     let log = log.lock().unwrap();
     assert!(
-        !log.iter().any(|line| line.contains("429")
+        // The proxy's own words for a rate limit: a status such as "429 Too
+        // Many Requests" in an error, or the throttle message. A bare "429"
+        // also matches image digests.
+        !log.iter().any(|line| line.contains("429 Too Many Requests")
             || line.contains("slow down")
             || line.contains("could not read the output")),
         "{log:?}"
