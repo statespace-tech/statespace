@@ -2,12 +2,10 @@ name: Runtime tests
 
 # Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), Cloud Run in
 # the sandbox project, ECS Fargate in the sandbox account, and Fly.io in the dedicated
-# test app. A v* tag runs them before the release; an admin can run them by hand on
-# main.
+# test app. The release runs them before it publishes; an admin can run them by hand
+# on main.
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       skip:
