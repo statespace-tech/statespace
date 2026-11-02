@@ -1,123 +1,129 @@
 <br>
 
 <div align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/header-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/header-light.png">
-    <img src="assets/header-light.png" alt="Statespace" width="520">
-  </picture>
+  <a href="https://statespace.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/header-dark.png">
+      <source media="(prefers-color-scheme: light)" srcset="assets/header-light.png">
+      <img src="assets/header-light.png" alt="Statespace" width="520">
+    </picture>
+  </a>
 </div>
 
 <div align="center">
 
 <br>
 
-[![CI](https://github.com/statespace-tech/statespace/actions/workflows/ci.yml/badge.svg)](https://github.com/statespace-tech/statespace/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/statespace-tech/statespace/ci.yml?style=flat-square&label=CI)](https://github.com/statespace-tech/statespace/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/statespace?style=flat-square)](https://crates.io/crates/statespace)
 [![License](https://img.shields.io/badge/license-Apache--2.0-007ec6?style=flat-square)](https://github.com/statespace-tech/statespace/blob/main/LICENSE)
 [![Discord](https://img.shields.io/discord/1541944682727084143?label=Discord&logo=discord&logoColor=white&color=5865F2&style=flat-square)](https://discord.gg/qKEFpqG9mr)
 
 </div>
 
-Statespace runs commits of your app on small shares of live traffic, as the
-arms of an experiment, and records what happens.
+Statespace lets you A/B test code changes on your own infrastructure. A
+reverse proxy sends a small share of your traffic to different versions of
+your app. Their requests, logs, and events land in Postgres so your agents
+can query and act on them.
 
-**Website:** [statespace.com](https://statespace.com)<br>
-**Documentation:** [docs.statespace.com](https://docs.statespace.com)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="assets/how-it-works-light.png">
+  <img src="assets/how-it-works-light.png" alt="Visitors go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
+</picture>
 
-## Install
-
-```shell
-curl -fsSL https://statespace.com/install.sh | bash
-```
-
-The command is `ssp`. `statespace` is the same program.
-
-To let your coding agent do the setup, give it this prompt:
-
-```text
-Read https://statespace.com/skill.md and follow it.
-```
-
-## How it works
-
-```text
-                    ┌─► live service        (85%)  never recorded
-visitors ─► proxy ──┼─► checkout:c0ffee1    ( 5%)  recorded
-                    ├─► checkout:a1b2c3d    ( 5%)  recorded
-                    └─► us-landing:b2c3d4e  ( 5%)  recorded
-```
-
-1. Your CI records the image of each commit with
-   `statespace-tech/action@v1`.
-2. You define experiments in `statespace.toml`, and give each one arms:
-   commits with a share of traffic.
-3. The proxy runs each arm beside live and sends it its share of visitors.
-4. Statespace posts the evidence on each arm's commit as the status
-   `statespace/<app>/<experiment>`. People and agents decide.
+<p align="center">
+  <a href="https://docs.statespace.com/guides/docker">Docker</a> ·
+  <a href="https://docs.statespace.com/guides/kubernetes">Kubernetes</a> ·
+  <a href="https://docs.statespace.com/guides/cloud-run">Cloud Run</a> ·
+  <a href="https://docs.statespace.com/guides/fargate">ECS Fargate</a> ·
+  <a href="https://docs.statespace.com/guides/fly">Fly.io</a>
+</p>
 
 ## Quickstart
 
-1. Install the Statespace GitHub App on
-   [statespace.com](https://statespace.com).
-2. Write `statespace.toml` in the app's folder. Start from
-   [the skill](skills/statespace/SKILL.md).
-3. Add the action after your image build:
+1. Install Statespace's CLI and sign in with GitHub:
+
+   ```shell
+   curl -fsSL https://statespace.com/install.sh | bash
+   ssp login
+   ```
+
+2. Install the Statespace
+   [GitHub App](https://github.com/apps/statespace-tech/installations/new)
+   on your repo and add this step to your image build:
 
    ```yaml
-   - uses: statespace-tech/action@v1
-     with:
-       image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
+   permissions:
+     contents: read
+     packages: write
+     id-token: write
+
+   steps:
+     # ... your steps that build and push the image (id: build) ...
+     - uses: statespace-tech/action@v1
+       with:
+         image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
    ```
 
-4. Add the app and a runtime token, and run the proxy with the token:
+3. Define your experiment in a `statespace.toml` at the root of your repo:
 
-   ```shell
-   ssp app add shop-prod --note "shop, all traffic"
-   ssp token add --app shop-prod --note "proxy"
+   ```toml
+   [[event]]
+   name  = "purchase"
+   match = 'request.method == "POST" && request.path == "/checkout"'
+
+   [[metric]]
+   label = "conversion %"
+   value = '100.0 * events["purchase"].subjects / subjects'
+
+   [experiment.checkout]
+   subject     = 'request.headers["x-user-id"]'
+   eligibility = 'request.headers["cf-ipcountry"] == "US"'  # behind Cloudflare
    ```
 
-5. Set the arms and start the experiment:
+4. Create your app and the token for its proxy:
 
    ```shell
-   ssp experiment update checkout \
-     --arm c0ffee1=0.05 --arm a1b2c3d=0.05
+   ssp app add shop-prod
+   ssp token add --app shop-prod
+   ```
+
+5. Run Statespace's reverse proxy in front of your app:
+
+   ```shell
+   STATESPACE_TOKEN=<token> ssp proxy kubernetes \
+     --app shop-prod --deployment shop
+   ```
+
+6. Start your A/B test with two commits:
+
+   ```shell
+   ssp experiment update checkout --arm c0ffee1=0.1 --arm a1b2c3d=0.1
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-The [quickstart](https://docs.statespace.com/quickstart) has every step in
-full.
+7. Query the experiment in Postgres:
 
-## Runtimes
+   ```text
+   $ psql "$(ssp db url)"
+   acme=> SELECT arm, count(*) AS purchases
+   acme->   FROM events
+   acme->   WHERE experiment = 'checkout' AND name = 'purchase'
+   acme->   GROUP BY arm;
 
-```shell
-ssp proxy docker      --app shop-dev  --image-file /etc/shop/image
-ssp proxy cloudrun    --app shop-prod --service shop --region us-east1
-ssp proxy kubernetes  --app shop-prod --deployment shop
-ssp proxy fargate     --app shop-prod --cluster shop --service shop
-ssp proxy fly         --app shop-prod --fly-app shop
-```
+      arm   | purchases
+   ---------+-----------
+    c0ffee1 |        71
+    a1b2c3d |        84
+   (2 rows)
+   ```
 
-Each runtime has a guide with its permissions, and an example in
-[`examples/`](examples):
-[Docker](https://docs.statespace.com/guides/docker),
-[Cloud Run](https://docs.statespace.com/guides/cloud-run),
-[Kubernetes](https://docs.statespace.com/guides/kubernetes),
-[ECS Fargate](https://docs.statespace.com/guides/fargate),
-[Fly.io](https://docs.statespace.com/guides/fly).
+## Community
 
-## Commands
-
-```text
-ssp app         add | remove | list | show
-ssp experiment  list | show | update | start | stop
-ssp token       add | remove | list
-ssp proxy       docker | cloudrun | kubernetes | fargate | fly
-ssp login | logout | whoami
-```
-
-See the [CLI reference](https://docs.statespace.com/reference/cli) and the
-[`statespace.toml` reference](https://docs.statespace.com/reference/statespace-toml).
+Ask questions on [Discord](https://discord.gg/qKEFpqG9mr), and report bugs
+in [issues](https://github.com/statespace-tech/statespace/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for more info.
 
 ## License
 
