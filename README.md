@@ -3,9 +3,9 @@
 <div align="center">
   <a href="https://statespace.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/header-dark.png">
-      <source media="(prefers-color-scheme: light)" srcset="assets/header-light.png">
-      <img src="assets/header-light.png" alt="Statespace" width="520">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-dark.png">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-light.png">
+      <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-light.png" alt="Statespace" width="520">
     </picture>
   </a>
 </div>
@@ -22,14 +22,14 @@
 </div>
 
 Statespace lets you A/B test code changes on your own infrastructure. A
-reverse proxy sends a small share of your traffic to different versions of
-your app. Their requests, logs, and events land in Postgres so your agents
-can query and act on them.
+reverse proxy sends a small share of your traffic to experimental versions
+of your app. Their requests, logs, and events land in Postgres so your
+agents can query and act on them.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="assets/how-it-works-light.png">
-  <img src="assets/how-it-works-light.png" alt="Visitors go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png">
+  <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png" alt="Visitors go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
 </picture>
 
 <p align="center">
@@ -42,16 +42,16 @@ can query and act on them.
 
 ## Quickstart
 
-1. Install Statespace's CLI and sign in with GitHub:
+1. Install the CLI and sign in with GitHub:
 
    ```shell
    curl -fsSL https://statespace.com/install.sh | bash
    ssp login
    ```
 
-2. Install the Statespace
+2. Install the
    [GitHub App](https://github.com/apps/statespace-tech/installations/new)
-   on your repo and add this step to your image build:
+   and add this step to your image build:
 
    ```yaml
    permissions:
@@ -66,7 +66,7 @@ can query and act on them.
          image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
    ```
 
-3. Define your experiment in a `statespace.toml` at the root of your repo:
+3. Add `statespace.toml` to your repo and define your experiment:
 
    ```toml
    [[event]]
@@ -82,28 +82,28 @@ can query and act on them.
    eligibility = 'request.headers["cf-ipcountry"] == "US"'  # behind Cloudflare
    ```
 
-4. Create your app and the token for its proxy:
+4. Create your app and its proxy token:
 
    ```shell
    ssp app add shop-prod
    ssp token add --app shop-prod
    ```
 
-5. Run Statespace's reverse proxy in front of your app:
+5. Run the proxy next to your app and point your traffic at it:
 
    ```shell
    STATESPACE_TOKEN=<token> ssp proxy kubernetes \
      --app shop-prod --deployment shop
    ```
 
-6. Start your A/B test with two commits:
+6. Give two commits a share of traffic and start:
 
    ```shell
    ssp experiment update checkout --arm c0ffee1=0.1 --arm a1b2c3d=0.1
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-7. Query the experiment in Postgres:
+7. Compare the versions in Postgres:
 
    ```text
    $ psql "$(ssp db url)"
@@ -123,7 +123,7 @@ can query and act on them.
 
 Ask questions on [Discord](https://discord.gg/qKEFpqG9mr), and report bugs
 in [issues](https://github.com/statespace-tech/statespace/issues). See
-[CONTRIBUTING.md](CONTRIBUTING.md) for more info.
+[CONTRIBUTING.md](https://github.com/statespace-tech/statespace/blob/main/CONTRIBUTING.md) for more info.
 
 ## License
 
