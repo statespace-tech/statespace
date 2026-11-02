@@ -373,6 +373,35 @@ match = 'request.path == "/checkout/coupon"'
   `eligibility`, or `max_traffic` of an experiment, stops the experiment. A
   change of a metric stops nothing.
 
+## Query the data with SQL
+
+Each person has one PostgreSQL login. It only reads, and it reads only the
+apps whose GitHub repository the person can read. It needs the session of
+`ssp login`.
+
+```shell
+psql "$(ssp db url)"
+```
+
+The tables are in the schema `statespace`:
+
+- `requests`, `events`, `stdout`, and `stderr`: the rows of the arms. Each
+  row has `app`, `experiment`, `arm` (the commit), and `version`.
+- `experiments`, `experiment_versions`, `arms`, and `builds`: the
+  experiments, their versions, their arms, and the builds of CI.
+
+```sql
+SELECT arm, count(DISTINCT subject) AS buyers
+FROM statespace.events
+WHERE app = 'shop-prod' AND experiment = 'checkout'
+  AND version = 3 AND name = 'purchase'
+GROUP BY arm;
+```
+
+The password stays the same. If it leaks, run
+`ssp db rotate --note "<why>"`. Statespace never records live, so live has
+no rows.
+
 ## Rules
 
 - Do not start an experiment without the user's consent.

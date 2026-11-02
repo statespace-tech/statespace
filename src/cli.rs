@@ -36,6 +36,9 @@ pub enum Command {
     /// Add, list, and remove runtime tokens for `ssp proxy`.
     #[command(subcommand)]
     Token(TokenCommand),
+    /// Read the data of your apps with SQL: your PostgreSQL login.
+    #[command(subcommand)]
+    Db(DbCommand),
     /// Run the proxy in front of an app's live service.
     #[command(subcommand)]
     Proxy(Box<ProxyCommand>),
@@ -279,6 +282,32 @@ pub enum TokenCommand {
         /// Only the tokens of this app.
         #[arg(long, value_parser = app_name)]
         app: Option<String>,
+    },
+}
+
+#[derive(Args)]
+pub struct AccountFlag {
+    /// The workspace, such as `acme`. Defaults to your only workspace.
+    #[arg(long, env = "STATESPACE_ACCOUNT")]
+    pub account: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum DbCommand {
+    /// Print the connection string of your SQL login. It reads the apps
+    /// whose repository you can read. The password stays the same until
+    /// `ssp db rotate`.
+    Url {
+        #[command(flatten)]
+        account: AccountFlag,
+    },
+    /// Give your SQL login a new password. The old password stops at once,
+    /// and its sessions end.
+    Rotate {
+        #[command(flatten)]
+        account: AccountFlag,
+        #[command(flatten)]
+        note: Note,
     },
 }
 

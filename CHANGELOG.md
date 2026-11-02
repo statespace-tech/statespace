@@ -6,6 +6,13 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ### Added
 
+- `ssp db url` prints the connection string of your own read-only PostgreSQL
+  login, so `psql "$(ssp db url)"` works. The login reads the apps whose
+  repository you can read: `requests`, `events`, `stdout`, `stderr`,
+  `experiments`, `experiment_versions`, `arms`, and `builds`. The password
+  stays the same until `ssp db rotate --note <why>`, which stops the old
+  password and ends its sessions. `--account` names the workspace.
+
 - `ssp proxy fargate` runs the arms of experiments on ECS Fargate. Each unit
   is an ECS service in live's cluster, from a copy of live's task definition
   with another image. The proxy sends to the tasks' IP addresses, reads

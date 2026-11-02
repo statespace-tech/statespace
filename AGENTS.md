@@ -1,8 +1,8 @@
 # Contributor instructions
 
 An experiment compares commits of one app. Each arm is one commit with an exact share
-of the app's subjects. `ssp app`, `ssp experiment`, and `ssp token` call the Statespace
-API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
+of the app's subjects. `ssp app`, `ssp experiment`, `ssp token`, and `ssp db` call the
+Statespace API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
 fargate`, and `ssp proxy fly` run a reverse proxy in front of the app's live service.
 Every proxy instance routes requests to the arms of running experiments, in the order
 of `statespace.toml`. Only the instance that holds the app's lease starts and stops

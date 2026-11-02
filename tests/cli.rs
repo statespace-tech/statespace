@@ -335,6 +335,20 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                 201,
                 &json!({"id": "tok_1", "app": received.body["app"], "token": "ssp_rt_secret"}),
             ),
+            ("POST", "/v1/db/login" | "/v1/db/login/rotate") => {
+                let rotated = path.ends_with("/rotate");
+                let password = if rotated { "n3w" } else { "s3cret" };
+                json_answer(
+                    200,
+                    &json!({
+                        "url": format!("postgresql://gh_octo:{password}@gh-7.statespace.app:5432/gh_7?sslmode=verify-full"),
+                        "account": received.headers.get("statespace-workspace").cloned().unwrap_or("acme".into()),
+                        "host": "gh-7.statespace.app", "port": 5432, "database": "gh_7",
+                        "user": "gh_octo", "password": password, "sslmode": "verify-full",
+                        "apps": ["shop-prod", "shop-dev"],
+                    }),
+                )
+            }
             ("GET", "/v1/apps/shop-held") => {
                 json_answer(403, &json!({"error": "you need write on acme/shop"}))
             }
@@ -967,6 +981,68 @@ fn whoami_says_which_credential_the_cli_uses() {
         ok && stdout.contains("Credential:   the ssp login session"),
         "{stdout}"
     );
+}
+
+#[test]
+fn db_url_prints_only_the_connection_string() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = Arc::new(Mutex::new(Statespace::default()));
+    let api = statespace(state.clone());
+    let token = [("STATESPACE_TOKEN", "t")];
+
+    // Standard output is only the connection string, for psql "$(ssp db url)".
+    let (ok, stdout, stderr) = ssp(directory.path(), &api, &token, &["db", "url"]);
+    assert!(ok, "{stderr}");
+    assert_eq!(
+        stdout,
+        "postgresql://gh_octo:s3cret@gh-7.statespace.app:5432/gh_7?sslmode=verify-full\n"
+    );
+    assert!(
+        stderr.contains("gh_octo reads shop-prod and shop-dev in acme.")
+            && stderr.contains("until `ssp db rotate`"),
+        "{stderr}"
+    );
+    let received = state.lock().unwrap().received.last().unwrap().clone();
+    assert_eq!(
+        (received.method.as_str(), received.path.as_str()),
+        ("POST", "/v1/db/login")
+    );
+    assert!(!received.headers.contains_key("statespace-workspace"));
+
+    // --account names the workspace; --json prints the fields.
+    let (ok, stdout, stderr) = ssp(
+        directory.path(),
+        &api,
+        &token,
+        &["--json", "db", "url", "--account", "globex"],
+    );
+    assert!(ok && stderr.is_empty(), "{stderr}");
+    let login = parse(&stdout);
+    assert_eq!(
+        (&login["account"], &login["user"], &login["port"]),
+        (&json!("globex"), &json!("gh_octo"), &json!(5432))
+    );
+    assert_eq!(
+        state.lock().unwrap().received.last().unwrap().headers["statespace-workspace"],
+        "globex"
+    );
+
+    // A rotation sends the note and prints the new connection string.
+    let (ok, stdout, stderr) = ssp(
+        directory.path(),
+        &api,
+        &token,
+        &["db", "rotate", "--note", "pasted in a chat"],
+    );
+    assert!(ok, "{stderr}");
+    assert!(stdout.starts_with("postgresql://gh_octo:n3w@"), "{stdout}");
+    assert!(
+        stderr.contains("Rotated the password of gh_octo."),
+        "{stderr}"
+    );
+    let received = state.lock().unwrap().received.last().unwrap().clone();
+    assert_eq!(received.path, "/v1/db/login/rotate");
+    assert_eq!(received.body, json!({"note": "pasted in a chat"}));
 }
 
 #[test]
