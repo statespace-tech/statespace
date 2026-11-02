@@ -116,8 +116,16 @@ fn check(response: Response) -> anyhow::Result<Response> {
         return Ok(response);
     }
     let body = response.text().unwrap_or_default();
-    let message = serde_json::from_str::<Value>(&body)
-        .ok()
+    let value = serde_json::from_str::<Value>(&body).ok();
+    // A workspace that Statespace has not activated yet: one clear line.
+    if let Some(message) = value
+        .as_ref()
+        .filter(|value| value.get("error").and_then(Value::as_str) == Some("pending"))
+        .and_then(|value| value.get("message")?.as_str())
+    {
+        bail!("{message}");
+    }
+    let message = value
         .and_then(|value| Some(value.get("error")?.as_str()?.to_owned()))
         .unwrap_or(body);
     if status == StatusCode::UNAUTHORIZED {

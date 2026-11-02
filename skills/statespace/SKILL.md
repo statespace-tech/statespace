@@ -51,6 +51,10 @@ ssp whoami --json
 If it fails and you have no GitHub token, ask the user to run `ssp login`.
 This command opens a browser, so the user must run it.
 
+A new workspace starts as pending. Until Statespace staff activate it, every
+command fails with `<workspace> is pending: Statespace is reviewing your
+access`. Tell the user, and stop. Retrying does not help.
+
 ## Set up
 
 1. Install the CLI if `ssp` is not available.

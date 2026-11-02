@@ -5975,3 +5975,30 @@ primary_region = "{region}"
     });
     assert_eq!(get(&arm_subject, "/").unwrap()["greeting"], "hey");
 }
+
+#[test]
+fn a_pending_workspace_gets_one_clear_line() {
+    let directory = tempfile::tempdir().unwrap();
+    let port = serve(|_| {
+        json_answer(
+            403,
+            &json!({
+                "error": "pending",
+                "workspace": "acme",
+                "message": "acme is pending: Statespace is reviewing your access. See https://statespace.com/contact",
+            }),
+        )
+    });
+    let api = format!("http://127.0.0.1:{port}");
+    let token = [("STATESPACE_TOKEN", "t")];
+    let line =
+        "acme is pending: Statespace is reviewing your access. See https://statespace.com/contact";
+
+    let (ok, stdout, stderr) = ssp(directory.path(), &api, &token, &["app", "list"]);
+    assert!(!ok && stdout.is_empty());
+    assert_eq!(stderr, format!("error: {line}\n"));
+
+    let (ok, _, stderr) = ssp(directory.path(), &api, &token, &["--json", "app", "list"]);
+    assert!(!ok);
+    assert_eq!(parse(&stderr), json!({ "error": line }));
+}

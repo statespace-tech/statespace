@@ -2,6 +2,15 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Changed
+
+- A command for a workspace that Statespace has not activated yet prints one
+  line, `<workspace> is pending: Statespace is reviewing your access. See
+  https://statespace.com/contact`, and exits 1. With `--json`, the line is
+  the `error`.
+
 ## 0.4.0 - 2026-11-02
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of
