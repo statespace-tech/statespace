@@ -2,60 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
-
-### Added
-
-- `ssp db url` prints the connection string of your own read-only PostgreSQL
-  login, so `psql "$(ssp db url)"` works. The login reads 8 views of the apps
-  whose repository you can read, with no schema name: `experiments`,
-  `versions`, `arms`, `builds`, `assignments`, `requests`, `logs`, and
-  `events`. The password stays the same until `ssp db rotate --note <why>`,
-  which stops the old password and ends its sessions. `--account` names the
-  workspace.
-- The proxy records which request or output line matched each event, so
-  `events.request_id` and `events.log_id` join to `requests` and `logs`.
-
-- `ssp proxy fargate` runs the arms of experiments on ECS Fargate. Each unit
-  is an ECS service in live's cluster, from a copy of live's task definition
-  with another image. The proxy sends to the tasks' IP addresses, reads
-  output from CloudWatch Logs, and uses the AWS default chain for
-  credentials. `examples/fargate` has the proxy's task definition, service,
-  and policy.
-- The runtime tests also run `ssp proxy fargate` on real ECS Fargate in a
-  sandbox account of AWS.
-- `ssp proxy fly --fly-app <app>` runs the arms of experiments as Machines of a Fly.io
-  app. Each unit is a copy of a live Machine with the unit's image, without services,
-  mounts, or `fly_*` metadata, so it gets no public traffic and `fly deploy` leaves it
-  alone. The proxy reaches units on the private network.
-- The runtime tests also run `ssp proxy fly` on a real Fly.io app.
-
-### Fixed
-
-- Cloud Run: a deploy of a new live gets all the traffic again while units run. The
-  proxy pins live's traffic only while it makes the revision of a unit. Then it gives
-  the service its own template and traffic, and adds only the unit's tag.
-- Cloud Run: the proxy reads the output of all units with one Cloud Logging query
-  every 5 seconds, not one query for each unit. When Cloud Logging answers 429, the
-  proxy waits as it asks, or longer each time, and loses no line.
-- Cloud Run: the proxy sends an ID token for the service's URL. Cloud Run refuses an
-  ID token for the tag URL at the tag URL.
-
-### Changed
-
-- Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, real Cloud
-  Run, real ECS Fargate, and real Fly.io) run before each release, and an admin can
-  run them on `main`.
-- The example app listens on IPv6 and IPv4.
-- `ssp experiment show` shows the note of each stopped version, in the column
-  `NOTE`. When Statespace stops a version, the note says why, such as
-  `definition changed in live d00d123`. `--json` has `versions[].stop_note`
-  in place of `versions[].reason`.
-- Event names are lowercase snake_case, such as `purchase` or `add_to_cart`:
-  a lowercase letter, then lowercase letters, digits, or `_`, at most 64
-  characters. CI refuses other names.
-
-## 0.4.0 - 2026-10-29
+## 0.4.0 - Unreleased
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of
 the old model stays.
@@ -86,7 +33,8 @@ the old model stays.
 - Credentials: `STATESPACE_TOKEN`, then the `ssp login` session, then a GitHub user
   token in `GH_TOKEN` or `GITHUB_TOKEN`, then the OIDC token of a GitHub Actions job.
   `ssp whoami` shows which one the CLI uses.
-- `ssp proxy docker`, `ssp proxy cloudrun`, and `ssp proxy kubernetes`. One
+- `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`,
+  `ssp proxy fargate`, and `ssp proxy fly`. One
   `Orchestrator` trait runs the units: one for each arm of each starting or running
   experiment. Every instance routes; the instance that holds the app's lease
   orchestrates.
@@ -94,17 +42,44 @@ the old model stays.
   experiment reads its own subject. The first experiment whose arm range holds the
   subject's point takes the request. Else live serves it.
 - Cloud Run: units run as revisions with 0% traffic and the tag
-  `ssp-<experiment>-<commit 12>`. The proxy sends an ID token, and reads output from
-  Cloud Logging.
+  `ssp-<experiment>-<commit 12>`. The proxy pins live's traffic only while it makes
+  the revision of a unit, then gives the service its own template and traffic back
+  and adds only the unit's tag, so a deploy of a new live gets all the traffic. It
+  sends an ID token for the service's URL, and reads the output of all units with
+  one Cloud Logging query every 5 seconds. When Cloud Logging answers 429, the proxy
+  waits and loses no line.
 - Kubernetes: the proxy runs as its own Deployment. Units run as copies of the app's
   Deployment, `<deployment>-ssp-<experiment>-<commit 12>`, each with a Service.
+- ECS Fargate (`ssp proxy fargate`): each unit is an ECS service in live's cluster,
+  from a copy of live's task definition with another image. The proxy sends to the
+  tasks' IP addresses, reads output from CloudWatch Logs, and uses the AWS default
+  chain for credentials. `examples/fargate` has the proxy's task definition,
+  service, and policy.
+- Fly.io (`ssp proxy fly --fly-app <app>`): each unit is a copy of a live Machine
+  with the unit's image, without services, mounts, or `fly_*` metadata, so it gets
+  no public traffic and `fly deploy` leaves it alone. The proxy reaches units on
+  the private network.
 - Unit names that pass a platform limit end with a short hash. Labels keep the full
   experiment and commit.
 - `[[event]]` rules from `statespace.toml`, checked in the proxy on requests, standard
   output, and standard error. A unit gets the shared events and the events of its
-  experiment.
+  experiment. Event names are lowercase snake_case, such as `purchase` or
+  `add_to_cart`: a lowercase letter, then lowercase letters, digits, or `_`, at most
+  64 characters. CI refuses other names.
 - The proxy records `runs`, `requests`, `stdout`, `stderr`, `events`, and `lifecycle`
-  rows for units. Each row has the experiment, the arm, and the version.
+  rows for units. Each row has the experiment, the arm, and the version. Each event
+  row names the request or output line that matched it.
+- `ssp db url` prints the connection string of your own read-only PostgreSQL
+  login, so `psql "$(ssp db url)"` works. The login reads 8 views of the apps
+  whose repository you can read, with no schema name: `experiments`,
+  `versions`, `arms`, `builds`, `assignments`, `requests`, `logs`, and
+  `events`. `events.request_id` and `events.log_id` join to `requests` and
+  `logs`. The password stays the same until `ssp db rotate --note <why>`,
+  which stops the old password and ends its sessions. `--account` names the
+  workspace.
+- `ssp experiment show` shows the note of each stopped version, in the column
+  `NOTE`. When Statespace stops a version, the note says why, such as
+  `definition changed in live d00d123`. `--json` has `versions[].stop_note`.
 - The starter `statespace.toml` and the CI step are in `skills/statespace/SKILL.md`.
 
 ### Changed
@@ -120,6 +95,10 @@ the old model stays.
   `x-statespace-arm` with the full commit.
 - Environment variables: `STATESPACE_TOKEN` replaces `SSP_TOKEN`, and
   `STATESPACE_API` replaces `STATESPACE_URL`.
+- The example app listens on IPv6 and IPv4.
+- Pushes run only the fast tests. The runtime tests (Docker, Kubernetes, and real
+  Cloud Run, ECS Fargate, and Fly.io) run before each release, and an admin can run
+  them on `main`.
 
 ### Removed
 
@@ -129,8 +108,9 @@ the old model stays.
 - `ssp arm`. `ssp experiment update` sets the arms.
 - `ssp init`. A person or a coding agent writes `statespace.toml` from the starter.
 - The shared control, the `live` keyword, and the header `x-statespace-side`.
-- The settings `max_traffic`, `max_arms`, and `arm_role`, and the app-wide `subject`
-  and `eligibility`.
+- The app-wide settings `max_traffic`, `max_arms`, `arm_role`, `subject`, and
+  `eligibility`. Each experiment has its own `max_traffic`, `subject`, and
+  `eligibility`.
 - `ssp controller kubernetes`. `ssp proxy kubernetes` replaces it.
 - `ssp token create` and `revoke`, presets, and scopes.
 - The proxy flags `--overrides`, `--redact`, `--max-arms`, `--arm-env`,
