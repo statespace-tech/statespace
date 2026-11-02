@@ -726,13 +726,13 @@ fn show(experiment: &Value) -> String {
                             text(&version["stopped_by"])
                         )
                     },
-                    text(&version["reason"]),
+                    text(&version["stop_note"]),
                 ]
             })
             .collect();
         out.push_str("\nVersions:\n");
         out.push_str(&indent(&table(
-            &["VERSION", "ARMS", "STARTED", "STOPPED", "REASON"],
+            &["VERSION", "ARMS", "STARTED", "STOPPED", "NOTE"],
             rows,
         )));
     }
@@ -829,7 +829,7 @@ mod tests {
             json!({OLD: "https://shop.example.com/?ssp_arm=checkout:a1b2c3d"});
         detail["versions"] = json!([{"version": 1, "arms": {LIVE: 0.05, OLD: 0.05},
             "started_at": "2026-10-29T10:00:00Z", "started_by": "octo",
-            "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "reason": "enough data"}]);
+            "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "stop_note": "enough data"}]);
         detail["history"] = json!([{"at": "2026-10-29T10:00:00Z", "actor": "octo", "via": "cli",
             "text": "started v1", "note": "one-page checkout"}]);
         let shown = show(&detail);
@@ -843,6 +843,7 @@ mod tests {
             "a1b2c3d   https://shop.example.com/?ssp_arm=checkout:a1b2c3d",
             "a1b2c3d=0.05 c0ffee1=0.05",
             "2026-10-29 10:00 UTC  started v1 · octo with the CLI · one-page checkout",
+            "enough data",
         ] {
             assert!(shown.contains(expected), "{expected:?} in\n{shown}");
         }

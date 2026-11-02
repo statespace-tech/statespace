@@ -25,7 +25,7 @@ use super::{
     Runtime,
     assign::{self, Decision, OVERRIDE, OVERRIDE_HEADER, Refused, Routing, SUBJECT_COOKIE},
     orchestrator::{Orchestrator, UnitKey},
-    recorder::{Origin, RequestRow},
+    recorder::{Origin, RequestRow, Source},
     redact,
 };
 
@@ -375,7 +375,7 @@ async fn route<O: Orchestrator>(
             let ms = started.elapsed().as_secs_f64() * 1000.0;
             let path = redact::redact(&path, &routing.redact);
             let query = redact::redact(&query, &routing.redact);
-            recorder.request(
+            let request_id = recorder.request(
                 &origin,
                 RequestRow {
                     subject: subject.as_deref(),
@@ -395,7 +395,12 @@ async fn route<O: Orchestrator>(
                 return;
             };
             for name in events.request(&view, status.as_u16(), ms) {
-                recorder.event(&origin, name, subject.as_deref());
+                recorder.event(
+                    &origin,
+                    name,
+                    subject.as_deref(),
+                    Source::Request(&request_id),
+                );
             }
         }
     });

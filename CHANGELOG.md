@@ -7,11 +7,14 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 ### Added
 
 - `ssp db url` prints the connection string of your own read-only PostgreSQL
-  login, so `psql "$(ssp db url)"` works. The login reads the apps whose
-  repository you can read: `requests`, `events`, `stdout`, `stderr`,
-  `experiments`, `experiment_versions`, `arms`, and `builds`. The password
-  stays the same until `ssp db rotate --note <why>`, which stops the old
-  password and ends its sessions. `--account` names the workspace.
+  login, so `psql "$(ssp db url)"` works. The login reads 8 views of the apps
+  whose repository you can read, with no schema name: `experiments`,
+  `versions`, `arms`, `builds`, `assignments`, `requests`, `logs`, and
+  `events`. The password stays the same until `ssp db rotate --note <why>`,
+  which stops the old password and ends its sessions. `--account` names the
+  workspace.
+- The proxy records which request or output line matched each event, so
+  `events.request_id` and `events.log_id` join to `requests` and `logs`.
 
 - `ssp proxy fargate` runs the arms of experiments on ECS Fargate. Each unit
   is an ECS service in live's cluster, from a copy of live's task definition
@@ -44,6 +47,13 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
   Run, real ECS Fargate, and real Fly.io) run before each release, and an admin can
   run them on `main`.
 - The example app listens on IPv6 and IPv4.
+- `ssp experiment show` shows the note of each stopped version, in the column
+  `NOTE`. When Statespace stops a version, the note says why, such as
+  `definition changed in live d00d123`. `--json` has `versions[].stop_note`
+  in place of `versions[].reason`.
+- Event names are lowercase snake_case, such as `purchase` or `add_to_cart`:
+  a lowercase letter, then lowercase letters, digits, or `_`, at most 64
+  characters. CI refuses other names.
 
 ## 0.4.0 - 2026-10-29
 

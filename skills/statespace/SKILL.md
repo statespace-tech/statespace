@@ -253,6 +253,8 @@ max_traffic = 0.2
 ```
 
 - Experiment names have 1 to 40 lowercase letters, digits, and `-`.
+- Event names are lowercase snake_case: a lowercase letter, then lowercase
+  letters, digits, or `_`, at most 64 characters, such as `add_to_cart`.
 - `[[experiment.<name>.event]]` and `[[experiment.<name>.metric]]` add events
   and metrics for one experiment only.
 - CI checks the file when it records a build. A wrong key or a CEL error
@@ -383,16 +385,22 @@ apps whose GitHub repository the person can read. It needs the session of
 psql "$(ssp db url)"
 ```
 
-The tables are in the schema `statespace`:
+Read these views. They need no schema name:
 
-- `requests`, `events`, `stdout`, and `stderr`: the rows of the arms. Each
-  row has `app`, `experiment`, `arm` (the commit), and `version`.
-- `experiments`, `experiment_versions`, `arms`, and `builds`: the
-  experiments, their versions, their arms, and the builds of CI.
+- `experiments`, `versions`, `arms`, and `builds`: the experiments, each
+  start (version) with its notes, the arms of each version, and the builds
+  of CI.
+- `assignments`: the first arm of each subject in each version, with the
+  `reason` (`assigned`, `override`, or `arm-unavailable`).
+- `requests`, `logs`, and `events`: the rows of the arms. `logs` has stdout
+  and stderr in `stream`. An event has the `request_id` or `log_id` of the
+  row that matched.
+
+Each row has `app`, `experiment`, `version`, and `arm` (the full commit).
 
 ```sql
 SELECT arm, count(DISTINCT subject) AS buyers
-FROM statespace.events
+FROM events
 WHERE app = 'shop-prod' AND experiment = 'checkout'
   AND version = 3 AND name = 'purchase'
 GROUP BY arm;
@@ -407,4 +415,5 @@ no rows.
 - Do not start an experiment without the user's consent.
 - Use `--note` on each command that changes something.
 - Never put a token in a file that Git tracks.
-- Read the reason when an experiment stops or an arm is not ready.
+- Read the note when an experiment stops, and the reason when an arm is not
+  ready.

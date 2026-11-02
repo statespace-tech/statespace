@@ -31,7 +31,7 @@ use self::{
         Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker, fargate::Fargate,
         fly::Fly, kubernetes::Kubernetes,
     },
-    recorder::{Origin, Recorder},
+    recorder::{Origin, Recorder, Source},
     remote::{ConfigError, Remote},
 };
 use crate::cli::{ProxyArgs, ProxyCommand};
@@ -465,14 +465,16 @@ async fn record_output<O: Orchestrator>(
         };
         let origin = Runtime::<O>::origin(&routing, &key);
         let text = redact::redact(&line.text, &routing.redact);
-        runtime.recorder.output(&origin, line.stream.table(), &text);
+        let log_id = runtime.recorder.output(&origin, line.stream.table(), &text);
         // A unit's experiment decides which events apply.
         for name in routing
             .events(&key)
             .map(|events| events.output(line.stream, &text))
             .unwrap_or_default()
         {
-            runtime.recorder.event(&origin, name, None);
+            runtime
+                .recorder
+                .event(&origin, name, None, Source::Log(&log_id));
         }
     }
 }

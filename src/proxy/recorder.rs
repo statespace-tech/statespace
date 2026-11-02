@@ -57,6 +57,13 @@ pub struct RequestRow<'a> {
     pub over: bool,
 }
 
+/// The row that an event matched, by id.
+#[derive(Clone, Copy, Debug)]
+pub enum Source<'a> {
+    Request(&'a str),
+    Log(&'a str),
+}
+
 type RunKey = (Origin, String, Reason);
 
 pub struct Recorder {
@@ -85,12 +92,14 @@ impl Recorder {
         self.dropped.load(Ordering::Relaxed)
     }
 
-    fn send(&self, table: &'static str, origin: &Origin, fields: Value) {
+    /// Queue a row, and return its id.
+    fn send(&self, table: &'static str, origin: &Origin, fields: Value) -> String {
+        let id = id();
         let Some(sender) = &self.sender else {
-            return;
+            return id;
         };
         let mut row = json!({
-            "id": id(),
+            "id": id,
             "timestamp": chrono::Utc::now().to_rfc3339(),
             "experiment": origin.experiment,
             "arm": origin.arm,
@@ -102,6 +111,7 @@ impl Recorder {
         if sender.try_send((table, row)).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
         }
+        id
     }
 
     /// Record a subject's run the first time this proxy routes it, per
@@ -129,7 +139,8 @@ impl Recorder {
         );
     }
 
-    pub fn request(&self, origin: &Origin, row: RequestRow<'_>) {
+    /// Record a request, and return its id for the events it matches.
+    pub fn request(&self, origin: &Origin, row: RequestRow<'_>) -> String {
         self.send(
             "requests",
             origin,
@@ -145,19 +156,30 @@ impl Recorder {
                 "response_bytes": row.response_bytes,
                 "override": row.over,
             }),
-        );
+        )
     }
 
-    /// One output line, redacted already.
-    pub fn output(&self, origin: &Origin, table: &'static str, text: &str) {
-        self.send(table, origin, json!({ "text": text }));
+    /// One output line, redacted already. Returns its id for the events it
+    /// matches.
+    pub fn output(&self, origin: &Origin, table: &'static str, text: &str) -> String {
+        self.send(table, origin, json!({ "text": text }))
     }
 
-    pub fn event(&self, origin: &Origin, name: &str, subject: Option<&str>) {
+    /// One match of an event, with the row that matched.
+    pub fn event(&self, origin: &Origin, name: &str, subject: Option<&str>, source: Source<'_>) {
+        let (request_id, log_id) = match source {
+            Source::Request(id) => (Some(id), None),
+            Source::Log(id) => (None, Some(id)),
+        };
         self.send(
             "events",
             origin,
-            json!({ "name": name, "subject": subject }),
+            json!({
+                "name": name,
+                "subject": subject,
+                "request_id": request_id,
+                "log_id": log_id,
+            }),
         );
     }
 
@@ -249,7 +271,7 @@ mod tests {
         recorder.run(&arm(), "u_1", Reason::Assigned);
         recorder.run(&arm(), "u_1", Reason::Assigned);
         recorder.run(&error, "u_1", Reason::EligibilityError);
-        recorder.request(
+        let request_id = recorder.request(
             &arm(),
             RequestRow {
                 subject: Some("u_1"),
@@ -264,8 +286,9 @@ mod tests {
                 over: true,
             },
         );
-        recorder.output(&arm(), "stderr", "boom");
-        recorder.event(&arm(), "lead", None);
+        let log_id = recorder.output(&arm(), "stderr", "boom");
+        recorder.event(&arm(), "lead", Some("u_1"), Source::Request(&request_id));
+        recorder.event(&arm(), "crash", None, Source::Log(&log_id));
         recorder.lifecycle(&arm(), "started", json!({"image": "x"}));
         let mut rows = Vec::new();
         while let Ok(row) = receiver.try_recv() {
@@ -274,7 +297,15 @@ mod tests {
         let tables: Vec<&str> = rows.iter().map(|(table, _)| *table).collect();
         assert_eq!(
             tables,
-            ["runs", "runs", "requests", "stderr", "events", "lifecycle"]
+            [
+                "runs",
+                "runs",
+                "requests",
+                "stderr",
+                "events",
+                "events",
+                "lifecycle"
+            ]
         );
         let keys = |row: &Value| {
             let mut keys: Vec<String> = row.as_object().unwrap().keys().cloned().collect();
@@ -313,11 +344,17 @@ mod tests {
         );
         assert_eq!(rows[2].1["override"], true);
         assert_eq!(keys(&rows[3].1), with(&["text"]));
-        assert_eq!(keys(&rows[4].1), with(&["name", "subject"]));
-        assert_eq!(keys(&rows[5].1), with(&["event", "data"]));
+        let event = with(&["name", "subject", "request_id", "log_id"]);
+        assert_eq!(keys(&rows[4].1), event);
+        // An event names the row that matched.
+        assert_eq!(rows[4].1["request_id"], rows[2].1["id"]);
+        assert_eq!(rows[4].1["log_id"], Value::Null);
+        assert_eq!(rows[5].1["log_id"], rows[3].1["id"]);
+        assert_eq!(rows[5].1["request_id"], Value::Null);
+        assert_eq!(keys(&rows[6].1), with(&["event", "data"]));
 
         let batch = batch(rows.into_iter());
-        assert_eq!(count(&batch), 6);
+        assert_eq!(count(&batch), 7);
         assert_eq!(batch["stdout"], json!([]));
     }
 
@@ -325,8 +362,8 @@ mod tests {
     fn a_full_buffer_drops_rows() {
         let (sender, _receiver) = mpsc::channel(1);
         let recorder = Recorder::with_sender(Some(sender));
-        recorder.event(&arm(), "a", None);
-        recorder.event(&arm(), "b", None);
+        recorder.event(&arm(), "a", None, Source::Log("out_1"));
+        recorder.event(&arm(), "b", None, Source::Log("out_2"));
         assert_eq!(recorder.dropped(), 1);
     }
 }
