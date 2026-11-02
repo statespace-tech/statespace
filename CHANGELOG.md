@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## 0.4.0 - Unreleased
+## 0.4.0 - 2026-11-02
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of
 the old model stays.
