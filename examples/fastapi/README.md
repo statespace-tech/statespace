@@ -10,7 +10,7 @@ into an image.
 | `Dockerfile` | The shop's image. CI builds it for every commit |
 | `statespace.toml` | The settings, the events, the metrics, and the experiment `price` |
 | `build.yml` | A GitHub Actions workflow that builds every commit and records the build |
-| `ssp-proxy.service` | `ssp proxy docker` under systemd, on a machine with Docker |
+| `compose.yaml` | The shop and `ssp proxy docker` with Docker Compose |
 
 For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
 
@@ -24,11 +24,13 @@ For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
 
    ```shell
    ssp app add shop-prod --note "shop, all traffic"
-   ssp token add --app shop-prod --note "systemd proxy"
+   ssp token add --app shop-prod --note "Compose proxy"
    ```
 
-4. Install `ssp-proxy.service` where the shop runs now, with the token in
-   `/etc/shop/statespace`. The proxy runs the image in `/etc/shop/image` as live.
+4. Put the token in `.env` as `STATESPACE_TOKEN=...`, next to `compose.yaml`, and
+   start the project with `docker compose up -d`. You run the shop as live. The
+   proxy forwards live traffic to the container `shop`, and runs each arm as a copy
+   of that container with another image.
 
 ## Test a change
 
@@ -63,9 +65,13 @@ For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
 
 ## Deploy
 
-To deploy a new live, write its image to `/etc/shop/image`. The proxy starts the new
-image, sends it traffic once `/health` answers, and stops the old container. The arms
-do not change: they are fixed commits.
+To deploy a new live, change the image of `shop` in `compose.yaml` and run
+`docker compose up -d`. Compose creates the container `shop` again, and the proxy
+sends live traffic to the new container within seconds. The arms do not change: they
+are fixed commits.
 
-Each machine runs live and one container for each arm of each running experiment.
-Size machines for that many copies of the shop, or keep few arms.
+The arms have no Compose labels, so `docker compose up --remove-orphans` does not
+remove them. When the proxy stops, it removes them.
+
+The machine runs live and one container for each arm of each running experiment.
+Size the machine for that many copies of the shop, or keep few arms.

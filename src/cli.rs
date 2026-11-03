@@ -1,7 +1,5 @@
 //! Command-line arguments: `ssp <noun> <verb> <object>`.
 
-use std::path::PathBuf;
-
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -342,7 +340,8 @@ pub struct ProxyArgs {
 
 #[derive(Subcommand)]
 pub enum ProxyCommand {
-    /// Run live and the arms of experiments as Docker containers on this machine.
+    /// Forward to a live container and run the arms of experiments as
+    /// copies of it.
     Docker {
         #[command(flatten)]
         common: ProxyArgs,
@@ -465,27 +464,19 @@ pub struct GcsArgs {
 
 #[derive(Args, Clone)]
 pub struct DockerArgs {
-    /// A file that holds the live image. When the file changes, the proxy
-    /// deploys the new live image without dropping requests.
-    #[arg(long, env = "STATESPACE_IMAGE_FILE")]
-    pub image_file: PathBuf,
-    /// The port the app listens on in its container. Defaults to the
-    /// image's first `EXPOSE` port.
-    #[arg(long)]
-    pub port: Option<u16>,
-    /// A path that must answer 200 before a container gets traffic. Without
-    /// it, a container is ready when its port accepts connections.
+    /// The container that runs live, by name or ID, such as the container of
+    /// a Compose service. You run it; the proxy only forwards to it and
+    /// follows it when it is created again.
+    #[arg(long, value_name = "NAME")]
+    pub live_container: String,
+    /// The port live listens on in its container. Defaults to the only TCP
+    /// port the container exposes.
+    #[arg(long, value_name = "PORT")]
+    pub live_port: Option<u16>,
+    /// A path that must answer 200 before a unit's container gets traffic.
+    /// Without it, a container is ready when its port accepts connections.
     #[arg(long)]
     pub health: Option<String>,
-    /// A volume, as `docker run --volume` takes it. Repeat for each.
-    #[arg(long = "volume", value_name = "SOURCE:TARGET")]
-    pub volumes: Vec<String>,
-    /// A memory limit for each container, such as `1g`.
-    #[arg(long)]
-    pub memory: Option<String>,
-    /// A CPU limit for each container, such as `1.5`.
-    #[arg(long)]
-    pub cpus: Option<String>,
 }
 
 #[derive(Args, Clone)]
@@ -716,8 +707,10 @@ mod tests {
                 "shop-dev",
                 "--token",
                 "t",
-                "--image-file",
-                "/etc/shop/image",
+                "--live-container",
+                "shop-shop-1",
+                "--live-port",
+                "8000",
             ],
             vec![
                 "ssp",
@@ -909,10 +902,22 @@ mod tests {
                 "shop",
                 "--token",
                 "t",
-                "--image-file",
-                "f",
+                "--live-container",
+                "shop",
                 "--color",
                 "blue",
+            ],
+            // Docker forwards to a live container; it no longer runs live.
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--image-file",
+                "/etc/shop/image",
             ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");

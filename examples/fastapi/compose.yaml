@@ -1,0 +1,39 @@
+# The shop and the Statespace proxy with Docker Compose.
+#
+#   echo 'STATESPACE_TOKEN=...' > .env       # from `ssp token add --app shop-prod`
+#   docker compose up -d
+#
+# You run live: the service shop. ssp forwards live traffic to its container,
+# and runs each arm as a copy of that container with another image. The arms
+# have no Compose labels, so `docker compose up --remove-orphans` and
+# `docker compose down` never touch them, and ssp never touches shop.
+#
+# To deploy a new live, change the image of shop and run `docker compose up -d`.
+# ssp follows the new container within seconds.
+services:
+  shop:
+    image: ghcr.io/acme/shop:main
+    # ssp finds live by this name.
+    container_name: shop
+    env_file: shop.env
+    restart: unless-stopped
+    # Visitors reach the shop through ssp. Keep a port of shop only for a
+    # fallback in front of ssp.
+
+  ssp:
+    image: ghcr.io/statespace-tech/statespace:0.4.2
+    command: ["proxy", "docker", "--live-container", "shop", "--health", "/health"]
+    environment:
+      STATESPACE_TOKEN: ${STATESPACE_TOKEN}
+    ports:
+      - "8080:8080"
+    volumes:
+      # ssp starts and stops the arms' containers through the Docker socket.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # The Docker socket belongs to root. Access to it is access to the host.
+    user: root
+    depends_on:
+      - shop
+    restart: unless-stopped
+    # On stop, ssp lets requests finish and removes the arms' containers.
+    stop_grace_period: 30s

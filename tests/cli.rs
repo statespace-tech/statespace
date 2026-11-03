@@ -1480,7 +1480,7 @@ fn proxies_fail_for_an_app_that_does_not_exist() {
             "docker",
             "--app",
             "shop-gone",
-            "--image-file",
+            "--live-container",
             "missing",
         ],
     );
@@ -1493,7 +1493,14 @@ fn proxies_fail_for_an_app_that_does_not_exist() {
         directory.path(),
         &api,
         &[],
-        &["proxy", "docker", "--app", "shop-prod", "--image-file", "x"],
+        &[
+            "proxy",
+            "docker",
+            "--app",
+            "shop-prod",
+            "--live-container",
+            "x",
+        ],
     );
     assert!(!ok && stderr.contains("--token"), "{stderr}");
 }
@@ -2575,17 +2582,16 @@ fn docker(arguments: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
-/// Removes the test's registry and containers when the test ends.
+/// Removes the test's registry, live container, network, and the proxy's
+/// containers when the test ends.
 struct Cleanup {
-    registry: String,
+    containers: Vec<String>,
+    network: String,
     app: String,
 }
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        let _ = std::process::Command::new("docker")
-            .args(["rm", "--force", &self.registry])
-            .output();
         let leftovers = std::process::Command::new("docker")
             .args([
                 "ps",
@@ -2597,11 +2603,18 @@ impl Drop for Cleanup {
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
             .unwrap_or_default();
-        for id in leftovers.split_whitespace() {
+        for id in leftovers
+            .split_whitespace()
+            .map(str::to_owned)
+            .chain(self.containers.clone())
+        {
             let _ = std::process::Command::new("docker")
-                .args(["rm", "--force", id])
+                .args(["rm", "--force", "--volumes", &id])
                 .output();
         }
+        let _ = std::process::Command::new("docker")
+            .args(["network", "rm", &self.network])
+            .output();
     }
 }
 
@@ -2613,10 +2626,13 @@ fn rand_suffix() -> u32 {
         & 0xff_ffff
 }
 
-/// A proxy on Docker runs live and both arms of an experiment as
-/// containers, records only the arms, and adopts its containers after a crash.
+/// A proxy on Docker forwards to a live container that the test runs, as a
+/// customer runs it, and follows it when it is created again with a new
+/// image. Each arm is a container the proxy makes from a copy of live's,
+/// without live's Compose labels. The proxy records only the arms, adopts
+/// its containers after a crash, and removes only its own containers.
 #[test]
-fn docker_proxies_run_live_and_each_unit() {
+fn docker_proxies_forward_to_live_and_run_each_unit() {
     if std::env::var("STATESPACE_DOCKER_TESTS").as_deref() != Ok("1") {
         eprintln!("skipped: set STATESPACE_DOCKER_TESTS=1 to run the Docker test");
         return;
@@ -2635,11 +2651,15 @@ fn docker_proxies_run_live_and_each_unit() {
         &format!("REGISTRY_HTTP_ADDR={registry_host}"),
         "registry:2",
     ]);
-    let listen_port = free_port();
+    let live_name = format!("ssptest-{suffix:06x}-shop-1");
+    let network = format!("ssptest-{suffix:06x}");
     let _cleanup = Cleanup {
-        registry: registry.clone(),
+        containers: vec![registry.clone(), live_name.clone()],
+        network: network.clone(),
         app: app.into(),
     };
+    docker(&["network", "create", &network]);
+    let listen_port = free_port();
     let repository = format!("{registry_host}/ssptest{suffix:06x}");
     let push = |tag: &str, greeting: &str| {
         let reference = format!("{repository}:{tag}");
@@ -2673,6 +2693,33 @@ fn docker_proxies_run_live_and_each_unit() {
     };
     let (live_tag, live_digest) = push("live", "hello");
     let (_, arm_digest) = push("arm", "hi");
+    let (new_live_tag, new_live_digest) = push("live2", "hey");
+    // The customer runs live, as Compose does: with Compose's labels, on the
+    // project's network, with its own environment, and its port published.
+    let run_live = |image: &str| {
+        docker(&[
+            "run",
+            "--detach",
+            "--name",
+            &live_name,
+            "--network",
+            &network,
+            "--network-alias",
+            "shop",
+            "--label",
+            "com.docker.compose.project=ssptest",
+            "--label",
+            "com.docker.compose.service=shop",
+            "--env",
+            "SHARED=from-live",
+            "--env",
+            "STATESPACE_NOTE=live-only",
+            "--publish",
+            "127.0.0.1::8000",
+            image,
+        ])
+    };
+    let first_live = run_live(&live_tag);
 
     let state = Arc::new(Mutex::new(Statespace {
         lease: true,
@@ -2696,21 +2743,28 @@ fn docker_proxies_run_live_and_each_unit() {
     }));
     let api = statespace(state.clone());
     let directory = tempfile::tempdir().unwrap();
-    let image_file = directory.path().join("image");
-    std::fs::write(&image_file, &live_tag).unwrap();
     let start_proxy = || {
         Process(
             std::process::Command::new(cargo_bin("ssp"))
                 .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
                 .env("STATESPACE_API", &api)
                 .env("STATESPACE_TOKEN", "runtime-secret")
-                .env("SHARED", "from-the-proxy")
-                .args(["proxy", "docker", "--app", app, "--health", "/"])
-                .arg("--image-file")
-                .arg(&image_file)
+                .args([
+                    "proxy",
+                    "docker",
+                    "--app",
+                    app,
+                    "--live-container",
+                    &live_name,
+                ])
+                .args(["--health", "/"])
                 .args(["--listen", &format!("127.0.0.1:{listen_port}")])
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
+                .stderr(if std::env::var_os("SSP_TEST_LOGS").is_some() {
+                    Stdio::inherit()
+                } else {
+                    Stdio::null()
+                })
                 .spawn()
                 .unwrap(),
         )
@@ -2750,10 +2804,50 @@ fn docker_proxies_run_live_and_each_unit() {
         ),
         (Some("hello"), Some("hi"), Some("hello"))
     );
-    // Containers inherit the proxy's environment, but never its own settings.
+    // Live is the customer's container, with its own environment. The arms
+    // copy it, but never a STATESPACE_ variable.
+    assert_eq!(live["statespace_variables"], json!(["STATESPACE_NOTE"]));
     for body in [&reference, &arm, &live] {
-        assert_eq!(body["shared"], "from-the-proxy");
+        assert_eq!(body["shared"], "from-live");
+    }
+    for body in [&reference, &arm] {
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
+    }
+
+    // The arms are the proxy's containers: labeled statespace.com/*, on
+    // live's network, without any label of Compose or a network alias.
+    let arms = || {
+        let mut ids: Vec<String> = docker(&[
+            "ps",
+            "--quiet",
+            "--no-trunc",
+            "--filter",
+            &format!("label=statespace.com/app={app}"),
+            "--filter",
+            &format!("label=statespace.com/proxy=127.0.0.1:{listen_port}"),
+        ])
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect();
+        ids.sort();
+        ids
+    };
+    let running = arms();
+    assert_eq!(running.len(), 2, "{running:?}");
+    for id in &running {
+        let inspected: Value =
+            serde_json::from_str(&docker(&["inspect", "--format", "{{json .}}", id])).unwrap();
+        let labels = inspected["Config"]["Labels"].as_object().unwrap();
+        assert!(
+            labels.keys().all(|key| key.starts_with("statespace.com/")),
+            "{labels:?}"
+        );
+        let networks = &inspected["NetworkSettings"]["Networks"];
+        let aliases = networks[&network]["Aliases"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(!aliases.contains(&json!("shop")), "{aliases:?}");
     }
 
     wait_until(60, "rows arrive", || {
@@ -2789,34 +2883,27 @@ fn docker_proxies_run_live_and_each_unit() {
         ));
     }
 
-    // A new image in the file deploys a new live without dropping requests.
-    let (_, new_live) = push("live2", "hey");
-    std::fs::write(&image_file, &new_live).unwrap();
-    wait_until(120, "live is replaced", || {
-        get(&live_subject).expect("the proxy answers while live changes")["greeting"] == "hey"
+    // The customer deploys a new live: the container is created again with
+    // a new image. The proxy follows it within seconds, and reports the new
+    // live image. The arms do not change.
+    docker(&["rm", "--force", &live_name]);
+    let second_live = run_live(&new_live_tag);
+    assert_ne!(first_live, second_live);
+    wait_until(30, "live is the new container", || {
+        get(&live_subject).is_some_and(|body| body["greeting"] == "hey")
     });
+    wait_until(30, "the proxy reports the new live", || {
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report["live_image"] == new_live_digest.as_str())
+    });
+    assert_eq!(arms(), running);
+    assert_eq!(get(&arm_subject).unwrap()["greeting"], "hi");
 
     // After a crash, a new proxy adopts the containers that still run.
-    let containers = || {
-        let mut ids: Vec<String> = docker(&[
-            "ps",
-            "--quiet",
-            "--filter",
-            &format!("label=statespace.com/app={app}"),
-            "--filter",
-            &format!("label=statespace.com/proxy=127.0.0.1:{listen_port}"),
-        ])
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect();
-        ids.sort();
-        ids
-    };
-    let mut running = Vec::new();
-    wait_until(60, "live and both arms run", || {
-        running = containers();
-        running.len() == 3
-    });
     proxy.0.kill().unwrap();
     proxy.0.wait().unwrap();
     let mut proxy = start_proxy();
@@ -2825,19 +2912,23 @@ fn docker_proxies_run_live_and_each_unit() {
     });
     std::thread::sleep(Duration::from_secs(5));
     assert_eq!(
-        containers(),
+        arms(),
         running,
         "the restarted proxy adopted every container"
     );
 
     // When the experiment stops, the containers of its arms stop.
     state.lock().unwrap().config["experiments"] = json!([]);
-    wait_until(60, "the arms stop", || containers().len() == 1);
+    wait_until(60, "the arms stop", || arms().is_empty());
     assert_eq!(get(&arm_subject).unwrap()["arm"], Value::Null);
 
-    // Stopping the proxy removes every container it ran.
+    // Stopping the proxy removes only its own containers: live runs on.
     assert!(proxy.stop().is_some_and(|status| status.success()));
-    assert!(containers().is_empty());
+    assert!(arms().is_empty());
+    assert_eq!(
+        docker(&["inspect", "--format", "{{.State.Running}}", &live_name]),
+        "true"
+    );
 }
 
 // ---------------------------------------------------------------------------

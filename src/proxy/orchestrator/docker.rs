@@ -1,30 +1,40 @@
-//! `ssp proxy docker`: live and the units of experiments as containers on
-//! this machine. Each listens on a private port of 127.0.0.1, restarts with
-//! backoff when it exits, and gets traffic only while it is ready. A new
-//! image replaces a container without dropping requests: the new container
-//! starts and becomes ready, takes the traffic, and then the old one stops.
-//! Containers are labeled, and a proxy that restarts after a crash adopts
-//! the ones that still run.
+//! `ssp proxy docker`: live is a container that the customer runs, such as
+//! the container of a Compose service. The proxy never changes it: it
+//! forwards live traffic to it, and follows it when it is created again with
+//! a new image. Each unit of an experiment is a container that the proxy
+//! creates from a copy of live's container with another image. The copy
+//! keeps live's environment, networks, mounts, and limits, but none of its
+//! labels, names, aliases, or published ports, so Compose never counts it
+//! as its own. Units restart with backoff when they exit, and get traffic
+//! only while they are ready. They are labeled `statespace.com/*`, and a
+//! proxy that restarts after a crash adopts the ones that still run.
+//!
+//! Where the proxy reaches a container: when the proxy runs in a container,
+//! at the container's IP address on a network that the proxy's container
+//! shares; when it runs on the host, at the port that the container
+//! publishes on the host (units publish theirs on 127.0.0.1), else at the
+//! container's IP address on its first network.
 
 use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    process::Stdio,
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, HashMap, HashSet},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
-use serde_json::Value;
+use http::Method;
+use serde_json::{Map, Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, BufReader},
-    process::Command,
     sync::{mpsc, watch},
     task::JoinHandle,
 };
 
 use super::{
-    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
+    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    channel, engine::Engine,
 };
 use crate::{cli::DockerArgs, image};
 
@@ -32,13 +42,19 @@ use crate::{cli::DockerArgs, image};
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a stopping container may take before it is killed.
 const STOP_SECONDS: u32 = 10;
+/// How long a unit's container may take to stop when the proxy itself
+/// stops. It gets no request by then, and the proxy must end before the
+/// tool that stops it, such as Compose, kills it.
+const SHUTDOWN_SECONDS: u32 = 1;
 /// A container that ran this long before exiting restarts without delay.
 const STABLE_AFTER: Duration = Duration::from_secs(60);
 /// How long containers of an earlier run wait to be adopted.
 const STRAYS_AFTER: Duration = Duration::from_secs(60);
+/// How often the proxy checks the live container again.
+const LIVE_EVERY: Duration = Duration::from_secs(2);
 /// The label every container of this proxy's app carries.
-const APP_LABEL: &str = "statespace.com/app";
-/// The label that names a container's unit: `live`, or `<experiment>:<commit>`.
+pub const APP_LABEL: &str = "statespace.com/app";
+/// The label that names a container's unit: `<experiment>:<commit>`.
 const UNIT_LABEL: &str = "statespace.com/unit";
 /// The label that names a container's image.
 const IMAGE_LABEL: &str = "statespace.com/image";
@@ -48,29 +64,66 @@ const COMMIT_LABEL: &str = "statespace.com/commit";
 /// The label that names the proxy, by the address it listens on, so two
 /// proxies of one app on a machine keep to their own containers.
 const PROXY_LABEL: &str = "statespace.com/proxy";
+/// Settings of live's container that a unit's container copies. Published
+/// ports and the restart policy are not copied: the proxy reaches units
+/// itself and restarts them itself.
+const HOST_SETTINGS: [&str; 33] = [
+    "Binds",
+    "Mounts",
+    "Tmpfs",
+    "VolumesFrom",
+    "VolumeDriver",
+    "Memory",
+    "MemoryReservation",
+    "MemorySwap",
+    "MemorySwappiness",
+    "NanoCpus",
+    "CpuShares",
+    "CpuPeriod",
+    "CpuQuota",
+    "CpusetCpus",
+    "CpusetMems",
+    "PidsLimit",
+    "Ulimits",
+    "OomKillDisable",
+    "CapAdd",
+    "CapDrop",
+    "SecurityOpt",
+    "Privileged",
+    "ReadonlyRootfs",
+    "ShmSize",
+    "Sysctls",
+    "ExtraHosts",
+    "Dns",
+    "DnsOptions",
+    "DnsSearch",
+    "GroupAdd",
+    "Devices",
+    "LogConfig",
+    "Init",
+];
+/// Settings of live's container that a unit copies only when live sets
+/// them itself, not from its image: a unit's image brings its own.
+const OWN_SETTINGS: [&str; 6] = [
+    "Cmd",
+    "Entrypoint",
+    "WorkingDir",
+    "User",
+    "Healthcheck",
+    "StopSignal",
+];
 
-/// What the proxy runs: live, or a unit.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum Target {
-    Live,
-    Unit(UnitKey),
-}
-
-impl std::fmt::Display for Target {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Live => formatter.write_str("live"),
-            Self::Unit(key) => key.fmt(formatter),
-        }
-    }
-}
-
-/// A stable label for a target, which names its containers across restarts.
-fn label(target: &Target) -> String {
-    match target {
-        Target::Live => "live".into(),
-        Target::Unit(key) => format!("{}:{}", key.experiment, key.commit),
-    }
+/// The live container as the proxy saw it last.
+#[derive(Clone)]
+struct LiveContainer {
+    id: String,
+    /// The container, as Docker inspects it.
+    container: Value,
+    /// Its image, as Docker inspects it.
+    image: Value,
+    /// Where it takes requests.
+    address: String,
+    port: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,15 +136,14 @@ enum State {
 struct Slot {
     image: watch::Sender<String>,
     stop: watch::Sender<bool>,
-    /// The unit, for units.
-    unit: Option<Unit>,
+    unit: Unit,
     state: State,
-    /// `http://127.0.0.1:<port>` of the serving container.
+    /// The address of the serving container.
     address: Option<String>,
-    container: Option<String>,
+    container: Option<(String, bool)>,
     /// The image the serving container runs.
     running: Option<String>,
-    /// Why the target does not serve, after a failure.
+    /// Why the unit does not serve, after a failure.
     error: Option<String>,
 }
 
@@ -102,142 +154,197 @@ struct Found {
     running: bool,
 }
 
-/// A running container.
+/// A running container of a unit.
 struct Instance {
     id: String,
     address: String,
-    logs: Vec<JoinHandle<()>>,
+    tty: bool,
 }
 
-/// How every container starts.
-struct Options {
-    app: String,
-    listen: String,
-    health: Option<String>,
-    port: Option<u16>,
-    volumes: Vec<String>,
-    memory: Option<String>,
-    cpus: Option<String>,
-    /// The proxy's own environment, which every container inherits.
-    environment: Vec<(String, String)>,
+/// Where the proxy runs.
+#[derive(Clone, Debug, PartialEq)]
+enum Place {
+    /// In a container, on these networks, by ID.
+    Container(HashSet<String>),
+    Host,
 }
 
 #[derive(Clone)]
 pub struct Docker {
-    slots: Arc<Mutex<HashMap<Target, Slot>>>,
+    engine: Arc<Engine>,
+    app: String,
+    listen: String,
+    live_name: String,
+    live_port: Option<u16>,
+    health: Option<String>,
+    place: Place,
+    live: Arc<RwLock<Option<LiveContainer>>>,
+    slots: Arc<Mutex<HashMap<UnitKey, Slot>>>,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
     found: Arc<Mutex<HashMap<String, Found>>>,
-    options: Arc<Options>,
-    image_file: PathBuf,
     started: Instant,
+    /// Whether the proxy itself stops.
+    stopping: Arc<AtomicBool>,
 }
 
 impl Docker {
-    /// Adopt the app's containers from an earlier run, start live from the
-    /// image file, and watch the file for a new live image.
+    /// Find live and where the proxy runs, adopt the app's containers from
+    /// an earlier run, and follow live.
     pub async fn new(app: &str, listen: &str, arguments: DockerArgs) -> anyhow::Result<Self> {
-        let listed = docker(&[
-            "ps",
-            "--all",
-            "--filter",
-            &format!("label={APP_LABEL}={app}"),
-            "--filter",
-            &format!("label={PROXY_LABEL}={listen}"),
-            "--format",
-            &format!(
-                "{{{{.ID}}}}\t{{{{.Label \"{UNIT_LABEL}\"}}}}\t{{{{.Label \"{IMAGE_LABEL}\"}}}}\t{{{{.State}}}}"
-            ),
-        ])
-        .await
-        .context("could not list containers; is Docker running, and may this user use it?")?;
+        let engine = Arc::new(Engine::connect()?);
+        let listed = engine
+            .containers(&[
+                format!("{APP_LABEL}={app}"),
+                format!("{PROXY_LABEL}={listen}"),
+            ])
+            .await
+            .context(
+                "could not list containers; is Docker running, and may this user use its socket?",
+            )?;
         let mut found = HashMap::new();
-        for row in listed.lines() {
-            if let [id, unit, image, state] = row.split('\t').collect::<Vec<_>>()[..] {
+        for container in listed {
+            let labels = &container["Labels"];
+            if let (Some(id), Some(unit), Some(image)) = (
+                container["Id"].as_str(),
+                labels[UNIT_LABEL].as_str(),
+                labels[IMAGE_LABEL].as_str(),
+            ) {
                 found.insert(
                     unit.to_owned(),
                     Found {
                         id: id.to_owned(),
                         image: image.to_owned(),
-                        running: state == "running",
+                        running: container["State"] == "running",
                     },
                 );
             }
         }
+        let place = place(&engine).await;
         let docker = Self {
+            engine,
+            app: app.to_owned(),
+            listen: listen.to_owned(),
+            live_name: arguments.live_container,
+            live_port: arguments.live_port,
+            health: arguments.health,
+            place,
+            live: Arc::default(),
             slots: Arc::default(),
             tasks: Arc::default(),
             found: Arc::new(Mutex::new(found)),
-            options: Arc::new(Options {
-                app: app.to_owned(),
-                listen: listen.to_owned(),
-                health: arguments.health,
-                port: arguments.port,
-                volumes: arguments.volumes,
-                memory: arguments.memory,
-                cpus: arguments.cpus,
-                environment: inherited_environment(std::env::vars()),
-            }),
-            image_file: arguments.image_file,
             started: Instant::now(),
+            stopping: Arc::default(),
         };
-        let image = docker.read_image_file()?;
-        pull(&image).await?;
-        docker.ensure(Target::Live, image, None);
+        let live = docker.inspect_live().await?;
+        eprintln!(
+            "[ssp] live is container {} at {}",
+            docker.live_name, live.address
+        );
+        *docker.live.write().expect("live is never poisoned") = Some(live);
         let watcher = docker.clone();
-        tokio::spawn(async move { watcher.watch_image_file().await });
+        tokio::spawn(async move { watcher.follow_live().await });
         Ok(docker)
     }
 
-    /// Wait until live is ready, at most `timeout`.
-    pub async fn wait_for_live(&self, timeout: Duration) {
-        let started = Instant::now();
-        while self.address(&Target::Live).is_none() && started.elapsed() < timeout {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+    /// The live container now, and where it takes requests.
+    async fn inspect_live(&self) -> anyhow::Result<LiveContainer> {
+        let container = self
+            .engine
+            .container(&self.live_name)
+            .await?
+            .with_context(|| format!("no container {} runs live", self.live_name))?;
+        if container["State"]["Running"] != true {
+            bail!("container {} does not run", self.live_name);
         }
+        let mode = container["HostConfig"]["NetworkMode"]
+            .as_str()
+            .unwrap_or_default();
+        if mode == "host" || mode.starts_with("container:") {
+            bail!(
+                "container {} uses the network of {mode}; units need a network of their own",
+                self.live_name
+            );
+        }
+        let port = match self.live_port {
+            Some(port) => port,
+            None => only_port(&container).with_context(|| {
+                format!(
+                    "container {} does not expose exactly one TCP port; pass --live-port",
+                    self.live_name
+                )
+            })?,
+        };
+        let address = address(&container, port, &self.place).with_context(|| match &self.place {
+            Place::Container(_) => format!(
+                "the proxy shares no Docker network with container {}; put them on one network, as Compose does for the services of a project",
+                self.live_name
+            ),
+            Place::Host => format!(
+                "container {} publishes no port {port} and has no network address",
+                self.live_name
+            ),
+        })?;
+        let image_id = container["Image"].as_str().unwrap_or_default();
+        let image = self
+            .engine
+            .image(image_id)
+            .await?
+            .with_context(|| format!("Docker has no image {image_id}"))?;
+        Ok(LiveContainer {
+            id: container["Id"].as_str().unwrap_or_default().to_owned(),
+            container,
+            image,
+            address,
+            port,
+        })
     }
 
-    fn read_image_file(&self) -> anyhow::Result<String> {
-        let image = std::fs::read_to_string(&self.image_file)
-            .with_context(|| format!("could not read {}", self.image_file.display()))?
-            .trim()
-            .to_owned();
-        if image.is_empty() {
-            bail!("{} holds no image", self.image_file.display());
-        }
-        Ok(image)
-    }
-
-    /// Deploy a new live image when the file changes.
-    async fn watch_image_file(&self) {
-        let mut current = self.read_image_file().ok();
+    /// Check live again every two seconds. When the customer creates live
+    /// again, such as with a new image, the proxy sends live traffic to the
+    /// new container.
+    async fn follow_live(&self) {
+        let mut failed: Option<String> = None;
         loop {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let image = match self.read_image_file() {
-                Ok(image) => image,
-                Err(error) => {
-                    eprintln!("[ssp] {error:#}");
-                    continue;
+            tokio::time::sleep(LIVE_EVERY).await;
+            match self.inspect_live().await {
+                Ok(live) => {
+                    failed = None;
+                    let mut current = self.live.write().expect("live is never poisoned");
+                    let changed = current
+                        .as_ref()
+                        .is_none_or(|old| old.id != live.id || old.address != live.address);
+                    if changed {
+                        eprintln!(
+                            "[ssp] live is container {} at {}",
+                            &live.id[..live.id.len().min(12)],
+                            live.address
+                        );
+                    }
+                    *current = Some(live);
                 }
-            };
-            if current.as_deref() == Some(image.as_str()) {
-                continue;
+                Err(error) => {
+                    let message = format!("{error:#}");
+                    if failed.as_ref() != Some(&message) {
+                        eprintln!("[ssp] {message}; live traffic still goes to the last address");
+                        failed = Some(message);
+                    }
+                }
             }
-            eprintln!("[ssp] deploying {image} as live");
-            if let Err(error) = pull(&image).await {
-                eprintln!("[ssp] could not deploy {image}: {error:#}");
-                continue;
-            }
-            self.ensure(Target::Live, image.clone(), None);
-            current = Some(image);
         }
     }
 
-    /// Run `target` from `image`. A target that runs another image switches
-    /// to this one once its new container is ready.
-    fn ensure(&self, target: Target, image: String, unit: Option<Unit>) {
+    fn live_container(&self) -> Option<LiveContainer> {
+        self.live.read().expect("live is never poisoned").clone()
+    }
+
+    /// Run `unit`. A unit that runs another image switches to this one once
+    /// its new container is ready.
+    fn ensure(&self, unit: &Unit) {
+        let key = unit.key();
+        let image = unit.image().to_owned();
         let mut slots = self.slots.lock().expect("slots are never poisoned");
-        if let Some(slot) = slots.get_mut(&target) {
-            slot.unit = unit;
+        if let Some(slot) = slots.get_mut(&key) {
+            slot.unit = unit.clone();
             slot.image.send_if_modified(|current| {
                 let changed = *current != image;
                 current.clone_from(&image);
@@ -248,11 +355,11 @@ impl Docker {
         let (image_sender, images) = watch::channel(image);
         let (stop, stopped) = watch::channel(false);
         slots.insert(
-            target.clone(),
+            key.clone(),
             Slot {
                 image: image_sender,
                 stop,
-                unit,
+                unit: unit.clone(),
                 state: State::Starting,
                 address: None,
                 container: None,
@@ -262,7 +369,7 @@ impl Docker {
         );
         let docker = self.clone();
         let task = tokio::spawn(async move {
-            docker.supervise(target, images, stopped).await;
+            docker.supervise(key, images, stopped).await;
         });
         self.tasks
             .lock()
@@ -270,21 +377,21 @@ impl Docker {
             .push(task);
     }
 
-    /// Where a target that is ready takes traffic.
-    fn address(&self, target: &Target) -> Option<String> {
+    /// Where a unit that is ready takes traffic.
+    fn address(&self, key: &UnitKey) -> Option<String> {
         let slots = self.slots.lock().expect("slots are never poisoned");
         slots
-            .get(target)
+            .get(key)
             .filter(|slot| slot.state == State::Ready)
             .and_then(|slot| slot.address.clone())
     }
 
-    fn update(&self, target: &Target, change: impl FnOnce(&mut Slot)) {
+    fn update(&self, key: &UnitKey, change: impl FnOnce(&mut Slot)) {
         if let Some(slot) = self
             .slots
             .lock()
             .expect("slots are never poisoned")
-            .get_mut(target)
+            .get_mut(key)
         {
             change(slot);
         }
@@ -292,7 +399,7 @@ impl Docker {
 
     async fn supervise(
         &self,
-        target: Target,
+        key: UnitKey,
         mut images: watch::Receiver<String>,
         mut stopped: watch::Receiver<bool>,
     ) {
@@ -305,16 +412,16 @@ impl Docker {
             let image = images.borrow_and_update().clone();
             let started = Instant::now();
             let starting = tokio::select! {
-                result = self.start_container(&target, &image) => Some(result),
+                result = self.start_container(&key, &image) => Some(result),
                 _ = stopped.wait_for(|stop| *stop) => None,
             };
             let instance = match starting {
                 None => break,
                 Some(Ok(instance)) => instance,
                 Some(Err(error)) => {
-                    eprintln!("[ssp] could not start {target}: {error:#}");
+                    eprintln!("[ssp] could not start {key}: {error:#}");
                     if serving.is_none() {
-                        self.update(&target, |slot| {
+                        self.update(&key, |slot| {
                             slot.state = State::Failed;
                             slot.error = Some(format!("could not start: {error:#}"));
                         });
@@ -331,24 +438,24 @@ impl Docker {
                 _ = images.changed() => Some(None),
             };
             let Some(ready) = ready else {
-                remove(instance).await;
+                self.engine.remove(&instance.id, self.grace()).await;
                 break;
             };
             match ready {
                 // A newer image replaces this one before it serves.
                 None => {
-                    remove(instance).await;
+                    self.engine.remove(&instance.id, STOP_SECONDS).await;
                     continue;
                 }
                 Some(Err(error)) => {
-                    eprintln!("[ssp] {target} did not become ready: {error:#}");
+                    eprintln!("[ssp] {key} did not become ready: {error:#}");
                     if serving.is_none() {
-                        self.update(&target, |slot| {
+                        self.update(&key, |slot| {
                             slot.state = State::Failed;
                             slot.error = Some(format!("{error:#}"));
                         });
                     }
-                    remove(instance).await;
+                    self.engine.remove(&instance.id, STOP_SECONDS).await;
                     if !pause(&mut delay, &mut images, &mut stopped).await {
                         break;
                     }
@@ -356,17 +463,17 @@ impl Docker {
                 }
                 Some(Ok(())) => {}
             }
-            eprintln!("[ssp] {target} is ready at {}", instance.address);
-            self.update(&target, |slot| {
+            eprintln!("[ssp] {key} is ready at {}", instance.address);
+            self.update(&key, |slot| {
                 slot.state = State::Ready;
                 slot.address = Some(instance.address.clone());
-                slot.container = Some(instance.id.clone());
+                slot.container = Some((instance.id.clone(), instance.tty));
                 slot.running = Some(image.clone());
                 slot.error = None;
             });
             // The new container serves; the one it replaces stops.
             if let Some(previous) = serving.replace(instance) {
-                remove(previous).await;
+                self.engine.remove(&previous.id, STOP_SECONDS).await;
             }
             let id = serving
                 .as_ref()
@@ -378,7 +485,7 @@ impl Docker {
                 Stopped,
             }
             let ended = tokio::select! {
-                code = wait(&id) => Ended::Exited(code),
+                code = self.engine.wait(&id) => Ended::Exited(code),
                 _ = images.changed() => Ended::Replaced,
                 _ = stopped.wait_for(|stop| *stop) => Ended::Stopped,
             };
@@ -388,7 +495,7 @@ impl Docker {
                 Ended::Exited(code) => {
                     serving.take();
                     let exit = code.map_or_else(|| "no code".into(), |code| format!("exit {code}"));
-                    self.update(&target, |slot| {
+                    self.update(&key, |slot| {
                         slot.state = State::Starting;
                         slot.address = None;
                         slot.container = None;
@@ -398,11 +505,10 @@ impl Docker {
                         delay = Duration::from_secs(1);
                     }
                     eprintln!(
-                        "[ssp] {target} exited with {}; restarting in {}s",
-                        code.map_or_else(|| "no code".into(), |code| format!("code {code}")),
+                        "[ssp] {key} exited with {exit}; restarting in {}s",
                         delay.as_secs()
                     );
-                    let _ = docker(&["rm", "--force", &id]).await;
+                    self.engine.remove(&id, 0).await;
                     if !pause(&mut delay, &mut images, &mut stopped).await {
                         break;
                     }
@@ -410,144 +516,117 @@ impl Docker {
             }
         }
         if let Some(instance) = serving.take() {
-            remove(instance).await;
+            self.engine.remove(&instance.id, self.grace()).await;
         }
     }
 
-    /// Start a container for `target`, or adopt one an earlier run left.
-    async fn start_container(&self, target: &Target, image: &str) -> anyhow::Result<Instance> {
-        let label = label(target);
+    /// How long a stopping unit's container may take.
+    fn grace(&self) -> u32 {
+        if self.stopping.load(Ordering::SeqCst) {
+            SHUTDOWN_SECONDS
+        } else {
+            STOP_SECONDS
+        }
+    }
+
+    /// Start a container for a unit, or adopt one an earlier run left.
+    async fn start_container(&self, key: &UnitKey, image: &str) -> anyhow::Result<Instance> {
+        let label = label(key);
         let found = self
             .found
             .lock()
             .expect("found containers are never poisoned")
             .remove(&label);
-        let port = self.container_port(image).await?;
+        let live = self.live_container().context("live is not known yet")?;
         if let Some(found) = found {
             if found.running && found.image == image {
-                eprintln!("[ssp] adopting {target} from container {}", found.id);
-                let address = published(&found.id, port).await?;
-                let logs = self.pass_through(target, &found.id);
-                return Ok(Instance {
-                    id: found.id,
-                    address,
-                    logs,
-                });
+                eprintln!("[ssp] adopting {key} from container {}", found.id);
+                return self.instance(&found.id, live.port).await;
             }
-            let _ = docker(&["rm", "--force", &found.id]).await;
+            self.engine.remove(&found.id, 0).await;
         }
-        let (unit_name, experiment, commit) = match target {
-            Target::Live => ("live".to_owned(), "", ""),
-            Target::Unit(key) => (
-                key.name("", 60),
-                key.experiment.as_str(),
-                key.commit.as_str(),
-            ),
-        };
+        self.engine.pull(image).await?;
+        let unit_image = self
+            .engine
+            .image(image)
+            .await?
+            .with_context(|| format!("Docker has no image {image}"))?;
+        let labels = BTreeMap::from([
+            (APP_LABEL, self.app.clone()),
+            (UNIT_LABEL, label.clone()),
+            (PROXY_LABEL, self.listen.clone()),
+            (IMAGE_LABEL, image.to_owned()),
+            (EXPERIMENT_LABEL, key.experiment.clone()),
+            (COMMIT_LABEL, key.commit.clone()),
+        ]);
+        let (body, networks) = unit_container(
+            &live.container,
+            &live.image,
+            &unit_image,
+            image,
+            live.port,
+            &labels,
+            self.place == Place::Host,
+        )?;
         let name = format!(
-            "ssp-{}-{unit_name}-{:06x}",
-            self.options.app,
+            "{}-ssp-{}-{:06x}",
+            self.live_name.trim_start_matches('/'),
+            key.name("", 60),
             rand::random::<u32>() & 0xff_ffff
         );
-        let mut command = Command::new("docker");
-        command
-            // An init process forwards SIGTERM to apps that run as PID 1.
-            .args(["run", "--detach", "--init", "--name", &name])
-            .args(["--label", &format!("{APP_LABEL}={}", self.options.app)])
-            .args(["--label", &format!("{UNIT_LABEL}={label}")])
-            .args(["--label", &format!("{PROXY_LABEL}={}", self.options.listen)])
-            .args(["--label", &format!("{IMAGE_LABEL}={image}")])
-            .args(["--label", &format!("{EXPERIMENT_LABEL}={experiment}")])
-            .args(["--label", &format!("{COMMIT_LABEL}={commit}")])
-            .args(["--publish", &format!("127.0.0.1::{port}")]);
-        // Values travel in the environment of `docker` itself, so they never
-        // appear in a process list.
-        command.env_clear();
-        for variable in [
-            "PATH",
-            "HOME",
-            "DOCKER_HOST",
-            "DOCKER_CONFIG",
-            "DOCKER_CONTEXT",
-        ] {
-            if let Ok(value) = std::env::var(variable) {
-                command.env(variable, value);
+        let created = self
+            .engine
+            .call(
+                Method::POST,
+                &format!("/containers/create?name={}", crate::api::segment(&name)),
+                Some(&body),
+            )
+            .await?;
+        let id = created["Id"]
+            .as_str()
+            .context("Docker created no container")?
+            .to_owned();
+        let started = async {
+            // A container joins its first network when it is created, and
+            // the others before it starts. It gets no alias, so a name that
+            // finds live never finds a unit.
+            for network in networks.iter().skip(1) {
+                self.engine
+                    .call(
+                        Method::POST,
+                        &format!("/networks/{}/connect", crate::api::segment(network)),
+                        Some(&json!({"Container": id})),
+                    )
+                    .await?;
             }
-        }
-        let mut environment = self.options.environment.clone();
-        environment.push(("PORT".into(), port.to_string()));
-        let mut passed = HashSet::new();
-        for (name, value) in environment.iter().rev() {
-            if passed.insert(name.clone()) {
-                command.arg("--env").arg(name);
-                command.env(name, value);
-            }
-        }
-        for volume in &self.options.volumes {
-            command.args(["--volume", volume]);
-        }
-        if let Some(memory) = &self.options.memory {
-            command.args(["--memory", memory]);
-        }
-        if let Some(cpus) = &self.options.cpus {
-            command.args(["--cpus", cpus]);
-        }
-        command.arg(image);
-        let output = command.output().await.context("could not run docker")?;
-        if !output.status.success() {
-            bail!(
-                "docker run failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            );
-        }
-        let id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        let address = match published(&id, port).await {
-            Ok(address) => address,
-            Err(error) => {
-                let _ = docker(&["rm", "--force", &id]).await;
-                return Err(error);
-            }
+            self.engine
+                .call(Method::POST, &format!("/containers/{id}/start"), None)
+                .await?;
+            self.instance(&id, live.port).await
         };
-        let logs = self.pass_through(target, &id);
-        Ok(Instance { id, address, logs })
-    }
-
-    /// The port the app listens on in its container: `--port`, else the
-    /// image's first exposed TCP port. Pulls the image when it is missing.
-    async fn container_port(&self, image: &str) -> anyhow::Result<u16> {
-        pull(image).await?;
-        if let Some(port) = self.options.port {
-            return Ok(port);
-        }
-        let inspected = inspect(image).await?;
-        let mut ports: Vec<u16> = inspected["Config"]["ExposedPorts"]
-            .as_object()
-            .into_iter()
-            .flat_map(|ports| ports.keys())
-            .filter_map(|port| port.strip_suffix("/tcp")?.parse().ok())
-            .collect();
-        ports.sort_unstable();
-        ports
-            .first()
-            .copied()
-            .with_context(|| format!("{image} exposes no TCP port; pass --port"))
-    }
-
-    /// Print live's lines on the proxy's own output. The lines of a unit
-    /// are read with `output`, which also prints them.
-    fn pass_through(&self, target: &Target, id: &str) -> Vec<JoinHandle<()>> {
-        if *target != Target::Live {
-            return Vec::new();
-        }
-        let id = id.to_owned();
-        vec![tokio::spawn(async move {
-            let (sender, mut lines) = mpsc::channel(1000);
-            let follow = tokio::spawn(follow(id, None, sender));
-            while let Some(line) = lines.recv().await {
-                print(&line, "");
+        match started.await {
+            Ok(instance) => Ok(instance),
+            Err(error) => {
+                self.engine.remove(&id, 0).await;
+                Err(error)
             }
-            follow.abort();
-        })]
+        }
+    }
+
+    /// A running container of a unit, and where it takes requests.
+    async fn instance(&self, id: &str, port: u16) -> anyhow::Result<Instance> {
+        let container = self
+            .engine
+            .container(id)
+            .await?
+            .with_context(|| format!("container {id} is gone"))?;
+        let address = address(&container, port, &self.place)
+            .with_context(|| format!("container {id} has no address the proxy reaches"))?;
+        Ok(Instance {
+            id: id.to_owned(),
+            address,
+            tty: container["Config"]["Tty"] == true,
+        })
     }
 
     async fn wait_ready(&self, instance: &Instance) -> anyhow::Result<()> {
@@ -556,18 +635,16 @@ impl Docker {
             if self.check(&instance.address).await {
                 return Ok(());
             }
-            let state = docker(&[
-                "inspect",
-                "--format",
-                "{{.State.Status}} {{.State.ExitCode}}",
-                &instance.id,
-            ])
-            .await
-            .unwrap_or_default();
-            if let Some((status, code)) = state.trim().split_once(' ')
-                && matches!(status, "exited" | "dead")
+            if let Ok(Some(container)) = self.engine.container(&instance.id).await
+                && matches!(
+                    container["State"]["Status"].as_str(),
+                    Some("exited" | "dead")
+                )
             {
-                bail!("the container exits at start (exit {code})");
+                bail!(
+                    "the container exits at start (exit {})",
+                    container["State"]["ExitCode"]
+                );
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -579,10 +656,17 @@ impl Docker {
 
     /// Whether the container at `address` answers its health check.
     async fn check(&self, address: &str) -> bool {
-        match &self.options.health {
+        match &self.health {
             None => {
                 let socket = address.trim_start_matches("http://");
-                tokio::net::TcpStream::connect(socket).await.is_ok()
+                matches!(
+                    tokio::time::timeout(
+                        Duration::from_secs(2),
+                        tokio::net::TcpStream::connect(socket)
+                    )
+                    .await,
+                    Ok(Ok(_))
+                )
             }
             Some(path) => reqwest::Client::new()
                 .get(format!("{address}{path}"))
@@ -593,7 +677,7 @@ impl Docker {
         }
     }
 
-    /// Remove the containers of an earlier run that no target adopted.
+    /// Remove the containers of an earlier run that no unit adopted.
     async fn remove_strays(&self, keep: &HashSet<String>) {
         let strays: Vec<String> = {
             let mut found = self
@@ -612,7 +696,7 @@ impl Docker {
         };
         for id in strays {
             eprintln!("[ssp] removing container {id}, which no unit uses");
-            let _ = docker(&["rm", "--force", &id]).await;
+            self.engine.remove(&id, 0).await;
         }
     }
 }
@@ -622,35 +706,29 @@ impl Orchestrator for Docker {
         "docker"
     }
 
+    /// The digest of the live container's image.
     async fn live(&self) -> anyhow::Result<Live> {
-        let image = {
-            let slots = self.slots.lock().expect("slots are never poisoned");
-            slots
-                .get(&Target::Live)
-                .filter(|slot| slot.state == State::Ready)
-                .and_then(|slot| slot.running.clone())
-        }
-        .context("live is not ready yet")?;
-        digest(&image).await.map(Live::Image)
+        let live = self.live_container().context("live is not known yet")?;
+        Ok(Live::Image(digest(&live.container, &live.image)?))
     }
 
     fn live_address(&self) -> Address {
-        self.address(&Target::Live).unwrap_or_default()
+        self.live_container()
+            .map(|live| live.address)
+            .unwrap_or_default()
     }
 
     async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
-        let target = Target::Unit(unit.key());
-        self.ensure(target.clone(), unit.image().to_owned(), Some(unit.clone()));
-        Ok(self.address(&target).unwrap_or_default())
+        self.ensure(unit);
+        Ok(self.address(&unit.key()).unwrap_or_default())
     }
 
     async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
-        let target = Target::Unit(unit.key());
         if let Some(slot) = self
             .slots
             .lock()
             .expect("slots are never poisoned")
-            .remove(&target)
+            .remove(&unit.key())
         {
             let _ = slot.stop.send(true);
         }
@@ -662,26 +740,26 @@ impl Orchestrator for Docker {
             let slots = self.slots.lock().expect("slots are never poisoned");
             let running = slots
                 .values()
-                .filter_map(|slot| {
-                    let mut unit = slot.unit.clone()?;
+                .map(|slot| {
+                    let mut unit = slot.unit.clone();
                     // The image that serves now, else the one that starts.
                     let ready = slot.state == State::Ready;
                     if ready && let Some(image) = &slot.running {
                         unit.build = Build::Image(image.clone());
                     }
-                    Some(Running {
+                    Running {
                         unit,
                         address: slot.address.clone().unwrap_or_default(),
                         ready,
                         reason: if ready { None } else { slot.error.clone() },
-                    })
+                    }
                 })
                 .collect();
             (running, slots.keys().map(label).collect())
         };
         // Containers of an earlier run that no unit adopted in the first
         // minute are strays: the lease holder decided what runs by then.
-        if self.started.elapsed() > STRAYS_AFTER && self.address(&Target::Live).is_some() {
+        if self.started.elapsed() > STRAYS_AFTER {
             self.remove_strays(&labels).await;
         }
         Ok(running)
@@ -690,12 +768,12 @@ impl Orchestrator for Docker {
     fn output(&self, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let docker = self.clone();
-        let target = Target::Unit(unit.key());
-        let prefix = format!("[{}] ", unit.key());
+        let key = unit.key();
+        let prefix = format!("[{key}] ");
         tokio::spawn(async move {
             // Follow each container the unit runs, one after another; lines
             // from before are left out.
-            let mut since = Some(chrono::Utc::now());
+            let mut since = Some(chrono::Utc::now().timestamp());
             let mut followed: Option<String> = None;
             loop {
                 if sender.is_closed() {
@@ -705,15 +783,20 @@ impl Orchestrator for Docker {
                     .slots
                     .lock()
                     .expect("slots are never poisoned")
-                    .get(&target)
+                    .get(&key)
                     .and_then(|slot| slot.container.clone());
-                let Some(container) = container.filter(|id| Some(id) != followed.as_ref()) else {
+                let Some((container, tty)) =
+                    container.filter(|(id, _)| Some(id) != followed.as_ref())
+                else {
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
                 };
                 followed = Some(container.clone());
                 let (lines, mut received) = mpsc::channel(1000);
-                let follow = tokio::spawn(follow(container, since.take(), lines));
+                let engine = docker.engine.clone();
+                let start = since.take();
+                let follow =
+                    tokio::spawn(async move { engine.follow(&container, start, tty, lines).await });
                 while let Some(line) = received.recv().await {
                     print(&line, &prefix);
                     if sender.send(line).await.is_err() {
@@ -727,6 +810,7 @@ impl Orchestrator for Docker {
     }
 
     async fn shutdown(&self) {
+        self.stopping.store(true, Ordering::SeqCst);
         for slot in self
             .slots
             .lock()
@@ -742,6 +826,11 @@ impl Orchestrator for Docker {
     }
 }
 
+/// A stable label for a unit, which names its containers across restarts.
+fn label(key: &UnitKey) -> String {
+    format!("{}:{}", key.experiment, key.commit)
+}
+
 fn print(line: &Line, prefix: &str) {
     match line.stream {
         Stream::Stdout => println!("{prefix}{}", line.text),
@@ -749,64 +838,8 @@ fn print(line: &Line, prefix: &str) {
     }
 }
 
-/// Send each line of a container to `sender`, from `since` or from its start.
-async fn follow(
-    id: String,
-    since: Option<chrono::DateTime<chrono::Utc>>,
-    sender: mpsc::Sender<Line>,
-) {
-    let mut command = Command::new("docker");
-    command.args(["logs", "--follow"]);
-    if let Some(since) = since {
-        command.args(["--since", &since.to_rfc3339()]);
-    }
-    command
-        .arg(&id)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let Ok(mut child) = command.spawn() else {
-        eprintln!("[ssp] could not follow the output of container {id}");
-        return;
-    };
-    let readers: [(Stream, Option<Box<dyn AsyncRead + Send + Unpin>>); 2] = [
-        (
-            Stream::Stdout,
-            child
-                .stdout
-                .take()
-                .map(|stream| Box::new(stream) as Box<dyn AsyncRead + Send + Unpin>),
-        ),
-        (
-            Stream::Stderr,
-            child
-                .stderr
-                .take()
-                .map(|stream| Box::new(stream) as Box<dyn AsyncRead + Send + Unpin>),
-        ),
-    ];
-    let mut tasks = Vec::new();
-    for (stream, reader) in readers {
-        let Some(reader) = reader else { continue };
-        let sender = sender.clone();
-        tasks.push(tokio::spawn(async move {
-            let mut lines = BufReader::new(reader).lines();
-            while let Ok(Some(text)) = lines.next_line().await {
-                if sender.send(Line { stream, text }).await.is_err() {
-                    return;
-                }
-            }
-        }));
-    }
-    for task in tasks {
-        let _ = task.await;
-    }
-    let _ = child.wait().await;
-}
-
 /// Wait before starting again, doubling the delay up to a minute. A new
-/// image skips the wait. Returns false when the target must stop.
+/// image skips the wait. Returns false when the unit must stop.
 async fn pause(
     delay: &mut Duration,
     images: &mut watch::Receiver<String>,
@@ -821,172 +854,368 @@ async fn pause(
     waited
 }
 
-/// The environment of the proxy that containers inherit: everything but
-/// the proxy's own settings, such as `STATESPACE_TOKEN`, and what
-/// describes this machine or session.
-pub fn inherited_environment(
-    variables: impl Iterator<Item = (String, String)>,
-) -> Vec<(String, String)> {
-    const MACHINE: [&str; 26] = [
-        "PATH",
-        "HOME",
-        "HOSTNAME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "PWD",
-        "OLDPWD",
-        "SHLVL",
-        "TERM",
-        "TMPDIR",
-        "MAIL",
-        "_",
-        "INVOCATION_ID",
-        "JOURNAL_STREAM",
-        "NOTIFY_SOCKET",
-        "MAINPID",
-        "MANAGERPID",
-        "WATCHDOG_PID",
-        "WATCHDOG_USEC",
-        "RUNTIME_DIRECTORY",
-        "STATE_DIRECTORY",
-        "CACHE_DIRECTORY",
-        "LOGS_DIRECTORY",
-        "CONFIGURATION_DIRECTORY",
-        "CREDENTIALS_DIRECTORY",
-    ];
-    const PREFIXES: [&str; 6] = [
-        "STATESPACE_",
-        "SSP_",
-        "DOCKER_",
-        "XDG_",
-        "SYSTEMD_",
-        "LISTEN_",
-    ];
-    variables
-        .filter(|(name, _)| {
-            !MACHINE.contains(&name.as_str())
-                && !PREFIXES.iter().any(|prefix| name.starts_with(prefix))
-        })
-        .collect()
+/// Where the proxy runs: in a container, with the networks of that
+/// container, or on the host.
+async fn place(engine: &Engine) -> Place {
+    let mut candidates = Vec::new();
+    if let Ok(mounts) = std::fs::read_to_string("/proc/self/mountinfo") {
+        candidates.extend(own_container(&mounts));
+    }
+    if let Ok(host) = std::env::var("HOSTNAME") {
+        candidates.push(host);
+    }
+    for candidate in candidates {
+        if let Ok(Some(container)) = engine.container(&candidate).await {
+            let networks: HashSet<String> = container["NetworkSettings"]["Networks"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(_, network)| network["NetworkID"].as_str().map(str::to_owned))
+                .collect();
+            return Place::Container(networks);
+        }
+    }
+    Place::Host
 }
 
-/// The digest of an image Docker has: the registry digest of its repository,
-/// else its local ID.
-pub async fn digest(image: &str) -> anyhow::Result<String> {
-    if image::is_digest(image) {
-        return Ok(image.to_owned());
+/// The ID of the container this process runs in, from the mounts that
+/// Docker makes, such as `/var/lib/docker/containers/<id>/hostname`.
+fn own_container(mountinfo: &str) -> Option<String> {
+    mountinfo.lines().find_map(|line| {
+        let (_, rest) = line.split_once("/containers/")?;
+        let id: String = rest.chars().take_while(char::is_ascii_hexdigit).collect();
+        (id.len() == 64).then_some(id)
+    })
+}
+
+/// The only TCP port a container exposes.
+fn only_port(container: &Value) -> Option<u16> {
+    let ports: Vec<u16> = container["Config"]["ExposedPorts"]
+        .as_object()
+        .into_iter()
+        .flat_map(|ports| ports.keys())
+        .filter_map(|port| port.strip_suffix("/tcp")?.parse().ok())
+        .collect();
+    match ports[..] {
+        [port] => Some(port),
+        _ => None,
     }
-    let inspected = inspect(image).await?;
-    let wanted = image::normalize(image::repository(image));
-    let digests: Vec<String> = inspected["RepoDigests"]
+}
+
+/// Where the proxy reaches `port` of a container: its IP address on a
+/// network the proxy shares when the proxy runs in a container; else the
+/// port it publishes on the host, or its IP address on its first network.
+fn address(container: &Value, port: u16, place: &Place) -> Option<String> {
+    let networks = container["NetworkSettings"]["Networks"].as_object()?;
+    let ip = |network: &Value| {
+        network["IPAddress"]
+            .as_str()
+            .filter(|ip| !ip.is_empty())
+            .map(|ip| format!("http://{ip}:{port}"))
+    };
+    match place {
+        Place::Container(shared) => networks
+            .values()
+            .filter(|network| {
+                network["NetworkID"]
+                    .as_str()
+                    .is_some_and(|id| shared.contains(id))
+            })
+            .find_map(ip),
+        Place::Host => {
+            let published = container["NetworkSettings"]["Ports"][format!("{port}/tcp")]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find_map(|binding| {
+                    let host_port = binding["HostPort"]
+                        .as_str()
+                        .filter(|port| !port.is_empty())?;
+                    let host = match binding["HostIp"].as_str().unwrap_or_default() {
+                        "" | "0.0.0.0" | "::" => "127.0.0.1",
+                        ip if ip.contains(':') => {
+                            return Some(format!("http://[{ip}]:{host_port}"));
+                        }
+                        ip => ip,
+                    };
+                    Some(format!("http://{host}:{host_port}"))
+                });
+            published.or_else(|| networks.values().find_map(ip))
+        }
+    }
+}
+
+/// The digest of a container's image: the registry digest of the
+/// repository it names, else its first registry digest, else its local ID.
+fn digest(container: &Value, image: &Value) -> anyhow::Result<String> {
+    let configured = container["Config"]["Image"].as_str().unwrap_or_default();
+    if image::is_digest(configured) {
+        return Ok(configured.to_owned());
+    }
+    let wanted = image::normalize(image::repository(configured));
+    let digests: Vec<&str> = image["RepoDigests"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|digest| Some(digest.as_str()?.to_owned()))
+        .filter_map(Value::as_str)
+        .filter(|digest| image::is_digest(digest))
         .collect();
-    if let Some(digest) = digests.iter().find(|digest| {
-        image::normalize(image::repository(digest)) == wanted && image::is_digest(digest)
-    }) {
-        return Ok(digest.clone());
+    digests
+        .iter()
+        .find(|digest| image::normalize(image::repository(digest)) == wanted)
+        .or_else(|| digests.first())
+        .map(|digest| (*digest).to_owned())
+        .or_else(|| image["Id"].as_str().map(str::to_owned))
+        .context("Docker reported no ID for live's image")
+}
+
+/// The creation of a unit's container, and the networks it joins: a copy
+/// of live's container with the unit's image. It keeps live's own
+/// environment (not what live's image sets), command and entrypoint when
+/// live sets them, mounts, limits, and networks. It takes no label, name,
+/// alias, published port, or restart policy of live, and no `STATESPACE_*`
+/// variable. On the host, it publishes `port` on 127.0.0.1.
+pub fn unit_container(
+    live: &Value,
+    live_image: &Value,
+    unit_image: &Value,
+    image: &str,
+    port: u16,
+    labels: &BTreeMap<&str, String>,
+    on_host: bool,
+) -> anyhow::Result<(Value, Vec<String>)> {
+    let own = &live["Config"];
+    let baked = &live_image["Config"];
+    let environment: Vec<&Value> = own["Env"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|variable| {
+            let text = variable.as_str().unwrap_or_default();
+            let set_by_image = baked["Env"]
+                .as_array()
+                .is_some_and(|variables| variables.contains(variable));
+            !set_by_image && !text.starts_with("STATESPACE_")
+        })
+        .collect();
+    let mut config = Map::new();
+    config.insert("Image".into(), json!(image));
+    config.insert("Env".into(), json!(environment));
+    config.insert("Labels".into(), json!(labels));
+    config.insert("Tty".into(), own["Tty"].clone());
+    let mut exposed = unit_image["Config"]["ExposedPorts"]
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    exposed.insert(format!("{port}/tcp"), json!({}));
+    config.insert("ExposedPorts".into(), json!(exposed));
+    for field in OWN_SETTINGS {
+        let value = &own[field];
+        let empty = value.is_null() || value.as_str() == Some("");
+        if !empty && *value != baked[field] {
+            config.insert(field.into(), value.clone());
+        }
     }
-    inspected["Id"]
-        .as_str()
-        .map(str::to_owned)
-        .with_context(|| format!("docker reported no ID for {image}"))
-}
-
-/// Pull `image` unless Docker has it.
-pub async fn pull(image: &str) -> anyhow::Result<()> {
-    if inspect(image).await.is_ok() {
-        return Ok(());
+    let mut host = Map::new();
+    for field in HOST_SETTINGS {
+        let value = &live["HostConfig"][field];
+        if !value.is_null() {
+            host.insert(field.into(), value.clone());
+        }
     }
-    eprintln!("[ssp] pulling {image}");
-    docker(&["pull", "--quiet", image])
-        .await
-        .with_context(|| format!("could not pull {image}"))
-        .map(drop)
-}
-
-async fn inspect(image: &str) -> anyhow::Result<Value> {
-    let output = docker(&["image", "inspect", "--format", "{{json .}}", image]).await?;
-    Ok(serde_json::from_str(output.trim())?)
-}
-
-/// Where Docker published a container's port on 127.0.0.1.
-async fn published(id: &str, port: u16) -> anyhow::Result<String> {
-    let output = docker(&["port", id, &format!("{port}/tcp")]).await?;
-    output
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("127.0.0.1:"))
-        .map(|host_port| format!("http://127.0.0.1:{host_port}"))
-        .with_context(|| format!("docker published no port for container {id}"))
-}
-
-/// Wait for a container to stop; its exit code, if Docker knows it.
-async fn wait(id: &str) -> Option<i64> {
-    docker(&["wait", id]).await.ok()?.trim().parse().ok()
-}
-
-/// Stop a container, give it time to finish, and remove it.
-async fn remove(instance: Instance) {
-    let _ = docker(&["stop", "--time", &STOP_SECONDS.to_string(), &instance.id]).await;
-    let _ = docker(&["rm", "--force", &instance.id]).await;
-    for task in instance.logs {
-        task.abort();
-    }
-}
-
-/// Run `docker` and return its standard output.
-async fn docker(arguments: &[&str]) -> anyhow::Result<String> {
-    let output = Command::new("docker")
-        .args(arguments)
-        .stdin(Stdio::null())
-        .output()
-        .await
-        .context("could not run docker")?;
-    if !output.status.success() {
-        bail!(
-            "docker {} failed: {}",
-            arguments.first().copied().unwrap_or_default(),
-            String::from_utf8_lossy(&output.stderr).trim()
+    // Live's container is listed by name in its networks, so networks are
+    // taken from there, in a stable order.
+    let mut networks: Vec<String> = live["NetworkSettings"]["Networks"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, _)| name.clone())
+        .collect();
+    networks.sort();
+    let first = networks
+        .first()
+        .context("live's container is on no network")?
+        .clone();
+    host.insert("NetworkMode".into(), json!(first));
+    if on_host {
+        host.insert(
+            "PortBindings".into(),
+            json!({format!("{port}/tcp"): [{"HostIp": "127.0.0.1", "HostPort": ""}]}),
         );
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    config.insert("HostConfig".into(), json!(host));
+    config.insert(
+        "NetworkingConfig".into(),
+        json!({"EndpointsConfig": {first: {}}}),
+    );
+    Ok((Value::Object(config), networks))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn labels_name_units_stably() {
-        assert_eq!(label(&Target::Live), "live");
-        let key = UnitKey {
-            experiment: "checkout".into(),
-            commit: "a".repeat(40),
-        };
-        assert_eq!(
-            label(&Target::Unit(key)),
-            format!("checkout:{}", "a".repeat(40))
-        );
+    fn live() -> Value {
+        json!({
+            "Id": "a".repeat(64),
+            "Name": "/shop-shop-1",
+            "Image": format!("sha256:{}", "1".repeat(64)),
+            "Config": {
+                "Image": "ghcr.io/acme/shop:main",
+                "Env": ["PATH=/usr/local/bin:/usr/bin", "GREETING=hello", "DATABASE_URL=postgres://db",
+                        "STATESPACE_TOKEN=never"],
+                "Cmd": ["python3", "/app/app.py"],
+                "Entrypoint": null,
+                "WorkingDir": "/srv",
+                "User": "",
+                "Tty": false,
+                "ExposedPorts": {"8000/tcp": {}},
+                "Labels": {"com.docker.compose.project": "shop", "com.docker.compose.service": "shop",
+                           "team": "web"},
+            },
+            "HostConfig": {
+                "NetworkMode": "shop_default",
+                "Binds": ["/srv/uploads:/srv/uploads"],
+                "Mounts": [{"Type": "volume", "Source": "shop_cache", "Target": "/cache"}],
+                "Memory": 536_870_912,
+                "NanoCpus": 1_000_000_000,
+                "PortBindings": {"8000/tcp": [{"HostIp": "", "HostPort": "8000"}]},
+                "RestartPolicy": {"Name": "unless-stopped"},
+                "LogConfig": {"Type": "json-file", "Config": {}},
+            },
+            "NetworkSettings": {
+                "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8000"}]},
+                "Networks": {
+                    "shop_default": {"NetworkID": "n1", "IPAddress": "172.20.0.3",
+                                     "Aliases": ["shop-shop-1", "shop"]},
+                    "shop_backend": {"NetworkID": "n2", "IPAddress": "172.21.0.3"},
+                },
+            },
+        })
+    }
+
+    fn live_image() -> Value {
+        json!({
+            "Id": format!("sha256:{}", "1".repeat(64)),
+            "RepoDigests": [format!("ghcr.io/acme/shop@sha256:{}", "f".repeat(64))],
+            "Config": {"Env": ["PATH=/usr/local/bin:/usr/bin", "GREETING=hello"],
+                       "Cmd": ["python3", "/app/app.py"], "WorkingDir": "/app"},
+        })
     }
 
     #[test]
-    fn containers_never_get_the_runtime_token() {
-        let variables = [
-            ("STATESPACE_TOKEN", "secret"),
-            ("STATESPACE_API", "https://api.statespace.com"),
-            ("STATESPACE_APP", "shop-prod"),
-            ("SSP_TOKEN", "old"),
-            ("DATABASE_URL", "postgres://db"),
-            ("PATH", "/usr/bin"),
-        ]
-        .into_iter()
-        .map(|(name, value)| (name.to_owned(), value.to_owned()));
-        assert_eq!(
-            inherited_environment(variables),
-            [("DATABASE_URL".to_owned(), "postgres://db".to_owned())]
+    fn units_copy_live_without_its_labels_names_or_ports() {
+        let labels = BTreeMap::from([(APP_LABEL, "shop-prod".to_owned())]);
+        let unit_image = json!({"Config": {"ExposedPorts": {"9000/tcp": {}}}});
+        let image = format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64));
+        let (body, networks) = unit_container(
+            &live(),
+            &live_image(),
+            &unit_image,
+            &image,
+            8000,
+            &labels,
+            false,
+        )
+        .unwrap();
+        assert_eq!(body["Image"], image.as_str());
+        // Only what live sets itself: the image of a unit brings the rest.
+        assert_eq!(body["Env"], json!(["DATABASE_URL=postgres://db"]));
+        assert!(
+            body.get("Cmd").is_none(),
+            "the unit's image gives its command"
         );
+        assert_eq!(body["WorkingDir"], "/srv");
+        assert_eq!(body["Labels"], json!({APP_LABEL: "shop-prod"}));
+        let host = &body["HostConfig"];
+        assert_eq!(host["Binds"], json!(["/srv/uploads:/srv/uploads"]));
+        assert_eq!(host["Mounts"][0]["Source"], "shop_cache");
+        assert_eq!(host["Memory"], 536_870_912);
+        assert_eq!(host["NetworkMode"], "shop_backend");
+        for field in ["PortBindings", "RestartPolicy"] {
+            assert!(host.get(field).is_none(), "{field}");
+        }
+        assert_eq!(networks, ["shop_backend", "shop_default"]);
+        assert_eq!(
+            body["NetworkingConfig"],
+            json!({"EndpointsConfig": {"shop_backend": {}}}),
+            "no alias"
+        );
+        assert_eq!(
+            body["ExposedPorts"],
+            json!({"8000/tcp": {}, "9000/tcp": {}})
+        );
+        let text = body.to_string();
+        assert!(!text.contains("com.docker.compose") && !text.contains("STATESPACE_"));
+        // On the host, a unit publishes its port on 127.0.0.1.
+        let (on_host, _) = unit_container(
+            &live(),
+            &live_image(),
+            &unit_image,
+            &image,
+            8000,
+            &labels,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            on_host["HostConfig"]["PortBindings"],
+            json!({"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": ""}]})
+        );
+        // A command that live sets itself is kept.
+        let mut own = live();
+        own["Config"]["Cmd"] = json!(["python3", "/app/app.py", "--workers", "4"]);
+        let (body, _) = unit_container(
+            &own,
+            &live_image(),
+            &unit_image,
+            &image,
+            8000,
+            &labels,
+            false,
+        )
+        .unwrap();
+        assert_eq!(body["Cmd"][3], "4");
+    }
+
+    #[test]
+    fn finds_live_and_where_the_proxy_reaches_it() {
+        let live = live();
+        assert_eq!(only_port(&live), Some(8000));
+        let mut two = live.clone();
+        two["Config"]["ExposedPorts"] = json!({"8000/tcp": {}, "9000/tcp": {}, "53/udp": {}});
+        assert_eq!(only_port(&two), None);
+        let shared = Place::Container(HashSet::from(["n2".to_owned()]));
+        assert_eq!(
+            address(&live, 8000, &shared).as_deref(),
+            Some("http://172.21.0.3:8000")
+        );
+        assert_eq!(
+            address(&live, 8000, &Place::Container(HashSet::from(["x".into()]))),
+            None
+        );
+        assert_eq!(
+            address(&live, 8000, &Place::Host).as_deref(),
+            Some("http://127.0.0.1:8000")
+        );
+        let mut unpublished = live.clone();
+        unpublished["NetworkSettings"]["Ports"] = json!({});
+        assert!(
+            address(&unpublished, 8000, &Place::Host)
+                .unwrap()
+                .starts_with("http://172.2")
+        );
+        assert_eq!(
+            digest(&live, &live_image()).unwrap(),
+            format!("ghcr.io/acme/shop@sha256:{}", "f".repeat(64))
+        );
+        let local = json!({"Id": "sha256:abc", "RepoDigests": []});
+        assert_eq!(digest(&live, &local).unwrap(), "sha256:abc");
+        let mountinfo = format!(
+            "1 2 0:1 /docker/containers/{}/hostname /etc/hostname rw - ext4 /dev/vda1 rw",
+            "c".repeat(64)
+        );
+        assert_eq!(own_container(&mountinfo), Some("c".repeat(64)));
+        assert_eq!(own_container("1 2 0:1 / / rw - overlay overlay rw"), None);
     }
 }

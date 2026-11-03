@@ -62,7 +62,6 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 ProxyCommand::Docker { common, docker } => {
                     let remote = connect(endpoint, &common).await?;
                     let orchestrator = Docker::new(&common.app, &common.listen, docker).await?;
-                    orchestrator.wait_for_live(Duration::from_secs(180)).await;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Cloudrun { common, cloudrun } => {
