@@ -6,6 +6,11 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ### Changed
 
+- **Breaking:** overrides are always on. The `overrides` setting is removed from
+  `statespace.toml`.
+- **Breaking:** the override parameter, cookie, and header are all `ssp`:
+  `?ssp=<experiment>:<commit>`, the cookie `ssp`, and the header `ssp: <value>`.
+  `ssp_arm` and `ssp-arm` are removed.
 - A command for a workspace that Statespace has not activated yet prints one
   line, `<workspace> is pending: Statespace is reviewing your access. See
   https://statespace.com/contact`, and exits 1. With `--json`, the line is

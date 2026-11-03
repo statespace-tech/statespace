@@ -30,9 +30,6 @@ value = 'events["purchase"].lines / requests'
 [experiment.price]
 max_traffic = 0.2
 
-# The staging copy: all traffic may go to arms, and testers may pick one.
-[app.shop-dev]
-overrides = true
-
+# The staging copy: all traffic may go to arms.
 [app.shop-dev.experiment.price]
 max_traffic = 1.0

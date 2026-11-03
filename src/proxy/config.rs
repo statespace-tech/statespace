@@ -31,8 +31,6 @@ fn poll_interval() -> u64 {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct Settings {
     #[serde(default)]
-    pub overrides: bool,
-    #[serde(default)]
     pub redact: Vec<String>,
 }
 
@@ -103,7 +101,7 @@ mod tests {
     fn reads_the_configuration_before_the_first_report() {
         let config: RuntimeConfig = serde_json::from_str(
             r#"{"app": "shop-prod", "salt": "s", "settings_hash": null,
-                "settings": {"overrides": false, "redact": []},
+                "settings": {"redact": []},
                 "live": null, "experiments": [],
                 "lease": null, "poll_interval_seconds": 5}"#,
         )
@@ -116,7 +114,7 @@ mod tests {
     fn reads_experiments() {
         let config: RuntimeConfig = serde_json::from_str(
             r#"{"app": "shop-prod", "salt": "s",
-                "settings": {"overrides": true, "redact": []},
+                "settings": {"redact": []},
                 "live": {"commit": "c0ffee1", "image": "shop@sha256:1"},
                 "experiments": [
                   {"name": "checkout", "version": 3, "state": "running",

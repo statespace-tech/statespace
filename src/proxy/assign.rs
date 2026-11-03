@@ -19,9 +19,9 @@ pub const SUBJECT_COOKIE: &str = "ssp_sid";
 /// The default subject rule.
 pub const DEFAULT_SUBJECT: &str = "request.cookies.ssp_sid";
 /// The query parameter and cookie that name an arm.
-pub const OVERRIDE: &str = "ssp_arm";
+pub const OVERRIDE: &str = "ssp";
 /// The header that names the arm of one request.
-pub const OVERRIDE_HEADER: &str = "ssp-arm";
+pub const OVERRIDE_HEADER: &str = "ssp";
 
 /// One experiment of the configuration, compiled.
 pub struct Experiment {
@@ -119,7 +119,6 @@ impl Experiment {
 pub struct Routing {
     pub salt: String,
     pub settings_hash: Option<String>,
-    pub overrides: bool,
     pub redact: Vec<Regex>,
     /// The `starting` and `running` experiments, in the order of
     /// `statespace.toml`. Without a live commit, there are none.
@@ -161,7 +160,6 @@ impl Routing {
             Self {
                 salt: config.salt.clone(),
                 settings_hash: config.settings_hash.clone(),
-                overrides: config.settings.overrides,
                 redact,
                 experiments,
                 default_subject,
@@ -277,7 +275,7 @@ pub enum Reason {
     Assigned,
     /// The unit is not ready: the request goes to live.
     ArmUnavailable,
-    /// The request named its arm with `?ssp_arm=` or `ssp-arm`.
+    /// The request named its arm with `?ssp=` or the `ssp` header.
     Override,
     /// The eligibility rule failed, so the experiment skipped the request.
     EligibilityError,
@@ -571,7 +569,7 @@ mod tests {
             "app": "shop-prod",
             "salt": "app-salt",
             "settings_hash": "h1",
-            "settings": {"overrides": true, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": "shop@sha256:1"},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",

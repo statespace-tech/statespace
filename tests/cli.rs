@@ -1258,7 +1258,8 @@ struct CloudRunTest {
     _directory: tempfile::TempDir,
 }
 
-fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
+/// A Cloud Run proxy of `shop-prod`.
+fn cloudrun_proxy(lease: bool) -> CloudRunTest {
     let live = echo("live");
     let reference = echo("reference");
     let arm = echo("arm");
@@ -1293,7 +1294,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
             "app": "shop-prod",
             "salt": "salt-1",
             "settings_hash": "settings-1",
-            "settings": {"overrides": overrides, "redact": ["\\b\\d{16}\\b"]},
+            "settings": {"redact": ["\\b\\d{16}\\b"]},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
@@ -1345,7 +1346,7 @@ fn cloudrun_proxy(overrides: bool, lease: bool) -> CloudRunTest {
 
 #[test]
 fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
-    let test = cloudrun_proxy(false, true);
+    let test = cloudrun_proxy(true);
     let reference_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
@@ -1682,7 +1683,7 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
 
 #[test]
 fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
-    let test = cloudrun_proxy(false, false);
+    let test = cloudrun_proxy(false);
     wait_until(30, "the proxy reports", || {
         test.statespace.lock().unwrap().reports().len() >= 2
     });
@@ -1707,10 +1708,11 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
 
 #[test]
 fn overrides_name_an_experiment_and_a_commit() {
-    let test = cloudrun_proxy(true, true);
+    let test = cloudrun_proxy(true);
     let live_subject = subject_in(0.8, 1.0);
     let cookie = format!("ssp_sid={live_subject}");
-    let named = [("ssp-arm", "checkout:a1b2c3d"), ("cookie", cookie.as_str())];
+    let link = "checkout:a1b2c3d";
+    let named = [("ssp", link), ("cookie", cookie.as_str())];
     wait_until(60, "the arm serves overrides", || {
         send(test.port, "GET", "/", &named).is_some_and(|response| {
             response.status() == 200 && response.json::<Value>().unwrap()["name"] == "arm"
@@ -1722,67 +1724,61 @@ fn overrides_name_an_experiment_and_a_commit() {
     assert!(
         set_cookies(&response)
             .iter()
-            .all(|cookie| !cookie.starts_with("ssp_arm"))
+            .all(|cookie| !cookie.starts_with("ssp="))
     );
     let body: Value = response.json().unwrap();
     assert_eq!(body["name"], "arm");
     assert_eq!(body["headers"]["x-statespace-experiment"], "checkout");
-    assert!(body["headers"].get("ssp-arm").is_none());
+    assert!(body["headers"].get("ssp").is_none());
 
     // A browser's parameter sets the cookie and returns to the clean URL.
     let plain_cookie = [("cookie", cookie.as_str())];
     let response = send(
         test.port,
         "GET",
-        "/cart?step=1&ssp_arm=checkout:a1b2c3d",
+        &format!("/cart?step=1&ssp={link}"),
         &plain_cookie,
     )
     .unwrap();
     assert_eq!(response.status(), 302);
     assert_eq!(response.headers()["location"], "/cart?step=1");
     assert!(set_cookies(&response).contains(&format!(
-        "ssp_arm=checkout:{ARM}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
+        "ssp={link}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax"
     )));
 
     // The cookie keeps the arm and never reaches the app.
-    let kept_cookie = format!("{cookie}; ssp_arm=checkout:{ARM}");
+    let kept_cookie = format!("{cookie}; ssp={link}");
     let kept = [("cookie", kept_cookie.as_str())];
     let response = send(test.port, "GET", "/", &kept).unwrap();
     assert!(
         set_cookies(&response)
             .iter()
-            .any(|cookie| cookie.starts_with(&format!("ssp_arm=checkout:{ARM};")))
+            .any(|cookie| cookie.starts_with(&format!("ssp={link};")))
     );
     let body: Value = response.json().unwrap();
     assert_eq!(body["name"], "arm");
     assert_eq!(body["headers"]["cookie"], cookie.as_str());
 
     // A value that matches no arm of a running experiment gets a short page.
-    let response = send(
-        test.port,
-        "GET",
-        "/?ssp_arm=checkout:b2c3d4e5",
-        &plain_cookie,
-    )
-    .unwrap();
+    let response = send(test.port, "GET", "/?ssp=checkout:b2c3d4e5", &plain_cookie).unwrap();
     assert_eq!(response.status(), 404);
     assert!(response.text().unwrap().contains(
         "checkout:b2c3d4e5 is not running on shop-prod. \
          Running: checkout:9f1ce8a, checkout:a1b2c3d"
     ));
     // A starting experiment, or a commit without its experiment, names nothing.
-    for value in ["us-landing:b2c3d4e", "a1b2c3d"] {
-        let response = send(test.port, "GET", "/", &[("ssp-arm", value)]).unwrap();
-        assert_eq!(response.status(), 404, "{value}");
+    for arm in ["us-landing:b2c3d4e", "a1b2c3d"] {
+        let response = send(test.port, "GET", "/", &[("ssp", arm)]).unwrap();
+        assert_eq!(response.status(), 404, "{arm}");
     }
 
     // An empty parameter ends the override.
-    let response = send(test.port, "GET", "/?ssp_arm=", &kept).unwrap();
+    let response = send(test.port, "GET", "/?ssp=", &kept).unwrap();
     assert_eq!(response.status(), 302);
     assert!(
         set_cookies(&response)
             .iter()
-            .any(|cookie| cookie.starts_with("ssp_arm=; "))
+            .any(|cookie| cookie.starts_with("ssp=; "))
     );
 
     wait_until(30, "an override run and request", || {
@@ -1796,29 +1792,6 @@ fn overrides_name_an_experiment_and_a_commit() {
             .iter()
             .any(|row| row["override"] == true)
     });
-}
-
-#[test]
-fn proxies_without_overrides_still_remove_them() {
-    let test = cloudrun_proxy(false, true);
-    wait_until(60, "the proxy listens", || {
-        send(test.port, "GET", "/", &[]).is_some()
-    });
-    let live_subject = subject_in(0.8, 1.0);
-    let cookie = format!("ssp_sid={live_subject}; ssp_arm=checkout:{ARM}");
-    let response = send(
-        test.port,
-        "GET",
-        "/a?ssp_arm=checkout:a1b2c3d",
-        &[("ssp-arm", "checkout:a1b2c3d"), ("cookie", &cookie)],
-    )
-    .unwrap();
-    assert_eq!(response.status(), 200);
-    let body: Value = response.json().unwrap();
-    assert_eq!(body["name"], "live");
-    assert_eq!(body["query"], "");
-    assert!(body["headers"].get("ssp-arm").is_none());
-    assert_eq!(body["headers"]["cookie"], format!("ssp_sid={live_subject}"));
 }
 
 // ---------------------------------------------------------------------------
@@ -1977,7 +1950,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {"overrides": false, "redact": ["\\b\\d{16}\\b"]},
+            "settings": {"redact": ["\\b\\d{16}\\b"]},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
@@ -2286,7 +2259,7 @@ fn docker_proxies_run_live_and_each_unit() {
         lease: true,
         config: json!({
             "app": app, "salt": "salt-1", "settings_hash": "h",
-            "settings": {"overrides": false, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -2553,7 +2526,7 @@ spec:
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"overrides": false, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -3466,7 +3439,7 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"overrides": false, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [],
             "lease": null, "poll_interval_seconds": 2,
@@ -4125,7 +4098,7 @@ fn fargate_proxies_run_units_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {"overrides": false, "redact": ["\\b\\d{16}\\b"]},
+            "settings": {"redact": ["\\b\\d{16}\\b"]},
             "live": {"commit": LIVE, "image": fargate_digest('1')},
             "experiments": [{
                 "name": "checkout", "version": 3, "state": "running",
@@ -5145,7 +5118,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"overrides": false, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -5784,7 +5757,7 @@ primary_region = "{region}"
         lease: true,
         config: json!({
             "app": run, "salt": "salt-1", "settings_hash": "h",
-            "settings": {"overrides": false, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",

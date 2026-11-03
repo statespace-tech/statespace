@@ -213,9 +213,6 @@ shared event, and one metric. Keep the comments.
 # A change applies when the build of its commit runs as live.
 # Reference: https://docs.statespace.com
 
-# Let testers pick an arm with ?ssp_arm=<experiment>:<commit>.
-overrides = false
-
 # Regular expressions. The proxy replaces each match with
 # [redacted] before output leaves the machine.
 redact = []
@@ -249,9 +246,6 @@ value = '100.0 * events["signup"].subjects / subjects'
 max_traffic = 0.2
 
 # Settings for one app replace the shared settings.
-# [app.shop-dev]
-# overrides = true
-#
 # [app.shop-dev.experiment.signup]
 # max_traffic = 1.0
 ```

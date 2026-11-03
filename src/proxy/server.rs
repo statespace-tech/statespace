@@ -207,64 +207,34 @@ async fn route<O: Orchestrator>(
         &cookies,
     );
     let ready = |routing: &Routing, key: &UnitKey| runtime.address(routing, key).is_some();
-    // With `overrides = true`, a request may name the arm that serves it.
-    let mut override_change = None;
-    let mut chosen = None;
-    if let Some(routing) = routing.as_ref().filter(|routing| routing.overrides) {
-        let navigation = matches!(method, Method::GET | Method::HEAD);
-        let pick =
-            |value: &str| assign::override_arm(routing, &view, value, |key| ready(routing, key));
-        if let Some(value) = &requested.parameter {
-            if value.is_empty() {
-                let cleared = override_cookie(None, secure);
-                if navigation {
-                    return redirect(&same_site(request.uri()), Some(cleared));
-                }
-                override_change = Some(cleared);
-            } else {
-                match pick(value) {
-                    Ok(decision) => {
-                        let kept = override_cookie(Some(&decision_arm(&decision)), secure);
-                        if navigation {
-                            return redirect(&same_site(request.uri()), Some(kept));
-                        }
-                        override_change = Some(kept);
-                        chosen = Some(decision);
-                    }
-                    Err(refused) => {
-                        let (status, message) = refusal(&runtime.app, routing, value, refused);
-                        return page(status, &message);
-                    }
-                }
+    // A link may name the arm that serves the request.
+    let navigation = matches!(method, Method::GET | Method::HEAD);
+    let (chosen, override_change) = match routing.as_ref() {
+        None => (None, None),
+        Some(routing) => match choose_override(
+            &runtime.app,
+            routing,
+            &view,
+            &requested,
+            navigation,
+            secure,
+            |key| ready(routing, key),
+        ) {
+            Overridden::Assign { cookie } => (None, cookie),
+            Overridden::Arm { decision, cookie } => (Some(decision), cookie),
+            Overridden::Redirect { cookie } => {
+                return redirect(&same_site(request.uri()), Some(cookie));
             }
-        } else if let Some(value) = requested
-            .header
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            match pick(value) {
-                Ok(decision) => chosen = Some(decision),
-                Err(refused) => {
-                    let (status, message) = refusal(&runtime.app, routing, value, refused);
-                    return plain(status, message);
-                }
-            }
-        } else if let Some(value) = requested
-            .cookie
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            // An arm that stopped since ends its override quietly.
-            match pick(value) {
-                Ok(decision) => {
-                    override_change = Some(override_cookie(Some(&decision_arm(&decision)), secure));
-                    chosen = Some(decision);
-                }
-                Err(Refused::NotReady) => {}
-                Err(Refused::NotRunning) => override_change = Some(override_cookie(None, secure)),
-            }
-        }
-    }
+            Overridden::Refuse {
+                status,
+                message,
+                page: true,
+            } => return page(status, &message),
+            Overridden::Refuse {
+                status, message, ..
+            } => return plain(status, message),
+        },
+    };
     let over = chosen.is_some();
     let decision = match (chosen, &routing) {
         (Some(decision), _) => decision,
@@ -449,13 +419,112 @@ async fn route<O: Orchestrator>(
     )
 }
 
-/// `<experiment>:<commit>` of the arm that serves a decision.
-fn decision_arm(decision: &Decision) -> String {
-    decision
-        .serve
-        .as_ref()
-        .map(|key| format!("{}:{}", key.experiment, key.commit))
-        .unwrap_or_default()
+/// What the override of a request asks for.
+#[derive(Debug, PartialEq)]
+enum Overridden {
+    /// No arm is named: assign the request as usual. `cookie` keeps or ends
+    /// the override cookie.
+    Assign { cookie: Option<String> },
+    /// Serve the arm that the request names.
+    Arm {
+        decision: Decision,
+        cookie: Option<String>,
+    },
+    /// Send a browser back to the same URL without `?ssp=`, with the
+    /// cookie.
+    Redirect { cookie: String },
+    /// Refuse the request: a page for `?ssp=`, plain text for the header.
+    Refuse {
+        status: StatusCode,
+        message: String,
+        page: bool,
+    },
+}
+
+/// Decide what the override of a request asks for: `<experiment>:<commit>`.
+/// `?ssp=` wins over the header, and the header over the cookie. A `GET` or `HEAD` with
+/// the parameter gets a redirect that sets the cookie, and an empty `?ssp=`
+/// ends the override.
+#[allow(clippy::too_many_arguments)]
+fn choose_override(
+    app: &str,
+    routing: &Routing,
+    view: &Value,
+    requested: &Requested,
+    navigation: bool,
+    secure: bool,
+    ready: impl Fn(&UnitKey) -> bool,
+) -> Overridden {
+    let pick = |arm: &str| assign::override_arm(routing, view, arm, &ready);
+    if let Some(value) = &requested.parameter {
+        if value.is_empty() {
+            let cookie = override_cookie(None, secure);
+            return match navigation {
+                true => Overridden::Redirect { cookie },
+                false => Overridden::Assign {
+                    cookie: Some(cookie),
+                },
+            };
+        }
+        return match pick(value) {
+            Ok(decision) => {
+                let cookie = override_cookie(Some(value), secure);
+                match navigation {
+                    true => Overridden::Redirect { cookie },
+                    false => Overridden::Arm {
+                        decision,
+                        cookie: Some(cookie),
+                    },
+                }
+            }
+            Err(refused) => {
+                let (status, message) = refusal(app, routing, value, refused);
+                Overridden::Refuse {
+                    status,
+                    message,
+                    page: true,
+                }
+            }
+        };
+    }
+    if let Some(value) = requested
+        .header
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return match pick(value) {
+            Ok(decision) => Overridden::Arm {
+                decision,
+                cookie: None,
+            },
+            Err(refused) => {
+                let (status, message) = refusal(app, routing, value, refused);
+                Overridden::Refuse {
+                    status,
+                    message,
+                    page: false,
+                }
+            }
+        };
+    }
+    if let Some(value) = requested
+        .cookie
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        // An arm that stopped since ends the override quietly.
+        return match pick(value) {
+            Ok(decision) => Overridden::Arm {
+                cookie: Some(override_cookie(Some(value), secure)),
+                decision,
+            },
+            Err(Refused::NotReady) => Overridden::Assign { cookie: None },
+            Err(Refused::NotRunning) => Overridden::Assign {
+                cookie: Some(override_cookie(None, secure)),
+            },
+        };
+    }
+    Overridden::Assign { cookie: None }
 }
 
 /// Why an override cannot be served, for the person who asked.
@@ -490,11 +559,11 @@ pub fn refusal(
 /// What a request asked of the override, before the proxy removed it.
 #[derive(Debug, Default, PartialEq)]
 pub struct Requested {
-    /// `?ssp_arm=`: `<experiment>:<commit>`, or empty to end the override.
+    /// `?ssp=`: `<experiment>:<commit>`, or empty to end the override.
     parameter: Option<String>,
-    /// The `ssp-arm` header.
+    /// The `ssp` header.
     header: Option<String>,
-    /// The `ssp_arm` cookie.
+    /// The `ssp` cookie.
     cookie: Option<String>,
 }
 
@@ -727,7 +796,7 @@ fn remove_hop_by_hop(headers: &mut HeaderMap) {
     headers.remove("keep-alive");
 }
 
-/// Send a browser back to the same URL without `?ssp_arm=`, with the cookie.
+/// Send a browser back to the same URL without `?ssp=`, with the cookie.
 fn redirect(location: &str, cookie: Option<String>) -> Response<ProxyBody> {
     let mut response = text(StatusCode::FOUND, "");
     let headers = response.headers_mut();
@@ -894,12 +963,12 @@ mod tests {
         assert_eq!(
             override_cookie(Some(arm), true),
             format!(
-                "ssp_arm={arm}; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=None; Partitioned"
+                "ssp={arm}; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=None; Partitioned"
             )
         );
         assert_eq!(
             override_cookie(None, false),
-            "ssp_arm=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
+            "ssp=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
         );
     }
 
@@ -981,10 +1050,10 @@ mod tests {
     #[test]
     fn removes_the_override_before_the_app_sees_it() {
         let mut asked = request(
-            "/cart?a=1&ssp_arm=checkout%3Aa1b2c3d&b=2",
+            "/cart?a=1&ssp=checkout%3Aa1b2c3d&b=2",
             &[
-                ("ssp-arm", "us-landing:b2c3d4e"),
-                ("cookie", "ssp_sid=s1; ssp_arm=checkout:a1b2c3d; theme=dark"),
+                ("ssp", "us-landing:b2c3d4e"),
+                ("cookie", "ssp_sid=s1; ssp=checkout:a1b2c3d; theme=dark"),
             ],
         );
         assert_eq!(
@@ -996,17 +1065,17 @@ mod tests {
             }
         );
         assert_eq!(asked.uri(), "/cart?a=1&b=2");
-        assert!(!asked.headers().contains_key("ssp-arm"));
+        assert!(!asked.headers().contains_key("ssp"));
         assert_eq!(asked.headers()["cookie"], "ssp_sid=s1; theme=dark");
 
-        let mut alone = request("/?ssp_arm=", &[("cookie", "ssp_arm=a1b2c3d")]);
+        let mut alone = request("/?ssp=", &[("cookie", "ssp=a1b2c3d")]);
         assert_eq!(take_override(&mut alone).parameter.as_deref(), Some(""));
         assert_eq!(alone.uri(), "/");
         assert!(!alone.headers().contains_key("cookie"));
 
-        let mut plain = request("/search?q=ssp_arm", &[("cookie", "a=1")]);
+        let mut plain = request("/search?q=ssp", &[("cookie", "a=1")]);
         assert_eq!(take_override(&mut plain), Requested::default());
-        assert_eq!(plain.uri(), "/search?q=ssp_arm");
+        assert_eq!(plain.uri(), "/search?q=ssp");
     }
 
     #[test]
@@ -1039,7 +1108,7 @@ mod tests {
     fn refusals_list_the_running_arms() {
         let config: super::super::config::RuntimeConfig = serde_json::from_value(json!({
             "app": "shop-prod", "salt": "s",
-            "settings": {"overrides": true, "redact": []},
+            "settings": {"redact": []},
             "live": {"commit": "c0ffee1", "image": "shop@sha256:1"},
             "experiments": [
                 {"name": "checkout", "version": 1, "state": "running", "arms": [

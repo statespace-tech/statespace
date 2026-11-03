@@ -825,8 +825,7 @@ mod tests {
             json!([{"name": "purchase", "values": {LIVE: {"lines": 57, "subjects": 57}}}]);
         detail["split"] = json!({"ok": false, "p": 0.0004});
         detail["drift"] = json!({"live_commit": "f2f2f2f000"});
-        detail["override_urls"] =
-            json!({OLD: "https://shop.example.com/?ssp_arm=checkout:a1b2c3d"});
+        detail["override_urls"] = json!({OLD: "https://shop.example.com/?ssp=checkout:a1b2c3d"});
         detail["versions"] = json!([{"version": 1, "arms": {LIVE: 0.05, OLD: 0.05},
             "started_at": "2026-10-29T10:00:00Z", "started_by": "octo",
             "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "stop_note": "enough data"}]);
@@ -840,7 +839,7 @@ mod tests {
             "purchase rate %  2.8      3.4",
             "purchase  57 (57 subjects)  –",
             "Split: off (p=0.0004)",
-            "a1b2c3d   https://shop.example.com/?ssp_arm=checkout:a1b2c3d",
+            "a1b2c3d   https://shop.example.com/?ssp=checkout:a1b2c3d",
             "a1b2c3d=0.05 c0ffee1=0.05",
             "2026-10-29 10:00 UTC  started v1 · octo with the CLI · one-page checkout",
             "enough data",
