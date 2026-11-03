@@ -2,6 +2,64 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+`ssp` runs alongside live, never inside it. It never changes a resource that it did
+not create, and each arm is a resource that it creates, labels, and deletes.
+
+### Changed
+
+- **Breaking:** `ssp proxy` takes no `--app` and reads no `STATESPACE_APP`. At start,
+  the proxy asks Statespace which app its runtime token is for
+  (`GET /v1/runtime/app`). Until Statespace answers, the proxy tries again. When
+  Statespace refuses the token, the proxy stops with an error. `--app` stays on the
+  other commands, such as `ssp experiment` and `ssp token`.
+- **Breaking:** `ssp proxy cloudrun` runs each arm as its own Cloud Run service,
+  `<service>-ssp-<experiment>-<commit 12>`, in the project and region of live. A name
+  longer than 49 characters ends with a short hash. The service is a copy of live's
+  template with only the image changed, with live's ingress, launch stage, Binary
+  Authorization policy, and labels, and the labels `statespace-app`,
+  `statespace-experiment`, and `statespace-commit`. It gets no traffic split, custom
+  domain, or IAM policy of live. Only the proxy's service account may call it. The
+  proxy never changes live's service: it adds no revision, tag, or label to it, and
+  does not pin its traffic. A deploy with any tool, also a full apply with Terraform,
+  works as before. Stop deletes the arm's service.
+- **Breaking:** the proxy on Cloud Run needs other permissions. On the project:
+  `run.services.create`, `run.services.delete`, `run.services.get`,
+  `run.services.list`, `run.services.getIamPolicy`, `run.services.setIamPolicy`,
+  `run.revisions.get`, `run.operations.get`, and `run.routes.invoke`, for example in
+  a custom role. It also needs Service Account User on live's runtime service
+  account, Artifact Registry Reader on the image repository, and Logs Viewer. It no
+  longer needs Cloud Run Developer on live's service. `examples/cloudrun` shows the
+  commands.
+- **Breaking:** `ssp proxy docker --live-container <name>` forwards live traffic to a
+  container that you run, such as the container of a Compose service. The proxy does
+  not run live. When you create the container again, such as with a new image, the
+  proxy sends live traffic to the new container within seconds, and reports its
+  image as live. `--live-port` sets live's port when the container does not expose
+  exactly one TCP port.
+- **Breaking:** on Docker, each arm is a copy of live's container with another
+  image: live's own environment (not what live's image sets), command and entry
+  point when live sets them, mounts, limits, and networks. An arm gets none of live's
+  labels, names, network aliases, published ports, or restart policy, and no
+  variable that starts with `STATESPACE_`. Thus `docker compose up --remove-orphans`
+  and `docker compose down` do not count the arms as Compose's own.
+- **Breaking:** `--image-file`, `--port`, `--volume`, `--memory`, and `--cpus` of
+  `ssp proxy docker` are removed. Arms no longer get the proxy's environment.
+- `ssp proxy docker` talks to the Docker Engine API over the socket of
+  `DOCKER_HOST` (`unix://` or `tcp://` without TLS), or `/var/run/docker.sock`. It
+  needs no `docker` command, so it runs in the `ssp` image with the socket mounted.
+  It pulls arm images with the credentials in `auths` of the Docker configuration;
+  it does not read credential helpers.
+- On Docker, when the proxy runs in a container, it reaches live and the arms at
+  their addresses on a network that it shares with live. On the host, it reaches
+  live at the port that live publishes, and the arms publish their port on
+  127.0.0.1.
+- When the Docker proxy stops, it gives each arm's container one second to stop,
+  not ten, so that it removes them before Compose or systemd ends it.
+- `examples/fastapi` runs the shop and the proxy with Docker Compose
+  (`compose.yaml`), not with systemd.
+
 ## 0.4.2 - 2026-11-03
 
 ### Added

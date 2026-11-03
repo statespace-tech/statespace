@@ -17,7 +17,10 @@ checks the build folders, because each instance serves the files itself.
 ## Rules
 
 - Use `ssp <noun> <verb> <object>`. The object is positional. `--app` names the app of an
-  experiment or a token. Leave it optional where the folder can tell the app.
+  experiment or a token. Leave it optional where the folder can tell the app. `ssp proxy`
+  takes no `--app`: Statespace tells the app of the runtime token.
+- Run alongside live, never inside it: never change a resource that `ssp` did not
+  create. Each unit is a resource that `ssp` creates, labels, and deletes.
 - Print text by default and exactly one JSON document with `--json`, except `ssp proxy`.
   Send notes and warnings to standard error. Errors exit 1, as `{"error": "..."}` with
   `--json`.

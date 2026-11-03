@@ -100,27 +100,29 @@ subcommand from where live runs:
 
 | Live runs on | Subcommand | Each arm runs as |
 | --- | --- | --- |
-| One machine with Docker | `ssp proxy docker` | A container on the machine |
-| Cloud Run | `ssp proxy cloudrun` | A tagged revision with 0% traffic |
+| One machine with Docker | `ssp proxy docker` | A copy of live's container |
+| Cloud Run | `ssp proxy cloudrun` | A copy of live's service |
 | Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
 | ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
 | Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
 | S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
 | Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
 
-Each subcommand needs `--app` (or `STATESPACE_APP`) and the runtime token
-in `STATESPACE_TOKEN`. Units never get a variable that starts with
-`STATESPACE_`. The other flags tell where live runs:
+Each subcommand needs the runtime token in `STATESPACE_TOKEN`. The proxy
+asks Statespace which app the token is for, so it takes no `--app`. Units
+never get a variable that starts with `STATESPACE_`. The proxy never
+changes live: you run live as before, and each arm is a resource that the
+proxy makes, labels, and deletes. The flags tell where live runs:
 
 ```shell
-ssp proxy docker     --app shop-dev  --image-file /etc/shop/image
-ssp proxy cloudrun   --app shop-prod --service shop --region us-east1
-ssp proxy kubernetes --app shop-prod --deployment shop --namespace prod
-ssp proxy fargate    --app shop-prod --cluster shop --service shop \
+ssp proxy docker     --live-container shop
+ssp proxy cloudrun   --service shop --region us-east1
+ssp proxy kubernetes --deployment shop --namespace prod
+ssp proxy fargate    --cluster shop --service shop \
                      --live-url http://internal-shop.example.com
-ssp proxy fly        --app shop-prod --fly-app shop
-ssp proxy s3         --app site-prod --bucket acme-site
-ssp proxy gcs        --app site-prod --bucket acme-site
+ssp proxy fly        --fly-app shop
+ssp proxy s3         --bucket acme-site
+ssp proxy gcs        --bucket acme-site
 ```
 
 The proxy uses the identity of the platform where it runs. Before the
@@ -128,22 +130,36 @@ proxy starts, make sure that this identity has these permissions.
 
 ### Docker
 
-- The user of the proxy can use the Docker socket.
-- `--image-file` holds the live image. A change of the file deploys a new
-  live.
+- The proxy can use the Docker socket. In a container, mount
+  `/var/run/docker.sock` and run as root.
+- `--live-container` names the container that runs live, such as the
+  container of a Compose service. The proxy forwards to it and follows it
+  when it is created again. `--live-port` sets its port when it exposes
+  more than one.
+- When the proxy runs in a container, it must share a Docker network with
+  live. Compose puts the services of a project on one network. On the
+  host, live must publish its port.
+- Each arm is a copy of live's container with another image: live's own
+  environment, networks, mounts, and limits. It has no Compose labels, so
+  Compose ignores it.
 
 ### Cloud Run
 
-The proxy runs as its own Cloud Run service. Give its service account:
+The proxy runs as its own Cloud Run service. Each arm is its own Cloud Run
+service, `<service>-ssp-<experiment>-<commit 12>`, a copy of live's service
+with another image. The proxy never changes live's service. Give the
+proxy's service account:
 
-1. Cloud Run Developer (`roles/run.developer`) on the app's service.
-2. Cloud Run Invoker (`roles/run.invoker`) on the app's service.
-3. Service Account User (`roles/iam.serviceAccountUser`) on the runtime
-   service account of the app's service, so that it can act as it.
-4. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
-   repository of the images. Cloud Run deploys a revision only when the
-   caller can read its image.
-5. Logs Viewer (`roles/logging.viewer`) on the project, to read the output
+1. A custom role on the project with `run.services.create`,
+   `run.services.delete`, `run.services.get`, `run.services.list`,
+   `run.services.getIamPolicy`, `run.services.setIamPolicy`,
+   `run.revisions.get`, `run.operations.get`, and `run.routes.invoke`.
+2. Service Account User (`roles/iam.serviceAccountUser`) on the runtime
+   service account of the app's service, so that the arms can run as it.
+3. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
+   repository of the images. Cloud Run deploys an image only when the
+   caller can read it.
+4. Logs Viewer (`roles/logging.viewer`) on the project, to read the output
    of the arms.
 
 Gotchas:
@@ -151,9 +167,8 @@ Gotchas:
 - Deploy the proxy service with CPU always allocated and one instance at
   minimum (`--no-cpu-throttling --min-instances 1`). The proxy works
   between requests: it renews its lease and starts and stops arms.
-- The template of the app's service keeps the name of live's revision. A
-  tool that sends the template back with a new image must clear
-  `template.revision`. `gcloud run deploy` does this.
+- An arm's service copies the ingress of live's service. The proxy must
+  reach both.
 
 ### Kubernetes
 

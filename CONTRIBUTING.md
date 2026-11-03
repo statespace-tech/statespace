@@ -23,7 +23,10 @@ real. They run before each release (`.github/workflows/runtime-tests.yml`). An a
 can also run them on `main` with "Run workflow". You can run them on your machine too.
 
 The Docker test runs `ssp proxy docker` with real containers, a local registry, and a
-stand-in for Statespace. It needs Docker.
+stand-in for Statespace. It runs live as a container with Compose labels, as a customer
+does. It checks that the proxy forwards to live, that the arms are copies of live
+without Compose labels, that the proxy follows live when live is created again with a
+new image, and that the proxy removes only its own containers. It needs Docker.
 
 ```shell
 STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
@@ -49,13 +52,19 @@ customer. The test does these steps:
 2. It pushes three images of `examples/app` to the Artifact Registry repository
    `statespace-test`. It deploys one image as the service `statespace-test-<run id>`.
 3. It runs the proxy on your machine with your credentials. It starts an experiment
-   with two arms, deploys a new live, and stops the experiment. Then it does the same
-   with the proxy as its own Cloud Run service.
+   with two arms. Each arm is its own service. The test checks that the spec of the
+   customer's service (template, traffic, and labels) and its generation do not
+   change. It applies the customer's service again with its full spec, as Terraform
+   does, and checks that the arms still serve. Then it deploys a new live, and stops
+   the experiment. Then it does the same with the proxy as its own Cloud Run service.
 4. It deletes its services and images, also when it fails. The sweeper deletes the
-   services and images of runs that are older than three hours.
+   services and images of runs that are older than three hours. These include the
+   arms' services (`statespace-test-<run id>-ssp-…`).
 
-The test needs Docker and a service account of the sandbox that runs the services.
-Your credentials must have the role Service Account Token Creator on that account. To
+The test needs Docker and a service account of the sandbox that runs the services and
+the proxy. That account needs the permissions of the proxy (see
+`examples/cloudrun/README.md`); `roles/run.admin` on the sandbox project has them. Your
+credentials must have the role Service Account Token Creator on that account. To
 run the proxy as a Cloud Run service, the test also needs a Linux amd64 build of `ssp`
 and `cloudflared`.
 
