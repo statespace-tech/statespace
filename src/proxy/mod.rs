@@ -414,7 +414,7 @@ impl<O: Orchestrator> Runtime<O> {
             report.push(json!({
                 "experiment": key.experiment,
                 "commit": key.commit,
-                "address": running.map(|running| running.address.clone()),
+                "address": running.and_then(|running| known(&running.address)),
                 "ready": ready,
                 "reason": reason.as_deref().and_then(clip),
             }));
@@ -436,7 +436,7 @@ impl<O: Orchestrator> Runtime<O> {
                 report.push(json!({
                     "experiment": key.experiment,
                     "commit": key.commit,
-                    "address": running.address,
+                    "address": known(&running.address),
                     "ready": running.ready,
                     "reason": "stopping: no experiment runs it",
                 }));
@@ -699,8 +699,25 @@ async fn signal() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A unit's address for a report. A unit that is still starting can have no
+/// address yet, such as a Fargate task without an IP. Statespace refuses an
+/// empty address, so the report leaves it out.
+fn known(address: &str) -> Option<&str> {
+    (!address.is_empty()).then_some(address)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn reports_leave_out_an_empty_address() {
+        assert_eq!(super::known(""), None);
+        assert_eq!(
+            super::known("http://10.0.0.7:8080"),
+            Some("http://10.0.0.7:8080")
+        );
+    }
+
     use super::{clip, prefix};
 
     #[test]

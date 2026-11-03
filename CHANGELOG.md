@@ -33,6 +33,9 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
   whole report when a long reason had characters that are not ASCII.
 - The proxy cuts the host name in its instance name to 120 bytes. Before, Statespace
   refused the reports of a proxy on a host with a very long name.
+- The proxy sends no address for a unit that has none yet, such as a Fargate task
+  that is still starting. Before, Statespace refused the whole report while the
+  task started.
 
 ## 0.4.1 - 2026-11-03
 
