@@ -117,10 +117,12 @@ async fn connect(endpoint: &str, common: &ProxyArgs) -> anyhow::Result<Remote> {
 }
 
 /// A name for this instance in reports: the machine and a random suffix.
+/// Statespace takes at most 128 bytes, so a long host name is cut.
 fn instance_id() -> String {
+    let host = sysinfo::System::host_name().unwrap_or_else(|| "host".into());
     format!(
         "{}-{:06x}",
-        sysinfo::System::host_name().unwrap_or_else(|| "host".into()),
+        prefix(&host, 120),
         rand::random::<u32>() & 0xff_ffff
     )
 }
@@ -414,7 +416,7 @@ impl<O: Orchestrator> Runtime<O> {
                 "commit": key.commit,
                 "address": running.map(|running| running.address.clone()),
                 "ready": ready,
-                "reason": reason.as_deref().map(clip),
+                "reason": reason.as_deref().and_then(clip),
             }));
             listed.insert(key);
         }
@@ -511,12 +513,25 @@ fn with_build(build: &Build, mut extra: Value) -> Value {
     extra
 }
 
-/// How long a unit's reason may be in a report.
-const REASON_CHARS: usize = 1500;
+/// How many bytes a unit's reason may have in a report.
+const REASON_BYTES: usize = 1500;
 
-/// A reason cut to the length a report allows.
-fn clip(reason: &str) -> String {
-    reason.chars().take(REASON_CHARS).collect()
+/// A reason cut to the bytes that a report allows. Statespace refuses the
+/// whole report for a reason that is too long or empty, so an empty reason
+/// is no reason.
+fn clip(reason: &str) -> Option<String> {
+    let reason = prefix(reason, REASON_BYTES);
+    (!reason.is_empty()).then(|| reason.to_owned())
+}
+
+/// The longest start of `text` of at most `max` bytes that ends on a
+/// character boundary.
+fn prefix(text: &str, max: usize) -> &str {
+    let mut end = text.len().min(max);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 /// The first 7 characters of a commit.
@@ -682,4 +697,24 @@ async fn signal() -> anyhow::Result<()> {
 async fn signal() -> anyhow::Result<()> {
     tokio::signal::ctrl_c().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{clip, prefix};
+
+    #[test]
+    fn reasons_fit_the_bytes_that_a_report_allows() {
+        assert_eq!(clip("starting").as_deref(), Some("starting"));
+        assert_eq!(clip(""), None);
+        // 1000 characters of two bytes each: 2000 bytes, cut to 1500.
+        let clipped = clip(&"é".repeat(1000)).unwrap();
+        assert_eq!(clipped.len(), 1500);
+        assert_eq!(clipped, "é".repeat(750));
+        // A character of three bytes never splits.
+        let clipped = clip(&format!("a{}", "€".repeat(600))).unwrap();
+        assert!(clipped.len() <= 1500 && clipped.ends_with('€'));
+        assert_eq!(prefix("abc", 2), "ab");
+        assert_eq!(prefix("ab", 10), "ab");
+    }
 }
