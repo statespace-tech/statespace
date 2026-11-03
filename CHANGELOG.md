@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.4.2 - 2026-11-03
 
 ### Added
 

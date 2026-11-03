@@ -208,7 +208,7 @@ workflow builds an archive for each platform. It publishes the GitHub release an
 serves the installer and the agent skill of the release.
 
 ```shell
-git tag v0.4.1 && git push origin v0.4.1
+git tag v0.4.2 && git push origin v0.4.2
 ```
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0.
