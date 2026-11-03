@@ -2,6 +2,38 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Added
+
+- The release workflow signs the image `ghcr.io/statespace-tech/statespace` with
+  cosign, without a key, by its digest. The image has an SBOM, a build provenance,
+  and OCI labels: source, version, revision, licenses, title, and description. Each
+  archive of the GitHub release has a build provenance. `SECURITY.md` tells how to
+  verify them.
+
+### Changed
+
+- The image is on `gcr.io/distroless/static-debian12:nonroot`, pinned by digest. It
+  has no shell and no package manager. It holds `ssp`, `statespace` as a hard link to
+  `ssp`, and the CA certificates, and it runs as the user `nonroot` (65532). A command
+  that starts a shell in the image, such as `docker run --entrypoint sh`, does not
+  work.
+- The release build uses full link-time optimization and one codegen unit. The `ssp`
+  binary for Linux x86_64 is 13.9 MB, not 21.0 MB. The compressed image for
+  linux/amd64 is 6.9 MB, not 12.3 MB.
+- CI checks the advisories, licenses, and sources of the dependencies with
+  cargo-deny. Dependabot updates the actions, the base images, and the crates each
+  week.
+
+### Fixed
+
+- The proxy cuts the reason of a unit in a report to 1500 bytes, not 1500
+  characters, and sends no reason for an empty one. Before, Statespace refused the
+  whole report when a long reason had characters that are not ASCII.
+- The proxy cuts the host name in its instance name to 120 bytes. Before, Statespace
+  refused the reports of a proxy on a host with a very long name.
+
 ## 0.4.1 - 2026-11-03
 
 ### Added
