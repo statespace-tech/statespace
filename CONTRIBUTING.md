@@ -107,6 +107,51 @@ cargo test --locked --test cli aws_fargate -- --nocapture
 cargo test --locked --test cli aws_sweeper -- --nocapture
 ```
 
+The tests of `ssp proxy s3` and `ssp proxy gcs` use stand-ins for S3, Cloud
+Storage, and the metadata server. They run with `cargo test`.
+
+The real S3 test runs `ssp proxy s3` in the sandbox account of AWS, and the real
+Cloud Storage test runs `ssp proxy gcs` in the sandbox project of Google Cloud. Use
+only a sandbox. Never use a production account or project, or one of a customer. Each
+test does these steps:
+
+1. It makes sure that the credentials are of the sandbox. If not, it stops before it
+   makes anything.
+2. It makes a bucket `statespace-test-<run id>`. It uploads a live site to the root,
+   and two builds to `builds/<commit>/`.
+3. It runs the proxy on your machine with your credentials. It checks over HTTP:
+   live's files hash, the split, an override link, the headers of arm responses, the
+   path rules, 404, the fallback, a build that changed, and a build that is deleted.
+4. It deletes the bucket, also when it fails. The sweeper deletes the buckets of runs
+   that are older than three hours.
+
+The S3 test needs the AWS CLI. The credentials need `s3:CreateBucket`,
+`s3:DeleteBucket`, `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and
+`s3:DeleteObject` on `statespace-test-*`, and `s3:ListAllMyBuckets`.
+
+```shell
+export STATESPACE_S3_TESTS=1
+export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
+export STATESPACE_TEST_AWS_REGION=us-east-1
+cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+cargo test --locked --test cli aws_s3_proxies -- --nocapture
+cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+```
+
+The Cloud Storage test uses the Application Default Credentials, as the Cloud Run
+test does. They need Storage Admin (`roles/storage.admin`) on the sandbox project.
+
+```shell
+gcloud auth application-default login
+export STATESPACE_GCS_TESTS=1
+export STATESPACE_TEST_GCP_PROJECT=<sandbox project>
+export STATESPACE_TEST_GCP_REGION=us-east1
+export STATESPACE_TEST_GCP_SERVICE_ACCOUNT=<account>@<sandbox project>.iam.gserviceaccount.com
+cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
+cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+```
+
 The Fly.io tests use a stand-in for the Machines API and the logs API. They run
 with `cargo test`.
 

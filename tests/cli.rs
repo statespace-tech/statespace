@@ -6,7 +6,9 @@
 //! Fargate test runs in a sandbox account of AWS when
 //! `STATESPACE_FARGATE_TESTS=1`; the real Fly.io test runs in a dedicated
 //! Fly.io app when `STATESPACE_FLY_TESTS=1`. The file runtimes run against
-//! stand-ins for S3 and Cloud Storage.
+//! stand-ins for S3 and Cloud Storage; the real S3 test runs in the sandbox
+//! account of AWS when `STATESPACE_S3_TESTS=1`, and the real Cloud Storage
+//! test in the sandbox project when `STATESPACE_GCS_TESTS=1`.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -2766,10 +2768,15 @@ struct Sandbox {
 /// The sandbox, or `None` when the Cloud Run tests do not run. Panics when
 /// the credentials are of another project, before anything is made.
 fn sandbox() -> Option<Sandbox> {
-    if std::env::var("STATESPACE_CLOUDRUN_TESTS").as_deref() != Ok("1") {
+    sandbox_for("STATESPACE_CLOUDRUN_TESTS", "Cloud Run")
+}
+
+/// The sandbox, or `None` when `variable` is not `1`. Panics when the
+/// credentials are of another project, before anything is made.
+fn sandbox_for(variable: &str, runtime: &str) -> Option<Sandbox> {
+    if std::env::var(variable).as_deref() != Ok("1") {
         eprintln!(
-            "skipped: set STATESPACE_CLOUDRUN_TESTS=1 and STATESPACE_TEST_GCP_PROJECT to run \
-             the Cloud Run tests"
+            "skipped: set {variable}=1 and STATESPACE_TEST_GCP_PROJECT to run the {runtime} tests"
         );
         return None;
     }
@@ -4341,13 +4348,13 @@ struct AwsSandbox {
 }
 
 impl AwsSandbox {
-    /// The sandbox, when the test runs. It stops the test when the
+    /// The sandbox, when `variable` is `1`. It stops the test when the
     /// credentials are not of the sandbox account.
-    fn connect() -> Option<Self> {
-        if std::env::var("STATESPACE_FARGATE_TESTS").as_deref() != Ok("1") {
+    fn connect(variable: &str, runtime: &str) -> Option<Self> {
+        if std::env::var(variable).as_deref() != Ok("1") {
             eprintln!(
-                "skipped: set STATESPACE_FARGATE_TESTS=1 and STATESPACE_TEST_AWS_ACCOUNT, \
-                 with AWS credentials of that account, to run the Fargate test"
+                "skipped: set {variable}=1 and STATESPACE_TEST_AWS_ACCOUNT, \
+                 with AWS credentials of that account, to run the {runtime} test"
             );
             return None;
         }
@@ -4943,7 +4950,7 @@ impl Drop for AwsCleanup<'_> {
 
 #[test]
 fn aws_sweeper_deletes_old_test_resources() {
-    let Some(sandbox) = AwsSandbox::connect() else {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_FARGATE_TESTS", "Fargate") else {
         return;
     };
     sandbox.sweep(old_aws_run);
@@ -4957,7 +4964,7 @@ fn aws_sweeper_deletes_old_test_resources() {
 /// group opens the app's port to the runner only.
 #[test]
 fn aws_fargate_proxies_run_arms_as_services() {
-    let Some(sandbox) = AwsSandbox::connect() else {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_FARGATE_TESTS", "Fargate") else {
         return;
     };
     let run = aws_run_name();
@@ -6019,7 +6026,8 @@ fn a_pending_workspace_gets_one_clear_line() {
 
 // ---------------------------------------------------------------------------
 // File runtimes: `ssp proxy s3` and `ssp proxy gcs` serve a static site from
-// build folders.
+// build folders. The same checks run against stand-ins for S3 and Cloud
+// Storage, and against real buckets.
 
 /// The app of the file runtime tests.
 const SITE_APP: &str = "site-prod";
@@ -6647,4 +6655,342 @@ fn gcs_proxies_serve_builds_from_folders() {
     let before = count();
     page_of(port, &live, "/about").unwrap();
     assert_eq!(count(), before + 1);
+}
+
+// ---------------------------------------------------------------------------
+// The file runtimes on real buckets: `ssp proxy s3` in the AWS sandbox
+// account when `STATESPACE_S3_TESTS=1`, and `ssp proxy gcs` in the GCP
+// sandbox project when `STATESPACE_GCS_TESTS=1`. Each test makes a bucket
+// `statespace-test-…`, uploads the test site, runs the proxy on this
+// machine against a stand-in for Statespace, runs `check_site`, and deletes
+// the bucket.
+
+/// Write the test site to a folder, to upload it.
+fn site_folder() -> tempfile::TempDir {
+    let folder = tempfile::tempdir().unwrap();
+    for (key, content) in site_objects() {
+        let path = folder.path().join(&key);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    folder
+}
+
+/// The content of the arm's `index.html` after `change`, or `None` when
+/// the change deletes the build.
+fn changed_index(change: Change) -> Option<&'static [u8]> {
+    match change {
+        Change::Edit => Some(b"arm home, edited\n"),
+        Change::Restore => Some(b"arm home\n"),
+        Change::Delete => None,
+    }
+}
+
+impl AwsSandbox {
+    /// The test buckets in the account, by name.
+    fn test_buckets(&self) -> Vec<String> {
+        self.try_aws(&["s3api", "list-buckets", "--prefix", "statespace-test-"])
+            .ok()
+            .and_then(|output| output["Buckets"].as_array().cloned())
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|bucket| bucket["Name"].as_str().map(str::to_owned))
+            .filter(|name| name.starts_with("statespace-test-"))
+            .collect()
+    }
+
+    /// Delete each test bucket that `select` picks, with its objects.
+    fn sweep_buckets(&self, select: impl Fn(&str) -> bool) {
+        for name in self.test_buckets() {
+            if select(&name) {
+                eprintln!("sweeping bucket {name}");
+                let _ = self.try_aws(&["s3", "rb", &format!("s3://{name}"), "--force"]);
+            }
+        }
+    }
+}
+
+/// Deletes the bucket of a test run when the test ends, also on failure.
+struct BucketCleanup<'a> {
+    sandbox: &'a AwsSandbox,
+    bucket: String,
+}
+
+impl Drop for BucketCleanup<'_> {
+    fn drop(&mut self) {
+        let bucket = self.bucket.clone();
+        self.sandbox.sweep_buckets(|name| name == bucket);
+    }
+}
+
+#[test]
+fn aws_s3_sweeper_deletes_old_test_buckets() {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_S3_TESTS", "S3") else {
+        return;
+    };
+    sandbox.sweep_buckets(old_aws_run);
+}
+
+/// `ssp proxy s3` serves a real S3 bucket: live at the root, and the arms
+/// from their build folders.
+#[test]
+fn aws_s3_proxies_serve_builds_from_a_real_bucket() {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_S3_TESTS", "S3") else {
+        return;
+    };
+    let bucket = format!("{}-s3", aws_run_name());
+    eprintln!("test bucket {bucket} in {}", sandbox.region);
+    let mut create = vec!["s3api", "create-bucket", "--bucket", &bucket];
+    let location = format!("LocationConstraint={}", sandbox.region);
+    if sandbox.region != "us-east-1" {
+        create.extend(["--create-bucket-configuration", &location]);
+    }
+    sandbox.aws(&create);
+    let _cleanup = BucketCleanup {
+        sandbox: &sandbox,
+        bucket: bucket.clone(),
+    };
+    let site = site_folder();
+    sandbox.aws(&[
+        "s3",
+        "sync",
+        site.path().to_str().unwrap(),
+        &format!("s3://{bucket}/"),
+        "--only-show-errors",
+    ]);
+
+    let state = site_statespace("s3", &bucket);
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("STATESPACE_CHECK_EVERY", "5")
+        .args(["proxy", "s3", "--app", SITE_APP, "--bucket", &bucket])
+        .args([
+            "--region",
+            &sandbox.region,
+            "--cache",
+            "--fallback",
+            "200.html",
+        ]);
+    let (_proxy, port) = spawn_proxy(command);
+
+    let index = format!("s3://{bucket}/builds/{ARM}/index.html");
+    check_site(
+        "s3",
+        port,
+        &state,
+        120,
+        &mut |change| match changed_index(change) {
+            Some(content) => {
+                let file = directory.path().join("index.html");
+                std::fs::write(&file, content).unwrap();
+                sandbox.aws(&[
+                    "s3",
+                    "cp",
+                    file.to_str().unwrap(),
+                    &index,
+                    "--content-type",
+                    "text/html",
+                    "--only-show-errors",
+                ]);
+            }
+            None => {
+                sandbox.aws(&[
+                    "s3",
+                    "rm",
+                    &format!("s3://{bucket}/builds/{ARM}/"),
+                    "--recursive",
+                    "--only-show-errors",
+                ]);
+            }
+        },
+    );
+}
+
+const STORAGE_API: &str = "https://storage.googleapis.com/storage/v1";
+
+impl Sandbox {
+    /// Upload an object to a bucket of the sandbox.
+    fn upload(&self, bucket: &str, key: &str, content: &[u8]) {
+        let content_type = if key.ends_with(".html") {
+            "text/html"
+        } else {
+            "application/octet-stream"
+        };
+        let response = self
+            .client
+            .post(format!(
+                "https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?uploadType=media&name={}",
+                encode_component(key)
+            ))
+            .bearer_auth(self.token())
+            .header("x-goog-user-project", &self.project)
+            .header("content-type", content_type)
+            .body(content.to_vec())
+            .send()
+            .unwrap();
+        assert!(
+            response.status().is_success(),
+            "upload of {key}: {} {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        );
+    }
+
+    /// The names of the objects of a bucket under `prefix`.
+    fn objects(&self, bucket: &str, prefix: &str) -> Vec<String> {
+        let listed = self
+            .call(
+                "GET",
+                &format!(
+                    "{STORAGE_API}/b/{bucket}/o?prefix={}",
+                    encode_component(prefix)
+                ),
+                None,
+            )
+            .unwrap_or(Value::Null);
+        listed["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["name"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    fn delete_object(&self, bucket: &str, key: &str) {
+        let _ = self.call(
+            "DELETE",
+            &format!("{STORAGE_API}/b/{bucket}/o/{}", encode_component(key)),
+            None,
+        );
+    }
+
+    /// Delete each test bucket of the project whose run `select` picks,
+    /// with its objects.
+    fn sweep_buckets(&self, select: impl Fn(&str) -> bool) {
+        let listed = self.must(
+            "GET",
+            &format!(
+                "{STORAGE_API}/b?project={}&prefix={TEST_LABEL}-",
+                self.project
+            ),
+            None,
+        );
+        for bucket in listed["items"].as_array().into_iter().flatten() {
+            let (Some(name), Some(run)) = (
+                bucket["name"].as_str(),
+                bucket["labels"][TEST_LABEL].as_str(),
+            ) else {
+                continue;
+            };
+            if !select(run) {
+                continue;
+            }
+            eprintln!("sweeper: deleting bucket {name}");
+            for key in self.objects(name, "") {
+                self.delete_object(name, &key);
+            }
+            let _ = self.call("DELETE", &format!("{STORAGE_API}/b/{name}"), None);
+        }
+    }
+}
+
+/// A path segment or query value, percent-encoded.
+fn encode_component(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+/// Deletes the bucket of a test run when the test ends, also on failure.
+struct GcsCleanup<'a> {
+    sandbox: &'a Sandbox,
+    id: String,
+}
+
+impl Drop for GcsCleanup<'_> {
+    fn drop(&mut self) {
+        self.sandbox.sweep_buckets(|run| run == self.id);
+    }
+}
+
+#[test]
+fn gcp_gcs_sweeper_deletes_old_test_buckets() {
+    let Some(sandbox) = sandbox_for("STATESPACE_GCS_TESTS", "Cloud Storage") else {
+        return;
+    };
+    sandbox.sweep_buckets(old_run);
+}
+
+/// `ssp proxy gcs` serves a real Cloud Storage bucket: live at the root, and
+/// the arms from their build folders.
+#[test]
+fn gcp_gcs_proxies_serve_builds_from_a_real_bucket() {
+    let Some(sandbox) = sandbox_for("STATESPACE_GCS_TESTS", "Cloud Storage") else {
+        return;
+    };
+    let id = format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
+    let bucket = format!("{TEST_LABEL}-{id}-gcs");
+    eprintln!("run {id}: bucket {bucket} in {}", sandbox.region);
+    sandbox.must(
+        "POST",
+        &format!("{STORAGE_API}/b?project={}", sandbox.project),
+        Some(&json!({
+            "name": bucket,
+            "location": sandbox.region,
+            "labels": {TEST_LABEL: id},
+            "iamConfiguration": {"uniformBucketLevelAccess": {"enabled": true}},
+        })),
+    );
+    let _cleanup = GcsCleanup {
+        sandbox: &sandbox,
+        id: id.clone(),
+    };
+    for (key, content) in site_objects() {
+        sandbox.upload(&bucket, &key, &content);
+    }
+
+    let state = site_statespace("gs", &bucket);
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("STATESPACE_CHECK_EVERY", "5")
+        .args(["proxy", "gcs", "--app", SITE_APP, "--bucket", &bucket])
+        .args(["--fallback", "200.html"]);
+    let (_proxy, port) = spawn_proxy(command);
+
+    let index = format!("builds/{ARM}/index.html");
+    check_site(
+        "gcs",
+        port,
+        &state,
+        120,
+        &mut |change| match changed_index(change) {
+            Some(content) => sandbox.upload(&bucket, &index, content),
+            None => {
+                for key in sandbox.objects(&bucket, &format!("builds/{ARM}/")) {
+                    sandbox.delete_object(&bucket, &key);
+                }
+            }
+        },
+    );
 }

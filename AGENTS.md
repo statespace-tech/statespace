@@ -45,7 +45,7 @@ STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
 STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 # Needs a Fly.io test app and its deploy token; see CONTRIBUTING.md
 STATESPACE_FLY_TESTS=1 cargo test --locked --test cli fly_proxies_run_arms
-# Real Cloud Run and Fargate: see CONTRIBUTING.md
+# Real Cloud Run, Fargate, S3, and Cloud Storage: see CONTRIBUTING.md
 ```
 
 ## Commits
