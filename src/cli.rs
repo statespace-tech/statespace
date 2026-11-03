@@ -349,7 +349,7 @@ pub enum ProxyCommand {
         #[command(flatten)]
         docker: DockerArgs,
     },
-    /// Run the arms of experiments as tagged revisions of a Cloud Run service.
+    /// Run the arms of experiments as copies of a Cloud Run service.
     Cloudrun {
         #[command(flatten)]
         common: ProxyArgs,

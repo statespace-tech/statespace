@@ -1502,21 +1502,31 @@ fn proxies_fail_for_an_app_that_does_not_exist() {
 // The proxy on Cloud Run, against stand-ins for the Admin API, the metadata
 // server, and Cloud Logging.
 
-/// The state of the Cloud Run service `shop`.
+/// The state of the Cloud Run services of the project `acme` in us-east1:
+/// the customer's service `shop`, and the services the proxy makes.
 struct Google {
+    /// `shop`, which the proxy must never change.
     service: Value,
     revisions: HashMap<String, Value>,
-    /// Where tag URLs point: the reference's (the live commit), and every
+    /// The services the proxy made, by name.
+    units: BTreeMap<String, Value>,
+    /// Where units' URLs point: the reference's (the live commit), and every
     /// other unit's.
     reference: String,
     arm: String,
-    patches: Vec<Value>,
+    /// Every request that would change a service, with its path.
+    changes: Vec<(String, String, Value)>,
+    /// The IAM policy that the proxy set on each unit's service.
+    policies: HashMap<String, Value>,
     id_tokens: Vec<String>,
     /// The filter of each query of Cloud Logging.
     log_queries: Vec<String>,
 }
 
 const SERVICE: &str = "projects/acme/locations/us-east1/services/shop";
+const SERVICES: &str = "projects/acme/locations/us-east1/services";
+/// The service account of the proxy, as the metadata server names it.
+const PROXY_ACCOUNT: &str = "statespace-proxy@acme.iam.gserviceaccount.com";
 
 fn google(state: Arc<Mutex<Google>>) -> String {
     let port = serve(move |received| {
@@ -1527,8 +1537,21 @@ fn google(state: Arc<Mutex<Google>>) -> String {
         } else if path.starts_with("/v2/") {
             assert_eq!(received.headers["authorization"], "Bearer access-1");
         }
+        let unit = path
+            .strip_prefix(&format!("/v2/{SERVICES}/"))
+            .filter(|name| *name != "shop" && !name.contains('/'));
+        if received.method != "GET" && path.starts_with(&format!("/v2/{SERVICES}")) {
+            google.changes.push((
+                received.method.clone(),
+                format!("{path}?{}", received.query),
+                received.body.clone(),
+            ));
+        }
         match (received.method.as_str(), path) {
             ("GET", "/computeMetadata/v1/project/project-id") => (200, "text/plain", "acme".into()),
+            ("GET", "/computeMetadata/v1/instance/service-accounts/default/email") => {
+                (200, "text/plain", PROXY_ACCOUNT.into())
+            }
             ("GET", "/computeMetadata/v1/instance/service-accounts/default/token") => json_answer(
                 200,
                 &json!({"access_token": "access-1", "expires_in": 3600}),
@@ -1545,51 +1568,59 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                 (200, "text/plain", format!("id-for-{audience}"))
             }
             ("GET", path) if path == format!("/v2/{SERVICE}") => json_answer(200, &google.service),
-            ("PATCH", path) if path == format!("/v2/{SERVICE}") => {
-                let body = received.body.clone();
-                google.patches.push(body.clone());
-                let template = &body["template"];
-                if let Some(name) = template["revision"].as_str()
-                    && !google.revisions.contains_key(name)
-                {
-                    google.revisions.insert(
-                        name.to_owned(),
-                        json!({
-                            "name": format!("{SERVICE}/revisions/{name}"),
-                            "labels": template["labels"],
-                            "containers": template["containers"],
-                            "conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}],
-                        }),
-                    );
-                }
-                let statuses: Vec<Value> = body["traffic"]
-                    .as_array()
+            ("GET", path) if path == format!("/v2/{SERVICES}") => {
+                let mut services = vec![google.service.clone()];
+                services.extend(google.units.values().cloned());
+                json_answer(200, &json!({"services": services}))
+            }
+            ("POST", path) if path == format!("/v2/{SERVICES}") => {
+                let name = received
+                    .query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("serviceId="))
                     .unwrap()
-                    .iter()
-                    .map(|target| {
-                        let mut status = target.clone();
-                        // The latest revision is the one the template names.
-                        if target["type"] == "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST" {
-                            status["revision"] = template["revision"].clone();
-                        }
-                        if let Some(tag) = target["tag"].as_str() {
-                            status["uri"] = json!(if tag.contains(&LIVE[..12]) {
-                                google.reference.clone()
-                            } else {
-                                google.arm.clone()
-                            });
-                        }
-                        status
-                    })
-                    .collect();
-                if let Some(name) = template["revision"].as_str() {
-                    google.service["latestCreatedRevision"] =
-                        json!(format!("{SERVICE}/revisions/{name}"));
+                    .to_owned();
+                if google.units.contains_key(&name) {
+                    return json_answer(409, &json!({"error": {"message": "exists"}}));
                 }
-                google.service["traffic"] = body["traffic"].clone();
-                google.service["template"] = body["template"].clone();
-                google.service["trafficStatuses"] = json!(statuses);
+                let mut service = received.body.clone();
+                let uri = if service["labels"]["statespace-commit"] == LIVE {
+                    google.reference.clone()
+                } else {
+                    google.arm.clone()
+                };
+                let revision = format!("{SERVICES}/{name}/revisions/{name}-00001-abc");
+                service["name"] = json!(format!("{SERVICES}/{name}"));
+                service["uri"] = json!(uri);
+                service["latestCreatedRevision"] = json!(revision);
+                service["latestReadyRevision"] = json!(revision);
+                service["terminalCondition"] =
+                    json!({"type": "Ready", "state": "CONDITION_SUCCEEDED"});
+                google.units.insert(name, service);
                 json_answer(200, &json!({"name": "operations/1"}))
+            }
+            ("POST", path) if path.ends_with(":setIamPolicy") => {
+                let name = path
+                    .trim_end_matches(":setIamPolicy")
+                    .rsplit('/')
+                    .next()
+                    .unwrap()
+                    .to_owned();
+                if !google.units.contains_key(&name) {
+                    return json_answer(404, &json!({"error": {"message": "no service"}}));
+                }
+                google
+                    .policies
+                    .insert(name, received.body["policy"].clone());
+                json_answer(200, &received.body["policy"])
+            }
+            ("GET", _) if unit.is_some() => match google.units.get(unit.unwrap()) {
+                Some(service) => json_answer(200, service),
+                None => json_answer(404, &json!({"error": {"message": "no service"}})),
+            },
+            ("DELETE", _) if unit.is_some() => {
+                google.units.remove(unit.unwrap());
+                json_answer(200, &json!({"name": "operations/2"}))
             }
             ("GET", path) if path.starts_with(&format!("/v2/{SERVICE}/revisions/")) => {
                 let name = path.rsplit('/').next().unwrap();
@@ -1598,7 +1629,6 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                     None => json_answer(404, &json!({"error": {"message": "no revision"}})),
                 }
             }
-            ("DELETE", _) => json_answer(200, &json!({})),
             ("POST", "/v2/entries:list") => {
                 assert_eq!(received.headers["authorization"], "Bearer access-1");
                 let filter = received.body["filter"]
@@ -1614,16 +1644,16 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                 let log =
                     |stream: &str| format!("projects/acme/logs/run.googleapis.com%2F{stream}");
                 let entries: Vec<Value> = filter
-                    .split("revision_name=\"")
+                    .split("service_name=\"")
                     .skip(1)
                     .filter_map(|rest| rest.split('"').next())
-                    .flat_map(|revision| {
-                        let resource = json!({"labels": {"revision_name": revision}});
+                    .flat_map(|service| {
+                        let resource = json!({"labels": {"service_name": service}});
                         [
-                            json!({"insertId": format!("{revision}-1"), "timestamp": "2099-01-01T00:00:00Z",
+                            json!({"insertId": format!("{service}-1"), "timestamp": "2099-01-01T00:00:00Z",
                                    "resource": resource, "logName": log("stdout"),
                                    "jsonPayload": {"event": "signup", "card": "4242424242424242"}}),
-                            json!({"insertId": format!("{revision}-2"), "timestamp": "2099-01-01T00:00:01Z",
+                            json!({"insertId": format!("{service}-2"), "timestamp": "2099-01-01T00:00:01Z",
                                    "resource": resource, "logName": log("stderr"),
                                    "textPayload": "FATAL out of memory"}),
                         ]
@@ -1633,7 +1663,7 @@ fn google(state: Arc<Mutex<Google>>) -> String {
             }
             _ => json_answer(
                 404,
-                &json!({"error": {"message": format!("no route {path}")}}),
+                &json!({"error": {"message": format!("no route {} {path}", received.method)}}),
             ),
         }
     });
@@ -1660,8 +1690,12 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
             "latestReadyRevision": format!("{SERVICE}/revisions/shop-00001-abc"),
             "latestCreatedRevision": format!("{SERVICE}/revisions/shop-00001-abc"),
             "labels": {"team": "web"},
-            "template": {"containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
-                                         "ports": [{"containerPort": 8080}]}]},
+            "ingress": "INGRESS_TRAFFIC_ALL",
+            "template": {"revision": "shop-00001-abc",
+                         "serviceAccount": "shop@acme.iam.gserviceaccount.com",
+                         "containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
+                                         "ports": [{"containerPort": 8080}],
+                                         "env": [{"name": "MODE", "value": "prod"}]}]},
             "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
             "trafficStatuses": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100,
                                  "revision": "shop-00001-abc"}],
@@ -1671,9 +1705,11 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
             json!({"name": format!("{SERVICE}/revisions/shop-00001-abc"),
                    "containers": [{"image": digest('1'), "ports": [{"containerPort": 8080}]}]}),
         )]),
+        units: BTreeMap::new(),
         reference: format!("http://127.0.0.1:{reference}"),
         arm: format!("http://127.0.0.1:{arm}"),
-        patches: Vec::new(),
+        changes: Vec::new(),
+        policies: HashMap::new(),
         id_tokens: Vec::new(),
         log_queries: Vec::new(),
     }));
@@ -1735,7 +1771,7 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
 }
 
 #[test]
-fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
+fn cloudrun_proxies_run_units_as_services_and_record_them() {
     let test = cloudrun_proxy(true);
     let reference_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
@@ -1764,64 +1800,58 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
             && get(&reference_subject, "/").is_some_and(|(body, _)| body["name"] == "reference")
     });
 
-    // The lease holder made one tagged revision for each unit, with 0%
-    // traffic, also for the starting experiment. While it made each
-    // revision, live's traffic was pinned to the revision it has; then the
-    // service got its own template and traffic back, so a deploy still
-    // moves live.
-    let reference_tag = format!("ssp-checkout-{}", &LIVE[..12]);
-    let arm_tag = format!("ssp-checkout-{}", &ARM[..12]);
-    let landing_tag = format!("ssp-us-landing-{}", &LANDING[..12]);
-    wait_until(30, "every unit has a tag", || {
+    // The lease holder made one service for each unit, also for the starting
+    // experiment: a copy of live's template with the unit's image, live's
+    // ingress, and the unit's labels. Only the proxy may call it. The
+    // customer's service never changed.
+    let names = [
+        format!("shop-ssp-checkout-{}", &LIVE[..12]),
+        format!("shop-ssp-checkout-{}", &ARM[..12]),
+        format!("shop-ssp-us-landing-{}", &LANDING[..12]),
+    ];
+    wait_until(30, "every unit has a service", || {
         let google = test.google.lock().unwrap();
-        let traffic = google.service["traffic"].as_array().unwrap();
-        [&reference_tag, &arm_tag, &landing_tag]
-            .iter()
-            .all(|tag| traffic.iter().any(|target| target["tag"] == tag.as_str()))
+        names.iter().all(|name| google.policies.contains_key(name))
     });
-    let patches = test.google.lock().unwrap().patches.clone();
-    assert!(patches.iter().all(|patch| {
-        patch["template"]["labels"]
-            .get("statespace-experiment")
-            .is_none()
-            || patch["traffic"]
-                .as_array()
-                .unwrap()
-                .contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-                        "revision": "shop-00001-abc", "percent": 100}))
-    }));
-    let last = patches.last().unwrap();
-    let traffic = last["traffic"].as_array().unwrap();
-    assert!(
-        traffic.contains(&json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100})),
-        "{traffic:?}"
-    );
-    assert_eq!(
-        last["template"],
-        json!({"containers": [{"name": "shop", "image": "ghcr.io/acme/shop:main",
-                               "ports": [{"containerPort": 8080}]}],
-               "revision": "shop-00001-abc"}),
-        "the template is live's again"
-    );
-    assert!(
-        traffic
-            .iter()
-            .filter(|target| target["tag"].is_string())
-            .all(|target| target["percent"] == 0)
-    );
-    assert_eq!(
-        last["labels"]["team"], "web",
-        "the service keeps its own settings"
-    );
-    let labels: Vec<Value> = patches
-        .iter()
-        .map(|patch| patch["template"]["labels"].clone())
-        .collect();
-    assert!(
-        labels.contains(
-            &json!({"statespace-experiment": "us-landing", "statespace-commit": LANDING})
-        )
-    );
+    {
+        let google = test.google.lock().unwrap();
+        assert!(
+            google
+                .changes
+                .iter()
+                .all(|(_, path, _)| !path.starts_with(&format!("/v2/{SERVICE}?"))
+                    && !path.starts_with(&format!("/v2/{SERVICE}:"))),
+            "the customer's service is never changed: {:?}",
+            google.changes
+        );
+        let arm = &google.units[&names[1]];
+        assert_eq!(
+            arm["labels"],
+            json!({"team": "web", "statespace-app": "shop-prod",
+                   "statespace-experiment": "checkout", "statespace-commit": ARM})
+        );
+        assert_eq!(arm["ingress"], "INGRESS_TRAFFIC_ALL");
+        assert_eq!(
+            arm["template"],
+            json!({"serviceAccount": "shop@acme.iam.gserviceaccount.com",
+                   "containers": [{"name": "shop", "image": digest('2'),
+                                   "ports": [{"containerPort": 8080}],
+                                   "env": [{"name": "MODE", "value": "prod"}]}]}),
+            "a copy of live's template, without the revision name"
+        );
+        assert!(arm.get("traffic").is_none());
+        assert_eq!(
+            google.units[&names[2]]["labels"]["statespace-experiment"],
+            "us-landing"
+        );
+        for name in &names {
+            assert_eq!(
+                google.policies[name],
+                json!({"bindings": [{"role": "roles/run.invoker",
+                                     "members": [format!("serviceAccount:{PROXY_ACCOUNT}")]}]})
+            );
+        }
+    }
 
     // The arm gets the experiment and arm headers and a Google ID token for
     // the service's URL; the app keeps its own Authorization header.
@@ -1832,10 +1862,11 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     assert_eq!(headers["x-statespace-subject"], arm_subject.as_str());
     assert!(headers.get("x-statespace-side").is_none());
     assert_eq!(headers["authorization"], "Bearer the-app's-own");
-    let live_url = test.google.lock().unwrap().service["uri"].clone();
+    // The ID token is for the URL of the unit's own service.
+    let arm_url = test.google.lock().unwrap().arm.clone();
     assert_eq!(
         headers["x-serverless-authorization"],
-        format!("Bearer id-for-{}", live_url.as_str().unwrap())
+        format!("Bearer id-for-{arm_url}")
     );
     assert_eq!(arm_response["cache-control"], "private, max-age=60");
     let (reference_body, _) = get(&reference_subject, "/").unwrap();
@@ -1901,7 +1932,8 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
                 .any(|row| row["name"] == "checkout")
     });
 
-    // One query of Cloud Logging reads the output of all three units. The
+    // One query of Cloud Logging reads the output of all three units by the
+    // names of their services. The
     // first answer is 429: the proxy waits as asked and loses no line. The
     // stand-in gives the same lines to each query, and each line arrives
     // once.
@@ -1914,7 +1946,7 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
         assert!(
             queries
                 .iter()
-                .any(|filter| filter.matches("revision_name=").count() == 3),
+                .any(|filter| filter.matches("service_name=").count() == 3),
             "{queries:?}"
         );
         let state = test.statespace.lock().unwrap();
@@ -2049,21 +2081,18 @@ fn cloudrun_proxies_run_tagged_revisions_and_record_them() {
     assert_eq!(report["settings_hash"], "settings-1");
     drop(state);
 
-    // When checkout stops, the holder removes the tags of its units.
+    // When checkout stops, the holder deletes the services of its units.
+    let before = test.google.lock().unwrap().service.clone();
     test.statespace.lock().unwrap().config["experiments"]
         .as_array_mut()
         .unwrap()
         .remove(0);
-    wait_until(30, "the tags of checkout are removed", || {
+    wait_until(30, "the services of checkout are deleted", || {
         let google = test.google.lock().unwrap();
-        google.service["traffic"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|target| {
-                target["tag"] != arm_tag.as_str() && target["tag"] != reference_tag.as_str()
-            })
+        !google.units.contains_key(&names[0]) && !google.units.contains_key(&names[1])
     });
+    assert!(test.google.lock().unwrap().units.contains_key(&names[2]));
+    assert_eq!(test.google.lock().unwrap().service, before);
     let (body, _) = get(&arm_subject, "/").unwrap();
     assert_eq!(body["name"], "live");
     // No running experiment uses the visitor cookie now: none is set.
@@ -2080,7 +2109,7 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
     let response = send(test.port, "GET", "/", &[]).unwrap();
     assert_eq!(response.json::<Value>().unwrap()["name"], "live");
     std::thread::sleep(Duration::from_secs(3));
-    assert!(test.google.lock().unwrap().patches.is_empty());
+    assert!(test.google.lock().unwrap().changes.is_empty());
     let state = test.statespace.lock().unwrap();
     assert!(
         state
@@ -3385,17 +3414,12 @@ impl Sandbox {
             Some(&json!({"labels": {TEST_LABEL: run}, "template": template})),
         );
         self.wait("https://run.googleapis.com/v2", &operation);
-        // The test account calls the service, and a proxy that runs as it
-        // makes revisions of it.
+        // The test account calls the service.
         let member = format!("serviceAccount:{}", self.account);
-        let bindings: Vec<Value> = ["roles/run.invoker", "roles/run.developer"]
-            .iter()
-            .map(|role| json!({"role": role, "members": [member]}))
-            .collect();
         self.must(
             "POST",
             &format!("{}/services/{name}:setIamPolicy", self.run_api()),
-            Some(&json!({"policy": {"bindings": bindings}})),
+            Some(&json!({"policy": {"bindings": [{"role": "roles/run.invoker", "members": [member]}]}})),
         );
         self.service(name)
     }
@@ -3537,7 +3561,18 @@ impl Sandbox {
             }
         }
         for service in services {
-            let Some(run) = service["labels"][TEST_LABEL].as_str() else {
+            // A unit's service of a run carries the run's label, as a copy of
+            // live's labels. One that lost it is found by its name,
+            // `statespace-test-<run id>-ssp-…`, and the proxy's labels.
+            let name = service["name"].as_str().unwrap_or_default();
+            let short = name.rsplit('/').next().unwrap_or_default();
+            let unit_run = short
+                .strip_prefix(&format!("{TEST_LABEL}-"))
+                .filter(|rest| {
+                    rest.contains("-ssp-") && service["labels"]["statespace-app"].is_string()
+                })
+                .and_then(|rest| rest.split('-').next());
+            let Some(run) = service["labels"][TEST_LABEL].as_str().or(unit_run) else {
                 continue;
             };
             if old(run) {
@@ -3605,11 +3640,11 @@ impl Drop for Run<'_> {
     }
 }
 
-/// A service's settings: everything but what Cloud Run reports, the traffic,
-/// and the name of the next revision.
-fn settings(service: &Value) -> Value {
-    let mut settings = service.clone();
-    let object = settings.as_object_mut().unwrap();
+/// A service's spec: everything but what Cloud Run reports. It keeps the
+/// template, the traffic, the labels, and the annotations.
+fn spec(service: &Value) -> Value {
+    let mut spec = service.clone();
+    let object = spec.as_object_mut().unwrap();
     for field in [
         "uid",
         "generation",
@@ -3627,38 +3662,17 @@ fn settings(service: &Value) -> Value {
         "urls",
         "reconciling",
         "etag",
-        "traffic",
+        "satisfiesPzs",
     ] {
         object.remove(field);
     }
-    if let Some(template) = settings["template"].as_object_mut() {
-        template.remove("revision");
-    }
-    settings
+    spec
 }
 
-/// A revision's settings: everything but what Cloud Run reports, its labels,
-/// and its image.
-fn revision_settings(revision: &Value) -> Value {
-    let mut settings = revision.clone();
-    let object = settings.as_object_mut().unwrap();
-    for field in [
-        "name",
-        "uid",
-        "generation",
-        "labels",
-        "createTime",
-        "updateTime",
-        "conditions",
-        "observedGeneration",
-        "logUri",
-        "reconciling",
-        "etag",
-        "creator",
-        "scalingStatus",
-    ] {
-        object.remove(field);
-    }
+/// A template without its revision name and the image of each container.
+fn template_settings(template: &Value) -> Value {
+    let mut settings = template.clone();
+    settings.as_object_mut().unwrap().remove("revision");
     for container in settings["containers"].as_array_mut().into_iter().flatten() {
         container.as_object_mut().unwrap().remove("image");
     }
@@ -3695,6 +3709,9 @@ fn metadata_server(sandbox: Arc<Sandbox>, audiences: Arc<Mutex<Vec<String>>>) ->
         match received.path.as_str() {
             "/computeMetadata/v1/project/project-id" => {
                 (200, "text/plain", sandbox.project.clone())
+            }
+            path if path == format!("{account}/email") => {
+                (200, "text/plain", sandbox.account.clone())
             }
             path if path == format!("{account}/token") => json_answer(
                 200,
@@ -3744,17 +3761,22 @@ fn visit(url: &str, subject: &str, extra: &[(&str, String)]) -> Option<Value> {
     response.json().ok()
 }
 
-/// The tags of the proxy on a service, with their revisions.
-fn unit_tags(service: &Value) -> Vec<(String, String)> {
-    service["trafficStatuses"]
+/// The services that the proxy made for the units of `service`, by name.
+fn unit_services(sandbox: &Sandbox, service: &str) -> BTreeMap<String, Value> {
+    let listed = sandbox.must(
+        "GET",
+        &format!("{}/services?pageSize=500", sandbox.run_api()),
+        None,
+    );
+    listed["services"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|status| {
-            let tag = status["tag"]
-                .as_str()
-                .filter(|tag| tag.starts_with("ssp-"))?;
-            Some((tag.to_owned(), status["revision"].as_str()?.to_owned()))
+        .filter_map(|unit| {
+            let name = unit["name"].as_str()?.rsplit('/').next()?.to_owned();
+            (name.starts_with(&format!("{service}-ssp-"))
+                && unit["labels"]["statespace-app"] == "shop-prod")
+                .then(|| (name, unit.clone()))
         })
         .collect()
 }
@@ -3770,12 +3792,13 @@ fn gcp_sweeper_deletes_old_test_resources() {
 }
 
 /// `ssp proxy cloudrun` against real Cloud Run, first on this machine and
-/// then as its own Cloud Run service: arms run as tagged revisions with 0%
-/// traffic, requests reach them with an ID token while the app keeps its own
-/// Authorization header, a deploy of the customer still moves live, and a
-/// stop leaves the service as it was.
+/// then as its own Cloud Run service: each arm is its own service, a copy of
+/// live's with another image; requests reach it with an ID token for its URL
+/// while the app keeps its own Authorization header; the customer's service
+/// never changes, also when it is applied again as Terraform does or
+/// deployed; and a stop deletes the arms' services.
 #[test]
-fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
+fn gcp_cloudrun_proxies_run_arms_as_services() {
     let Some(sandbox) = sandbox() else {
         return;
     };
@@ -3894,10 +3917,9 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
     assert_eq!(live["arm"], Value::Null);
     assert_eq!(live["authorization"], "Bearer the-app's-own");
 
-    // c. Each arm is a tagged revision with 0% traffic, and serves through
-    // its tag URL.
+    // c. Each arm is its own service, and serves through its URL.
     state.lock().unwrap().config["experiments"] = checkout.clone();
-    wait_until(600, "both arms serve through their tag URLs", || {
+    wait_until(600, "both arms serve through their services", || {
         greeting(&visit(&proxy_url, &reference_subject, &[]))
             == Some((LIVE.to_owned(), "hello".to_owned()))
             && greeting(&visit(&proxy_url, &arm_subject, &[]))
@@ -3927,96 +3949,108 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         let _ = visit(&proxy_url, &reference_subject, &[]);
         output_of_both_arms(&state)
     });
+    // The customer's service is as it was: same spec, same generation.
     let during = sandbox.service(&name);
-    let tags = unit_tags(&during);
-    assert_eq!(tags.len(), 2, "{tags:?}");
-    for status in during["trafficStatuses"].as_array().unwrap() {
-        if status["tag"]
-            .as_str()
-            .is_some_and(|tag| tag.starts_with("ssp-"))
-        {
-            assert_eq!(status["percent"].as_u64().unwrap_or(0), 0, "{status}");
-        }
-    }
-    // RISK 1: live still follows the latest revision, and the template is
-    // live's again.
-    let mut expected = before["traffic"].as_array().unwrap().clone();
-    for (tag, revision) in &tags {
-        expected.push(json!({"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION",
-                             "revision": revision, "tag": tag}));
-    }
-    let mut traffic = during["traffic"].as_array().unwrap().clone();
-    let key = |target: &Value| target["tag"].as_str().unwrap_or_default().to_owned();
-    traffic.sort_by_key(key);
-    expected.sort_by_key(key);
-    assert_eq!(traffic, expected, "traffic");
-    // RISK 2: the changes keep every setting of the service, and an arm's
-    // revision has every setting of live's but the image and the labels.
-    assert_eq!(
-        settings(&during),
-        settings(&before),
-        "the service keeps its settings"
-    );
-    let live_revision = sandbox.must(
-        "GET",
-        &format!(
-            "https://run.googleapis.com/v2/{}",
-            before["latestReadyRevision"].as_str().unwrap()
-        ),
-        None,
-    );
-    for (_, revision) in &tags {
-        let unit = sandbox.must(
+    assert_eq!(spec(&during), spec(&before), "the customer's service");
+    assert_eq!(during["generation"], before["generation"]);
+    // Each arm's service copies live's template and ingress, changes only
+    // the image, carries the unit's labels, and lets only the proxy call it.
+    let units = unit_services(&sandbox, &name);
+    assert_eq!(units.len(), 2, "{:?}", units.keys());
+    let member = format!("serviceAccount:{}", sandbox.account);
+    for (unit_name, unit) in &units {
+        assert!(unit_name.len() <= 49, "{unit_name}");
+        assert_eq!(
+            template_settings(&unit["template"]),
+            template_settings(&before["template"])
+        );
+        assert_eq!(unit["ingress"], before["ingress"]);
+        assert_eq!(unit["labels"][TEST_LABEL], id.as_str());
+        assert_eq!(unit["labels"]["statespace-experiment"], "checkout");
+        assert!(
+            unit.get("traffic")
+                .is_none_or(|traffic| traffic.as_array().is_some_and(|targets| targets.len() <= 1))
+        );
+        let policy = sandbox.must(
             "GET",
-            &format!("{}/services/{name}/revisions/{revision}", sandbox.run_api()),
+            &format!("{}/services/{unit_name}:getIamPolicy", sandbox.run_api()),
             None,
         );
-        assert_eq!(revision_settings(&unit), revision_settings(&live_revision));
-        assert!(
-            unit["labels"]["statespace-experiment"] == "checkout",
-            "{}",
-            unit["labels"]
+        assert_eq!(
+            policy["bindings"],
+            json!([{"role": "roles/run.invoker", "members": [member]}]),
+            "{unit_name}"
         );
     }
-    // ID tokens are for the service's URL: Cloud Run takes them at every tag
-    // URL of the service.
+    let images: HashSet<String> = units
+        .values()
+        .map(|unit| {
+            unit["template"]["containers"][0]["image"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        images,
+        HashSet::from([live_digest.clone(), arm_digest.clone()])
+    );
+    // ID tokens are for live's URL or an arm's: Cloud Run takes a token at
+    // the URL of the service it names.
+    let urls: Vec<String> = units
+        .values()
+        .map(|unit| {
+            unit["uri"]
+                .as_str()
+                .unwrap()
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .collect();
     assert!(
         audiences
             .lock()
             .unwrap()
             .iter()
-            .all(|audience| *audience == live_url),
+            .all(|audience| *audience == live_url || urls.contains(audience)),
         "{:?}",
         audiences.lock().unwrap()
     );
-    let tag_url = during["trafficStatuses"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find_map(|status| status["uri"].as_str().filter(|_| status["tag"].is_string()))
-        .unwrap()
-        .to_owned();
-    let direct = |audience: &str| {
-        reqwest::blocking::Client::new()
-            .get(&tag_url)
-            .header(
-                "x-serverless-authorization",
-                format!("Bearer {}", sandbox.id_token(audience)),
-            )
-            .send()
-            .unwrap()
-            .status()
-            .as_u16()
-    };
-    let (for_service, for_tag) = (direct(&live_url), direct(&tag_url));
-    eprintln!(
-        "a tag URL answers {for_service} to a token for the service, {for_tag} to one for the tag"
-    );
-    assert_eq!(for_service, 200);
 
-    // d. RISK 1: the customer deploys a new live with the Admin API, as
-    // `gcloud run deploy` does. All of live's traffic moves to it; the arms
-    // keep their tags.
+    // d. The customer applies their service again, as Terraform does: a
+    // full replace of the spec it knows. The arms are not in that spec, and
+    // they keep serving.
+    let operation = sandbox.must(
+        "PATCH",
+        &format!(
+            "https://run.googleapis.com/v2/{}",
+            before["name"].as_str().unwrap()
+        ),
+        Some(&spec(&before)),
+    );
+    sandbox.wait("https://run.googleapis.com/v2", &operation);
+    let reapplied = sandbox.service(&name);
+    assert_eq!(spec(&reapplied), spec(&before), "the applied spec");
+    let after_apply = unit_services(&sandbox, &name);
+    for (unit_name, unit) in &units {
+        assert_eq!(
+            after_apply[unit_name]["generation"], unit["generation"],
+            "{unit_name} is not changed by the customer's apply"
+        );
+    }
+    for _ in 0..5 {
+        assert_eq!(
+            greeting(&visit(&proxy_url, &reference_subject, &[])),
+            Some((LIVE.to_owned(), "hello".to_owned()))
+        );
+        assert_eq!(
+            greeting(&visit(&proxy_url, &arm_subject, &[])),
+            Some((ARM.to_owned(), "hi".to_owned()))
+        );
+    }
+
+    // e. The customer deploys a new live with the Admin API, as `gcloud run
+    // deploy` does. All of live's traffic moves to it; the arms do not change.
     let mut deploy = sandbox.service(&name);
     deploy["template"]["containers"][0]["image"] =
         json!(format!("{}/{name}:hey", sandbox.registry));
@@ -4033,7 +4067,6 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         .next()
         .unwrap()
         .to_owned();
-    eprintln!("after the deploy: {}", deployed["trafficStatuses"]);
     assert!(
         deployed["trafficStatuses"]
             .as_array()
@@ -4043,7 +4076,11 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
         "the new revision gets all of live's traffic: {}",
         deployed["trafficStatuses"]
     );
-    assert_eq!(unit_tags(&deployed), tags);
+    assert_eq!(deployed["traffic"], before["traffic"]);
+    assert_eq!(
+        unit_services(&sandbox, &name).keys().collect::<Vec<_>>(),
+        units.keys().collect::<Vec<_>>()
+    );
     wait_until(180, "live is the new image", || {
         visit(&proxy_url, &live_subject, &[]).is_some_and(|body| body["greeting"] == "hey")
     });
@@ -4060,29 +4097,15 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
             .any(|report| report["live_image"] == new_live_digest.as_str())
     });
 
-    // f. The experiment stops: the tags and revisions go, and the service is
-    // as the customer left it.
+    // f. The experiment stops: the arms' services are deleted, and the
+    // customer's service is as the customer left it.
     state.lock().unwrap().config["experiments"] = json!([]);
-    wait_until(180, "the tags are removed", || {
-        unit_tags(&sandbox.service(&name)).is_empty()
-    });
-    wait_until(180, "the revisions are deleted", || {
-        tags.iter().all(|(_, revision)| {
-            sandbox
-                .call(
-                    "GET",
-                    &format!("{}/services/{name}/revisions/{revision}", sandbox.run_api()),
-                    None,
-                )
-                .is_err_and(|(status, _)| status == 404)
-        })
+    wait_until(180, "the arms' services are deleted", || {
+        unit_services(&sandbox, &name).is_empty()
     });
     let after = sandbox.service(&name);
-    assert_eq!(
-        after["traffic"], before["traffic"],
-        "traffic is as before the test"
-    );
-    assert_eq!(settings(&after), settings(&deployed));
+    assert_eq!(spec(&after), spec(&deployed));
+    assert_eq!(after["generation"], deployed["generation"]);
     assert_eq!(
         visit(&proxy_url, &arm_subject, &[]).unwrap()["arm"],
         Value::Null
@@ -4199,10 +4222,12 @@ fn gcp_cloudrun_proxies_run_arms_as_tagged_revisions() {
                 && report["live_image"] == new_live_digest.as_str())
     );
     state.lock().unwrap().config["experiments"] = json!([]);
-    wait_until(180, "the tags are removed", || {
-        unit_tags(&sandbox.service(&name)).is_empty()
+    wait_until(180, "the arms' services are deleted", || {
+        unit_services(&sandbox, &name).is_empty()
     });
-    assert_eq!(sandbox.service(&name)["traffic"], before["traffic"]);
+    let last = sandbox.service(&name);
+    assert_eq!(spec(&last), spec(&deployed));
+    assert_eq!(last["generation"], deployed["generation"]);
 }
 
 // ---------------------------------------------------------------------------

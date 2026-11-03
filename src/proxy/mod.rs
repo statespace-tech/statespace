@@ -67,7 +67,8 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 }
                 ProxyCommand::Cloudrun { common, cloudrun } => {
                     let remote = connect(endpoint, &common).await?;
-                    serve(Arc::new(CloudRun::new(cloudrun).await?), common, remote).await
+                    let orchestrator = CloudRun::new(&common.app, cloudrun).await?;
+                    serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Kubernetes { common, kubernetes } => {
                     let remote = connect(endpoint, &common).await?;

@@ -1,11 +1,12 @@
-//! `ssp proxy cloudrun`: live is a Cloud Run service. Each unit runs as a
-//! revision of the same service with 0% traffic and the tag
-//! `ssp-<experiment>-<commit 12>`, cut with a short hash when the tag is too
-//! long. A new revision copies the service's template and changes only the
-//! image. Then the service gets its own template and traffic back, so a
-//! deploy of the customer still moves live. The proxy sends to the tag URL
-//! with a Google ID token for the service's URL, and reads output from Cloud
-//! Logging.
+//! `ssp proxy cloudrun`: live is a Cloud Run service. The proxy never
+//! changes it. Each unit runs as its own Cloud Run service in the same
+//! project and region, `<service>-ssp-<experiment>-<commit 12>` (cut with a
+//! short hash past 49 characters), from a copy of live's template with
+//! another image. The unit's service has live's ingress and the labels
+//! `statespace-app`, `statespace-experiment`, and `statespace-commit`. Only
+//! the proxy's own service account may call it. The proxy sends to the
+//! unit's URL with a Google ID token for that URL, and reads output from
+//! Cloud Logging. Stop deletes the unit's service.
 //!
 //! The proxy uses the Cloud Run Admin API v2 with the credentials of the
 //! metadata server (see `google`): the service account of the proxy's own
@@ -31,47 +32,51 @@ use super::{
 };
 use crate::{cli::CloudRunArgs, image};
 
-const LATEST: &str = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST";
-const REVISION: &str = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION";
-/// Revision labels that name the unit, with the full experiment and commit.
-const EXPERIMENT_LABEL: &str = "statespace-experiment";
-const COMMIT_LABEL: &str = "statespace-commit";
-/// How long a tag and the service's name may be together: the tag URL's
-/// host, `<tag>---<service>-<hash>-<region>`, is one DNS label of at most
-/// 63 characters.
-const TAG_AND_SERVICE: usize = 46;
+/// The labels of a unit's service: the app, and the full experiment and
+/// commit. Cloud Run labels take no `.` or `/`.
+pub const APP_LABEL: &str = "statespace-app";
+pub const EXPERIMENT_LABEL: &str = "statespace-experiment";
+pub const COMMIT_LABEL: &str = "statespace-commit";
+/// Cloud Run service names have at most 49 characters.
+const NAME_LIMIT: usize = 49;
 /// The header Cloud Run reads the ID token from, so the app keeps its own
 /// `Authorization` header.
 const AUTHORIZATION: &str = "x-serverless-authorization";
+/// The role that lets the proxy call a unit's service.
+const INVOKER: &str = "roles/run.invoker";
+/// How long the proxy tries to give itself the invoker role on a new unit's
+/// service before it deletes the service again.
+const INVOKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct CloudRun {
     client: reqwest::Client,
     run_api: String,
     logging_api: String,
     metadata: String,
+    app: String,
     project: String,
     region: String,
     service: String,
-    /// `projects/<project>/locations/<region>/services/<service>`.
-    path: String,
+    /// `projects/<project>/locations/<region>`.
+    location: String,
     live_address: String,
     /// Access tokens of the metadata server.
     google: Arc<Google>,
+    /// The proxy's own service account, from the metadata server.
+    account: tokio::sync::OnceCell<String>,
     /// ID tokens, by audience.
     tokens: Mutex<HashMap<String, (String, Instant)>>,
-    /// Revisions that were ready, which never change after.
-    ready: Mutex<HashMap<String, (Unit, String)>>,
-    /// Where the lines of each unit go, by tag.
+    /// Where the lines of each unit go, by the name of its service.
     listeners: Listeners,
     /// Whether the reader of the units' lines runs.
     reading: AtomicBool,
 }
 
-/// Where the lines of each unit go, by the unit's tag.
+/// Where the lines of each unit go, by the name of the unit's service.
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<Line>>>>;
 
 impl CloudRun {
-    pub async fn new(arguments: CloudRunArgs) -> anyhow::Result<Self> {
+    pub async fn new(app: &str, arguments: CloudRunArgs) -> anyhow::Result<Self> {
         let host = arguments.metadata_host.trim_end_matches('/');
         let metadata = if host.contains("://") {
             host.to_owned()
@@ -87,14 +92,15 @@ impl CloudRun {
             run_api: arguments.run_api.trim_end_matches('/').to_owned(),
             logging_api: arguments.logging_api.trim_end_matches('/').to_owned(),
             metadata,
+            app: app.to_owned(),
             project: String::new(),
             region: arguments.region.clone(),
             service: arguments.service.clone(),
-            path: String::new(),
+            location: String::new(),
             live_address: String::new(),
             google,
+            account: tokio::sync::OnceCell::new(),
             tokens: Mutex::default(),
-            ready: Mutex::default(),
             listeners: Listeners::default(),
             reading: AtomicBool::new(false),
         };
@@ -105,14 +111,19 @@ impl CloudRun {
                 .await
                 .context("could not read the project from the metadata server; pass --project")?,
         };
-        cloudrun.path = format!(
-            "projects/{}/locations/{}/services/{}",
-            cloudrun.project, cloudrun.region, cloudrun.service
+        cloudrun.location = format!(
+            "projects/{}/locations/{}",
+            cloudrun.project, cloudrun.region
         );
-        let service = cloudrun.get_service().await?;
+        let service = cloudrun.live_service().await?;
         cloudrun.live_address = service["uri"]
             .as_str()
-            .with_context(|| format!("{} has no URL yet", cloudrun.path))?
+            .with_context(|| {
+                format!(
+                    "{} has no URL yet",
+                    cloudrun.service_path(&cloudrun.service)
+                )
+            })?
             .trim_end_matches('/')
             .to_owned();
         Ok(cloudrun)
@@ -131,6 +142,18 @@ impl CloudRun {
         Ok(response.text().await?.trim().to_owned())
     }
 
+    /// The email of the proxy's own service account.
+    async fn account(&self) -> anyhow::Result<&str> {
+        self.account
+            .get_or_try_init(|| async {
+                self.metadata_text("/computeMetadata/v1/instance/service-accounts/default/email")
+                    .await
+                    .context("could not read the proxy's service account from the metadata server")
+            })
+            .await
+            .map(String::as_str)
+    }
+
     /// A cached ID token for `audience`, or a new one from the metadata
     /// server.
     async fn id_token(&self, audience: &str) -> anyhow::Result<String> {
@@ -147,10 +170,11 @@ impl CloudRun {
             .await?;
         // ID tokens last an hour.
         let until = Instant::now() + Duration::from_secs(50 * 60);
-        self.tokens
-            .lock()
-            .expect("never poisoned")
-            .insert(audience.to_owned(), (token.clone(), until));
+        let mut tokens = self.tokens.lock().expect("never poisoned");
+        if tokens.len() > 1000 {
+            tokens.clear();
+        }
+        tokens.insert(audience.to_owned(), (token.clone(), until));
         Ok(token)
     }
 
@@ -178,37 +202,65 @@ impl CloudRun {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    async fn get_service(&self) -> anyhow::Result<Value> {
-        self.call(
-            reqwest::Method::GET,
-            format!("{}/v2/{}", self.run_api, self.path),
-            None,
-        )
-        .await
+    /// `projects/<project>/locations/<region>/services/<name>`.
+    fn service_path(&self, name: &str) -> String {
+        format!("{}/services/{name}", self.location)
     }
 
-    async fn update_service(&self, service: &Value) -> anyhow::Result<()> {
-        self.call(
-            reqwest::Method::PATCH,
-            format!("{}/v2/{}", self.run_api, self.path),
-            Some(service),
-        )
-        .await
-        .map(drop)
+    /// A service of the project and region, unless it does not exist.
+    async fn get_service(&self, name: &str) -> anyhow::Result<Option<Value>> {
+        let url = format!("{}/v2/{}", self.run_api, self.service_path(name));
+        let token = self.google.token().await?;
+        let response = self.client.get(&url).bearer_auth(token).send().await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            bail!("Google Cloud answered {} for {url}", response.status());
+        }
+        Ok(Some(response.json().await?))
     }
 
-    fn revision_path(&self, revision: &str) -> String {
-        if revision.contains('/') {
-            revision.to_owned()
-        } else {
-            format!("{}/revisions/{revision}", self.path)
+    async fn live_service(&self) -> anyhow::Result<Value> {
+        self.get_service(&self.service)
+            .await?
+            .with_context(|| format!("{} does not exist", self.service_path(&self.service)))
+    }
+
+    /// Every service of the project and region.
+    async fn services(&self) -> anyhow::Result<Vec<Value>> {
+        let mut services = Vec::new();
+        let mut page = String::new();
+        loop {
+            let listed = self
+                .call(
+                    reqwest::Method::GET,
+                    format!(
+                        "{}/v2/{}/services?pageSize=100&pageToken={}",
+                        self.run_api,
+                        self.location,
+                        encode(&page)
+                    ),
+                    None,
+                )
+                .await?;
+            services.extend(listed["services"].as_array().cloned().unwrap_or_default());
+            match listed["nextPageToken"].as_str() {
+                Some(next) if !next.is_empty() => page = next.to_owned(),
+                _ => return Ok(services),
+            }
         }
     }
 
     async fn get_revision(&self, revision: &str) -> anyhow::Result<Value> {
+        let path = if revision.contains('/') {
+            revision.to_owned()
+        } else {
+            format!("{}/revisions/{revision}", self.service_path(&self.service))
+        };
         self.call(
             reqwest::Method::GET,
-            format!("{}/v2/{}", self.run_api, self.revision_path(revision)),
+            format!("{}/v2/{path}", self.run_api),
             None,
         )
         .await
@@ -247,48 +299,43 @@ impl CloudRun {
         Ok(digest.to_owned())
     }
 
-    /// Give the service its template and traffic from `before`, with the tag
-    /// of the new revision. Cloud Run takes the change only after it made the
-    /// new revision.
-    async fn restore(&self, before: &Value, revision: &str, tag: &str) -> anyhow::Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(60);
-        while self.get_revision(revision).await.is_err() {
-            if Instant::now() > deadline {
-                bail!("revision {revision} did not appear in 60 seconds");
+    /// Give the proxy's own service account the invoker role on a unit's
+    /// service. A new service can take a few seconds to accept a policy.
+    async fn allow_proxy(&self, name: &str) -> anyhow::Result<()> {
+        let member = format!("serviceAccount:{}", self.account().await?);
+        let policy = json!({"policy": {"bindings": [{"role": INVOKER, "members": [member]}]}});
+        let url = format!(
+            "{}/v2/{}:setIamPolicy",
+            self.run_api,
+            self.service_path(name)
+        );
+        let deadline = Instant::now() + INVOKER_TIMEOUT;
+        loop {
+            match self
+                .call(reqwest::Method::POST, url.clone(), Some(&policy))
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(error) if Instant::now() > deadline => return Err(error),
+                Err(_) => tokio::time::sleep(Duration::from_secs(2)).await,
             }
-            tokio::time::sleep(Duration::from_secs(1)).await;
         }
-        let mut service = self.get_service().await?;
-        if restore(&mut service, before, revision, tag) {
-            self.update_service(&service).await?;
-        }
-        Ok(())
     }
 
-    /// The revision behind a tag of the service.
-    fn tagged(service: &Value, tag: &str) -> Option<(String, String)> {
-        service["trafficStatuses"]
-            .as_array()?
-            .iter()
-            .find(|status| status["tag"] == tag)
-            .and_then(|status| {
-                Some((
-                    status["revision"].as_str()?.to_owned(),
-                    status["uri"].as_str()?.trim_end_matches('/').to_owned(),
-                ))
-            })
+    async fn delete_service(&self, name: &str) -> anyhow::Result<()> {
+        self.call(
+            reqwest::Method::DELETE,
+            format!("{}/v2/{}", self.run_api, self.service_path(name)),
+            None,
+        )
+        .await
+        .map(drop)
     }
 
-    /// The unit a revision runs, from its labels and image.
-    fn unit_of(revision: &Value) -> Option<Unit> {
-        let labels = &revision["labels"];
-        let index = ingress_container(&revision["containers"]);
-        Some(Unit {
-            experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
-            commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
-            build: Build::Image(revision["containers"][index]["image"].as_str()?.to_owned()),
-            share: 0.0,
-        })
+    /// Whether `service` is a unit's service of this app. The proxy changes
+    /// no other service.
+    fn ours(&self, service: &Value) -> bool {
+        service["labels"][APP_LABEL] == self.app.as_str()
     }
 }
 
@@ -299,7 +346,7 @@ impl Orchestrator for CloudRun {
 
     /// The image of the revision that gets the most traffic.
     async fn live(&self) -> anyhow::Result<Live> {
-        let service = self.get_service().await?;
+        let service = self.live_service().await?;
         let revision =
             serving_revision(&service).context("no revision of the service gets traffic")?;
         let revision = self.get_revision(&revision).await?;
@@ -311,131 +358,87 @@ impl Orchestrator for CloudRun {
     }
 
     async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
-        let mut service = self.get_service().await?;
-        let tag = tag(&unit.key(), &self.service);
-        if let Some((revision, uri)) = Self::tagged(&service, &tag)
-            && let Ok(current) = self.get_revision(&revision).await
-            && Self::unit_of(&current).as_ref()
-                == Some(&Unit {
-                    share: 0.0,
-                    ..unit.clone()
-                })
-        {
-            return Ok(uri);
+        let name = unit_name(&self.service, &unit.key());
+        if let Some(current) = self.get_service(&name).await? {
+            if !self.ours(&current) {
+                bail!("service {name} exists and is not a unit of {}", self.app);
+            }
+            if unit_of(&current).is_some_and(|running| running.image() == unit.image()) {
+                return Ok(String::new());
+            }
+            // A unit's service with another image: replace it.
+            self.delete_service(&name).await?;
+            bail!("service {name} runs another image; it starts again when it is deleted");
         }
-        let name = format!(
-            "{}-ssp-{:06x}",
-            self.service,
-            rand::random::<u32>() & 0xff_ffff
-        );
-        let before = service.clone();
-        new_revision(&mut service, unit, &name, &tag)?;
-        self.update_service(&service).await?;
-        eprintln!(
-            "[ssp] creating revision {name} with tag {tag} for {}",
-            unit.key()
-        );
-        if let Err(error) = self.restore(&before, &name, &tag).await {
-            eprintln!(
-                "[ssp] could not give {} its own template and traffic back, so its traffic \
-                 stays on the revision that has it now: {error:#}",
-                self.service
-            );
+        let live = self.live_service().await?;
+        let body = unit_service(&live, &self.app, unit)?;
+        self.call(
+            reqwest::Method::POST,
+            format!(
+                "{}/v2/{}/services?serviceId={name}",
+                self.run_api, self.location
+            ),
+            Some(&body),
+        )
+        .await?;
+        eprintln!("[ssp] creating service {name} for {}", unit.key());
+        if let Err(error) = self.allow_proxy(&name).await {
+            let _ = self.delete_service(&name).await;
+            return Err(error.context(format!(
+                "could not let the proxy call {name}, so the proxy deleted it"
+            )));
         }
         Ok(String::new())
     }
 
     async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
-        let mut service = self.get_service().await?;
-        let tag = tag(&unit.key(), &self.service);
-        let tagged = Self::tagged(&service, &tag);
-        if let Some(traffic) = service["traffic"].as_array_mut() {
-            traffic.retain(|target| target["tag"] != tag.as_str());
-        }
-        self.update_service(&service).await?;
-        eprintln!("[ssp] removed tag {tag}");
-        // The revision gets no traffic; delete it when Cloud Run lets us.
-        if let Some((revision, _)) = tagged {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            let _ = self
-                .call(
-                    reqwest::Method::DELETE,
-                    format!("{}/v2/{}", self.run_api, self.revision_path(&revision)),
-                    None,
-                )
-                .await;
+        let name = unit_name(&self.service, &unit.key());
+        if let Some(service) = self.get_service(&name).await?
+            && self.ours(&service)
+        {
+            self.delete_service(&name).await?;
+            eprintln!("[ssp] deleted service {name}");
         }
         Ok(())
     }
 
     async fn running(&self) -> anyhow::Result<Vec<Running>> {
-        let service = self.get_service().await?;
         let mut running = Vec::new();
-        for status in service["trafficStatuses"].as_array().into_iter().flatten() {
-            let (Some(tag), Some(revision), Some(uri)) = (
-                status["tag"].as_str(),
-                status["revision"].as_str(),
-                status["uri"].as_str(),
-            ) else {
+        for service in self.services().await? {
+            if !self.ours(&service) {
+                continue;
+            }
+            let Some(unit) = unit_of(&service) else {
                 continue;
             };
-            if !tag.starts_with("ssp-") {
-                continue;
-            }
-            let uri = uri.trim_end_matches('/').to_owned();
-            let cached = self
-                .ready
-                .lock()
-                .expect("never poisoned")
-                .get(revision)
-                .cloned();
-            if let Some((unit, address)) = cached {
-                running.push(Running {
-                    unit,
-                    address,
-                    ready: true,
-                    reason: None,
-                });
-                continue;
-            }
-            let details = self.get_revision(revision).await?;
-            let Some(unit) = Self::unit_of(&details) else {
-                continue;
-            };
-            let ready = revision_ready(&details);
-            let reason = (!ready).then(|| not_ready(&details));
-            if ready {
-                self.ready
-                    .lock()
-                    .expect("never poisoned")
-                    .insert(revision.to_owned(), (unit.clone(), uri.clone()));
-            }
+            let ready = service_ready(&service);
             running.push(Running {
                 unit,
-                address: uri,
+                address: service["uri"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .trim_end_matches('/')
+                    .to_owned(),
                 ready,
-                reason,
+                reason: (!ready).then(|| not_ready(&service)),
             });
         }
         Ok(running)
     }
 
-    /// The lines of a unit. One reader reads the lines of every unit of the
-    /// service with one query per poll, and gives each unit its own.
+    /// The lines of a unit. One reader reads the lines of every unit with
+    /// one query per poll, and gives each unit its own.
     fn output(&self, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
-        let tag = tag(&unit.key(), &self.service);
         self.listeners
             .lock()
             .expect("never poisoned")
-            .insert(tag, sender);
+            .insert(unit_name(&self.service, &unit.key()), sender);
         if !self.reading.swap(true, Ordering::SeqCst) {
             let reader = Reader {
                 client: self.client.clone(),
                 logging_api: self.logging_api.clone(),
                 project: self.project.clone(),
-                service: self.service.clone(),
-                service_url: format!("{}/v2/{}", self.run_api, self.path),
                 google: self.google.clone(),
                 listeners: self.listeners.clone(),
             };
@@ -444,10 +447,9 @@ impl Orchestrator for CloudRun {
         stream
     }
 
-    /// An ID token for the service's URL. Cloud Run accepts it at every tag
-    /// URL of the service, and refuses one for the tag URL itself.
+    /// An ID token for the service at `address`: live's URL, or a unit's.
     async fn credential(&self, address: &str) -> Option<(HeaderName, HeaderValue)> {
-        match self.id_token(&self.live_address).await {
+        match self.id_token(address).await {
             Ok(token) => Some((
                 HeaderName::from_static(AUTHORIZATION),
                 HeaderValue::from_str(&format!("Bearer {token}")).ok()?,
@@ -518,14 +520,12 @@ impl Cursor {
     }
 }
 
-/// Reads the lines of every unit of the service from Cloud Logging, with
-/// one query per poll, and sends each line to its unit.
+/// Reads the lines of every unit from Cloud Logging, with one query per
+/// poll, and sends each line to its unit.
 struct Reader {
     client: reqwest::Client,
     logging_api: String,
     project: String,
-    service: String,
-    service_url: String,
     google: Arc<Google>,
     listeners: Listeners,
 }
@@ -535,13 +535,10 @@ impl Reader {
         let mut cursor = Cursor::new();
         let mut back_off = POLL;
         loop {
-            let listeners: Vec<(String, mpsc::Sender<Line>)> = {
+            let listeners: HashMap<String, mpsc::Sender<Line>> = {
                 let mut listeners = self.listeners.lock().expect("never poisoned");
                 listeners.retain(|_, sender| !sender.is_closed());
-                listeners
-                    .iter()
-                    .map(|(tag, sender)| (tag.clone(), sender.clone()))
-                    .collect()
+                listeners.clone()
             };
             let wait = if listeners.is_empty() {
                 POLL
@@ -574,31 +571,13 @@ impl Reader {
 
     async fn poll(
         &self,
-        listeners: &[(String, mpsc::Sender<Line>)],
+        listeners: &HashMap<String, mpsc::Sender<Line>>,
         cursor: &mut Cursor,
     ) -> Result<(), PollError> {
         let token = self.google.token().await?;
-        let service: Value = self
-            .client
-            .get(&self.service_url)
-            .bearer_auth(&token)
-            .send()
-            .await?
-            .json()
-            .await?;
-        // The revision of each unit, and where its lines go.
-        let mut senders: HashMap<String, mpsc::Sender<Line>> = HashMap::new();
-        for (tag, sender) in listeners {
-            if let Some((revision, _)) = CloudRun::tagged(&service, tag) {
-                senders.insert(short_name(&revision), sender.clone());
-            }
-        }
-        if senders.is_empty() {
-            return Ok(());
-        }
-        let mut revisions: Vec<&str> = senders.keys().map(String::as_str).collect();
-        revisions.sort_unstable();
-        let filter = log_filter(&self.project, &self.service, &revisions, &cursor.since);
+        let mut services: Vec<&str> = listeners.keys().map(String::as_str).collect();
+        services.sort_unstable();
+        let filter = log_filter(&self.project, &services, &cursor.since);
         let mut page: Option<String> = None;
         loop {
             let mut body = json!({
@@ -635,10 +614,10 @@ impl Reader {
                 if !cursor.take(entry) {
                     continue;
                 }
-                let revision = entry["resource"]["labels"]["revision_name"]
+                let service = entry["resource"]["labels"]["service_name"]
                     .as_str()
                     .unwrap_or_default();
-                if let (Some(sender), Some(line)) = (senders.get(revision), entry_line(entry)) {
+                if let (Some(sender), Some(line)) = (listeners.get(service), entry_line(entry)) {
                     // A unit that stopped reading drops its lines.
                     let _ = sender.send(line).await;
                 }
@@ -651,18 +630,18 @@ impl Reader {
     }
 }
 
-/// The Cloud Logging filter for the standard output and error of
-/// `revisions` of `service`, from `since` on.
-fn log_filter(project: &str, service: &str, revisions: &[&str], since: &str) -> String {
+/// The Cloud Logging filter for the standard output and error of the
+/// services `services`, from `since` on.
+fn log_filter(project: &str, services: &[&str], since: &str) -> String {
     let log = |stream: &str| format!("projects/{project}/logs/run.googleapis.com%2F{stream}");
-    let revisions = revisions
+    let services = services
         .iter()
-        .map(|revision| format!("resource.labels.revision_name=\"{revision}\""))
+        .map(|service| format!("resource.labels.service_name=\"{service}\""))
         .collect::<Vec<_>>()
         .join(" OR ");
     format!(
-        "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"{service}\" \
-         AND ({revisions}) AND (logName=\"{}\" OR logName=\"{}\") AND timestamp>=\"{since}\"",
+        "resource.type=\"cloud_run_revision\" AND ({services}) \
+         AND (logName=\"{}\" OR logName=\"{}\") AND timestamp>=\"{since}\"",
         log("stdout"),
         log("stderr"),
     )
@@ -683,11 +662,10 @@ fn entry_line(entry: &Value) -> Option<Line> {
     Some(Line { stream, text })
 }
 
-/// `ssp-<experiment>-<commit 12>`, short enough for the tag URL of
-/// `service`.
-pub fn tag(key: &UnitKey, service: &str) -> String {
-    let limit = TAG_AND_SERVICE.saturating_sub(service.len()).max(12);
-    key.name("ssp-", limit)
+/// `<service>-ssp-<experiment>-<commit 12>`, cut with a short hash past 49
+/// characters.
+pub fn unit_name(service: &str, key: &UnitKey) -> String {
+    key.name(&format!("{service}-ssp-"), NAME_LIMIT)
 }
 
 fn short_name(revision: &str) -> String {
@@ -721,106 +699,86 @@ pub fn serving_revision(service: &Value) -> Option<String> {
     }
 }
 
-/// Why a revision is not ready, from its `Ready` condition.
-fn not_ready(revision: &Value) -> String {
-    if revision["reconciling"] == true {
-        return "the revision is deploying".into();
+/// The unit a unit's service runs, from its labels and image.
+fn unit_of(service: &Value) -> Option<Unit> {
+    let labels = &service["labels"];
+    let containers = &service["template"]["containers"];
+    let index = ingress_container(containers);
+    Some(Unit {
+        experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
+        commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
+        build: Build::Image(containers[index]["image"].as_str()?.to_owned()),
+        share: 0.0,
+    })
+}
+
+/// Whether a unit's service serves its template: the service is ready, and
+/// its latest ready revision is the one its template made.
+fn service_ready(service: &Value) -> bool {
+    service["reconciling"] != true
+        && service["terminalCondition"]["state"] == "CONDITION_SUCCEEDED"
+        && service["latestCreatedRevision"].is_string()
+        && service["latestReadyRevision"] == service["latestCreatedRevision"]
+}
+
+/// Why a unit's service is not ready, from its terminal condition.
+fn not_ready(service: &Value) -> String {
+    let message = service["terminalCondition"]["message"]
+        .as_str()
+        .filter(|message| !message.is_empty());
+    match message {
+        Some(message) if service["terminalCondition"]["state"] == "CONDITION_FAILED" => {
+            format!("the service is not ready: {message}")
+        }
+        _ => "the service is deploying".into(),
     }
-    revision["conditions"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|condition| condition["type"] == "Ready")
-        .and_then(|condition| condition["message"].as_str())
-        .filter(|message| !message.is_empty())
-        .map_or_else(
-            || "the revision is not ready".into(),
-            |message| format!("the revision is not ready: {message}"),
-        )
 }
 
-/// Whether a revision is ready to serve.
-fn revision_ready(revision: &Value) -> bool {
-    revision["reconciling"] != true
-        && revision["conditions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .any(|condition| {
-                condition["type"] == "Ready" && condition["state"] == "CONDITION_SUCCEEDED"
-            })
-}
-
-/// Change `service` to create a revision `name` of `unit` with 0% traffic
-/// and `tag`. Traffic that follows the latest revision is pinned to the
-/// revision it has now, so the new revision gets none.
-pub fn new_revision(service: &mut Value, unit: &Unit, name: &str, tag: &str) -> anyhow::Result<()> {
-    // `latestReadyRevision` can name an older revision than the one that
-    // gets the latest's traffic.
-    let latest = service["trafficStatuses"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|status| status["type"] == LATEST)
-        .and_then(|status| status["revision"].as_str())
-        .filter(|name| !name.is_empty())
-        .or_else(|| service["latestReadyRevision"].as_str())
-        .map(short_name)
-        .context("the service has no ready revision")?;
-    let template = &mut service["template"];
+/// The creation of a unit's service: live's template with the unit's image,
+/// live's ingress, launch stage, and Binary Authorization policy, live's
+/// labels, and the unit's labels. Traffic, custom domains, and the IAM
+/// policy are not copied, and the template gets no revision name. No
+/// `STATESPACE_*` variable reaches a unit.
+pub fn unit_service(live: &Value, app: &str, unit: &Unit) -> anyhow::Result<Value> {
+    let mut template = live["template"].clone();
+    let fields = template
+        .as_object_mut()
+        .context("the service has no template")?;
+    fields.remove("revision");
     let index = ingress_container(&template["containers"]);
-    let container = template["containers"]
-        .get_mut(index)
+    let containers = template["containers"]
+        .as_array_mut()
+        .filter(|containers| !containers.is_empty())
         .context("the service's template has no container")?;
-    container["image"] = json!(unit.image());
-    template["revision"] = json!(name);
-    if !template["labels"].is_object() {
-        template["labels"] = json!({});
-    }
-    template["labels"][EXPERIMENT_LABEL] = json!(unit.experiment);
-    template["labels"][COMMIT_LABEL] = json!(unit.commit);
-    let mut traffic: Vec<Value> = service["traffic"].as_array().cloned().unwrap_or_default();
-    if traffic.is_empty() {
-        traffic.push(json!({"type": LATEST, "percent": 100}));
-    }
-    for target in &mut traffic {
-        if target["type"] == LATEST {
-            target["type"] = json!(REVISION);
-            target["revision"] = json!(latest);
+    containers[index]["image"] = json!(unit.image());
+    for container in containers {
+        if let Some(variables) = container["env"].as_array_mut() {
+            variables.retain(|variable| {
+                !variable["name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("STATESPACE_")
+            });
         }
     }
-    traffic.retain(|target| target["tag"] != tag);
-    traffic.push(json!({"type": REVISION, "revision": name, "percent": 0, "tag": tag}));
-    service["traffic"] = json!(traffic);
-    Ok(())
-}
-
-/// Change `service`, after the revision `revision` of a unit exists, back to
-/// the template and traffic of `before`, with the unit's `tag`. The template
-/// is named after the revision it made, so Cloud Run makes no new revision,
-/// and traffic that follows the latest revision follows live again. Returns
-/// false, and changes nothing, when the template of `before` is a unit's:
-/// then the pinned traffic stays.
-pub fn restore(service: &mut Value, before: &Value, revision: &str, tag: &str) -> bool {
-    let mut template = before["template"].clone();
-    if template["labels"].get(EXPERIMENT_LABEL).is_some() {
-        return false;
+    let ours = [APP_LABEL, EXPERIMENT_LABEL, COMMIT_LABEL];
+    let mut labels = serde_json::Map::new();
+    for (key, value) in live["labels"].as_object().into_iter().flatten() {
+        // Google reserves `goog-` labels, such as the one Terraform sets.
+        if !key.starts_with("goog-") && !ours.contains(&key.as_str()) {
+            labels.insert(key.clone(), value.clone());
+        }
     }
-    if template["revision"].as_str().is_none_or(str::is_empty) {
-        let Some(made) = before["latestCreatedRevision"].as_str() else {
-            return false;
-        };
-        template["revision"] = json!(short_name(made));
+    for (key, value) in ours.iter().zip([app, &unit.experiment, &unit.commit]) {
+        labels.insert((*key).to_owned(), json!(value));
     }
-    let mut traffic: Vec<Value> = before["traffic"].as_array().cloned().unwrap_or_default();
-    if traffic.is_empty() {
-        traffic.push(json!({"type": LATEST, "percent": 100}));
+    let mut service = json!({"labels": labels, "template": template});
+    for field in ["ingress", "launchStage", "binaryAuthorization"] {
+        if !live[field].is_null() {
+            service[field] = live[field].clone();
+        }
     }
-    traffic.retain(|target| target["tag"] != tag);
-    traffic.push(json!({"type": REVISION, "revision": revision, "percent": 0, "tag": tag}));
-    service["template"] = template;
-    service["traffic"] = json!(traffic);
-    true
+    Ok(service)
 }
 
 fn encode(value: &str) -> String {
@@ -836,17 +794,29 @@ mod tests {
             "name": "projects/acme/locations/us-east1/services/shop",
             "uri": "https://shop-abc-ue.a.run.app",
             "latestReadyRevision": "projects/acme/locations/us-east1/services/shop/revisions/shop-00042-xyz",
-            "labels": {"team": "web"},
+            "labels": {"team": "web", "goog-terraform-provisioned": "true"},
+            "annotations": {"run.googleapis.com/client-name": "terraform"},
+            "ingress": "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER",
+            "launchStage": "BETA",
+            "customAudiences": ["https://shop.example.com"],
+            "invokerIamDisabled": true,
             "template": {
+                "revision": "shop-00042-xyz",
                 "serviceAccount": "shop@acme.iam.gserviceaccount.com",
+                "vpcAccess": {"connector": "projects/acme/locations/us-east1/connectors/vpc"},
+                "scaling": {"minInstanceCount": 1, "maxInstanceCount": 10},
+                "timeout": "300s",
+                "executionEnvironment": "EXECUTION_ENVIRONMENT_GEN2",
                 "containers": [
                     {"name": "sidecar", "image": "otel/collector"},
                     {"name": "shop", "image": "ghcr.io/acme/shop:main", "ports": [{"containerPort": 8080}],
-                     "env": [{"name": "MODE", "value": "prod"}]},
+                     "env": [{"name": "MODE", "value": "prod"},
+                             {"name": "STATESPACE_TOKEN", "value": "never"}],
+                     "resources": {"limits": {"cpu": "1", "memory": "512Mi"}}},
                 ],
             },
-            "traffic": [{"type": LATEST, "percent": 100}],
-            "trafficStatuses": [{"type": LATEST, "percent": 100, "revision": ""}],
+            "traffic": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100}],
+            "trafficStatuses": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100, "revision": ""}],
         })
     }
 
@@ -860,86 +830,128 @@ mod tests {
     }
 
     #[test]
-    fn new_revisions_copy_the_template_and_pin_live() {
-        let mut changed = service();
-        let tag = tag(&arm().key(), "shop");
-        assert_eq!(tag, "ssp-checkout-a1b2c3d4e5f6");
-        new_revision(&mut changed, &arm(), "shop-ssp-1a2b3c", &tag).unwrap();
-        let template = &changed["template"];
+    fn units_copy_the_template_and_change_only_the_image() {
+        let live = service();
+        let unit = unit_service(&live, "shop-prod", &arm()).unwrap();
+        let template = &unit["template"];
         assert_eq!(template["containers"][1]["image"], arm().image());
         assert_eq!(template["containers"][0]["image"], "otel/collector");
-        assert_eq!(template["containers"][1]["env"][0]["value"], "prod");
         assert_eq!(
-            template["serviceAccount"],
-            "shop@acme.iam.gserviceaccount.com"
+            template["containers"][1]["env"],
+            json!([{"name": "MODE", "value": "prod"}])
         );
-        assert_eq!(template["labels"][COMMIT_LABEL], arm().commit);
-        assert_eq!(template["labels"][EXPERIMENT_LABEL], "checkout");
+        for field in [
+            "serviceAccount",
+            "vpcAccess",
+            "scaling",
+            "timeout",
+            "executionEnvironment",
+        ] {
+            assert_eq!(template[field], live["template"][field], "{field}");
+        }
         assert_eq!(
-            CloudRun::unit_of(
-                &json!({"labels": template["labels"], "containers": template["containers"]})
-            ),
+            template["containers"][1]["resources"],
+            live["template"]["containers"][1]["resources"]
+        );
+        assert!(template.get("revision").is_none());
+        assert_eq!(unit["ingress"], "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER");
+        assert_eq!(unit["launchStage"], "BETA");
+        for field in [
+            "traffic",
+            "customAudiences",
+            "invokerIamDisabled",
+            "annotations",
+            "name",
+        ] {
+            assert!(unit.get(field).is_none(), "{field}");
+        }
+        assert_eq!(
+            unit["labels"],
+            json!({"team": "web", APP_LABEL: "shop-prod", EXPERIMENT_LABEL: "checkout",
+                   COMMIT_LABEL: arm().commit})
+        );
+        let mut created = unit.clone();
+        created["template"]["revision"] = json!("shop-ssp-checkout-a1b2c3d4e5f6-00001-abc");
+        assert_eq!(
+            unit_of(&created),
             Some(Unit {
                 share: 0.0,
                 ..arm()
             })
         );
-        assert_eq!(changed["labels"]["team"], "web");
+        assert!(!unit.to_string().contains("STATESPACE_"));
+    }
+
+    #[test]
+    fn names_units_after_the_service() {
         assert_eq!(
-            changed["traffic"],
-            json!([
-                {"type": REVISION, "percent": 100, "revision": "shop-00042-xyz"},
-                {"type": REVISION, "revision": "shop-ssp-1a2b3c", "percent": 0, "tag": tag},
-            ])
+            unit_name("shop", &arm().key()),
+            "shop-ssp-checkout-a1b2c3d4e5f6"
         );
-        // The same tag again moves to the new revision.
-        new_revision(&mut changed, &arm(), "shop-ssp-4d5e6f", &tag).unwrap();
-        let tagged: Vec<&Value> = changed["traffic"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|target| target["tag"] == tag.as_str())
-            .collect();
-        assert_eq!(tagged.len(), 1);
-        assert_eq!(tagged[0]["revision"], "shop-ssp-4d5e6f");
-        // No Statespace credential is ever added to a revision.
-        assert!(!changed.to_string().contains("STATESPACE_TOKEN"));
+        // A long service name ends with a hash within Cloud Run's limit.
+        let long = unit_name("shop-checkout-service-eu-west", &arm().key());
+        assert_eq!(long.len(), 49, "{long}");
+        assert!(
+            long.starts_with("shop-checkout-service-eu-west-ssp-"),
+            "{long}"
+        );
+        assert!(!long.ends_with('-'));
     }
 
     #[test]
     fn finds_the_serving_revision() {
         assert_eq!(
-            serving_revision(&service()).as_deref(),
+            serving_revision(&json!({
+                "latestReadyRevision": "projects/acme/locations/us-east1/services/shop/revisions/shop-00042-xyz",
+                "trafficStatuses": [{"type": "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST", "percent": 100, "revision": ""}],
+            }))
+            .as_deref(),
             Some("shop-00042-xyz")
         );
         let split = json!({"trafficStatuses": [
             {"revision": "shop-1", "percent": 10},
             {"revision": "shop-2", "percent": 90},
-            {"revision": "shop-ssp-1", "percent": 0, "tag": "ssp-checkout-c0ffee100000"},
         ]});
         assert_eq!(serving_revision(&split).as_deref(), Some("shop-2"));
-        // A long service name leaves less room: the tag ends with a hash.
-        let long = tag(&arm().key(), "shop-checkout-service-eu-west");
-        assert!(long.len() <= 46 - 29, "{long}");
-        assert!(long.starts_with("ssp-chec"), "{long}");
+    }
+
+    #[test]
+    fn units_are_ready_when_the_latest_revision_serves() {
+        let ready = json!({
+            "terminalCondition": {"type": "Ready", "state": "CONDITION_SUCCEEDED"},
+            "latestCreatedRevision": "s/revisions/a-00002", "latestReadyRevision": "s/revisions/a-00002",
+        });
+        assert!(service_ready(&ready));
+        let mut deploying = ready.clone();
+        deploying["reconciling"] = json!(true);
+        assert!(!service_ready(&deploying));
+        assert_eq!(not_ready(&deploying), "the service is deploying");
+        let mut older = ready.clone();
+        older["latestReadyRevision"] = json!("s/revisions/a-00001");
+        assert!(!service_ready(&older));
+        let failed = json!({"terminalCondition": {"type": "Ready", "state": "CONDITION_FAILED",
+                                                  "message": "The container exited (exit 1)"}});
+        assert!(!service_ready(&failed));
+        assert_eq!(
+            not_ready(&failed),
+            "the service is not ready: The container exited (exit 1)"
+        );
     }
 
     #[test]
     fn reads_every_unit_with_one_filter_and_gives_each_line_once() {
         let filter = log_filter(
             "acme",
-            "shop",
-            &["shop-ssp-1", "shop-ssp-2"],
+            &["shop-ssp-a", "shop-ssp-b"],
             "2026-10-30T00:00:00Z",
         );
         assert!(
             filter.contains(
-                "AND (resource.labels.revision_name=\"shop-ssp-1\" \
-                 OR resource.labels.revision_name=\"shop-ssp-2\") AND"
+                "AND (resource.labels.service_name=\"shop-ssp-a\" \
+                 OR resource.labels.service_name=\"shop-ssp-b\") AND"
             ),
             "{filter}"
         );
-        assert!(filter.contains("resource.labels.service_name=\"shop\""));
         assert!(filter.ends_with("timestamp>=\"2026-10-30T00:00:00Z\""));
         let mut cursor = Cursor {
             since: "2026-10-30T00:00:00Z".into(),
@@ -971,19 +983,6 @@ mod tests {
                 stream: Stream::Stderr,
                 text: r#"{"event":"x"}"#.into()
             })
-        );
-        assert!(revision_ready(
-            &json!({"conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}]})
-        ));
-        assert!(!revision_ready(
-            &json!({"reconciling": true, "conditions": [{"type": "Ready", "state": "CONDITION_SUCCEEDED"}]})
-        ));
-        assert_eq!(
-            not_ready(
-                &json!({"conditions": [{"type": "Ready", "state": "CONDITION_FAILED",
-                                              "message": "The container exited (exit 1)"}]})
-            ),
-            "the revision is not ready: The container exited (exit 1)"
         );
     }
 }
