@@ -5,7 +5,7 @@ app = "shop-statespace"
 primary_region = "iad"
 
 [build]
-  image = "ghcr.io/statespace-tech/statespace:0.4.0"
+  image = "ghcr.io/statespace-tech/statespace:0.4.1"
 
 # The command goes after the image's entry point, ssp.
 [processes]

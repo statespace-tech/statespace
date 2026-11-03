@@ -41,7 +41,7 @@ with 0% traffic and a tag.
 
    ```shell
    gcloud run deploy statespace-proxy --region us-east1 \
-     --image ghcr.io/statespace-tech/statespace:0.4.0 \
+     --image ghcr.io/statespace-tech/statespace:0.4.1 \
      --service-account "$proxy" \
      --set-secrets STATESPACE_TOKEN=statespace-token:latest \
      --set-env-vars STATESPACE_APP=shop-prod \
