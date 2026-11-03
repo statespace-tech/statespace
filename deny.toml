@@ -1,0 +1,48 @@
+# cargo deny check: advisories, licenses, duplicate crates, and sources.
+# CI runs it on every push (.github/workflows/ci.yml).
+
+[graph]
+# The targets of the release archives.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Fail on vulnerabilities, unmaintained crates, and yanked versions. To accept one,
+# add its ID here with the reason.
+unmaintained = "all"
+yanked = "deny"
+ignore = [
+    # paste is unmaintained, with no known vulnerability. It is a proc macro of
+    # cel-interpreter 0.10 and runs only at compile time.
+    { id = "RUSTSEC-2024-0436", reason = "compile-time proc macro of cel-interpreter, no known vulnerability" },
+]
+
+[licenses]
+# The licenses of the dependencies. Each one lets the crate ship under Apache-2.0.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.93
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
