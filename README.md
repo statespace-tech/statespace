@@ -37,7 +37,9 @@ agents can query and act on them.
   <a href="https://docs.statespace.com/guides/kubernetes">Kubernetes</a> ·
   <a href="https://docs.statespace.com/guides/cloud-run">Cloud Run</a> ·
   <a href="https://docs.statespace.com/guides/fargate">ECS Fargate</a> ·
-  <a href="https://docs.statespace.com/guides/fly">Fly.io</a>
+  <a href="https://docs.statespace.com/guides/fly">Fly.io</a> ·
+  <a href="https://docs.statespace.com/guides/s3">S3</a> ·
+  <a href="https://docs.statespace.com/guides/gcs">Cloud Storage</a>
 </p>
 
 ## Quickstart

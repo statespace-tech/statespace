@@ -4,8 +4,32 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
+### Added
+
+- `ssp proxy s3 --bucket <bucket>` and `ssp proxy gcs --bucket <bucket>` serve a static
+  site from a bucket. Live is the bucket root. Each arm is a build folder, such as
+  `s3://acme-site/builds/<commit>/`, that CI records with `files` in the action. The
+  proxy serves the files like a static website endpoint: `index.html` for a folder,
+  then `<path>/index.html` and `<path>.html`, and the build's `404.html` with status
+  404. It never writes to the bucket.
+- A build folder is ready only while its files hash is the hash that CI recorded. The
+  proxy checks each folder again every 60 seconds. A changed or missing build is not
+  ready, its subjects go to live, and `ssp experiment show` gives the reason. The
+  proxy reports live by the files hash of the bucket root, without the folders that
+  hold builds.
+- `--fallback <file>` serves that file of the build, with status 200, for a path
+  without a file extension that matches no file. Use it for a single-page app.
+- `--cache` keeps files in memory, in one cache of 256 MB: the files of an arm until
+  the arm stops, and the files of live for 10 seconds.
+- `ssp proxy s3` uses the AWS default credential chain. `--endpoint` serves an
+  S3-compatible store, such as Cloudflare R2, Backblaze B2, DigitalOcean Spaces, or
+  MinIO. `ssp proxy gcs` uses the metadata server or the Application Default
+  Credentials: a user, a service account key, or workload identity federation.
+
 ### Changed
 
+- Image runtimes ignore files builds, and file runtimes ignore image builds. An arm
+  whose build the runtime cannot run is not ready, and the report says why.
 - **Breaking:** overrides are always on. The `overrides` setting is removed from
   `statespace.toml`.
 - **Breaking:** the override parameter, cookie, and header are all `ssp`:

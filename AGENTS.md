@@ -4,10 +4,13 @@ An experiment compares commits of one app. Each arm is one commit with an exact 
 of the app's subjects. `ssp app`, `ssp experiment`, `ssp token`, and `ssp db` call the
 Statespace API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
 fargate`, and `ssp proxy fly` run a reverse proxy in front of the app's live service.
+`ssp proxy s3` and `ssp proxy gcs` serve a static site from a bucket: live is the
+bucket root, and each arm is a build folder (`src/proxy/orchestrator/files`).
 Every proxy instance routes requests to the arms of running experiments, in the order
 of `statespace.toml`. Only the instance that holds the app's lease starts and stops
 units, one for each arm of each starting or running experiment, through the
-`Orchestrator` trait in `src/proxy/orchestrator`.
+`Orchestrator` trait in `src/proxy/orchestrator`. On a file runtime, every instance
+checks the build folders, because each instance serves the files itself.
 
 `../design.md` is the source of truth for the model.
 

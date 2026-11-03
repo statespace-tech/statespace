@@ -68,7 +68,7 @@ access`. Tell the user, and stop. Retrying does not help.
 3. Write `statespace.toml` in the app's folder. Start from the file in
    [Starter statespace.toml](#starter-statespacetoml). Change the event
    rules and the metric to match the app.
-4. Add the step of `statespace-tech/action@v1` after the image build, in the
+4. Add the step of `statespace-tech/action@v1` after the build, in the
    workflow that builds every commit that can become an arm. See
    [CI step](#ci-step).
 5. Commit `statespace.toml` and the workflow, and push.
@@ -105,6 +105,8 @@ subcommand from where live runs:
 | Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
 | ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
 | Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
+| S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
+| Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
 
 Each subcommand needs `--app` (or `STATESPACE_APP`) and the runtime token
 in `STATESPACE_TOKEN`. Units never get a variable that starts with
@@ -117,6 +119,8 @@ ssp proxy kubernetes --app shop-prod --deployment shop --namespace prod
 ssp proxy fargate    --app shop-prod --cluster shop --service shop \
                      --live-url http://internal-shop.example.com
 ssp proxy fly        --app shop-prod --fly-app shop
+ssp proxy s3         --app site-prod --bucket acme-site
+ssp proxy gcs        --app site-prod --bucket acme-site
 ```
 
 The proxy uses the identity of the platform where it runs. Before the
@@ -203,6 +207,34 @@ Gotchas:
 - Remove the public addresses of the app, so that all visitors go through
   the proxy.
 
+### S3 and Cloud Storage
+
+For a static site. Live is the bucket root. Each build is a folder of
+files in a bucket, such as `s3://acme-site/builds/<commit>/`. The proxy
+serves the files itself, like a static website endpoint, and never writes
+to the bucket.
+
+- `ssp proxy s3` uses the AWS default credential chain. Give it
+  `s3:GetObject` and `s3:ListBucket` on the bucket. `--endpoint` serves an
+  S3-compatible store, such as Cloudflare R2 or MinIO.
+- `ssp proxy gcs` uses the metadata server or the application default
+  credentials. Give it Storage Object Viewer
+  (`roles/storage.objectViewer`) on the bucket.
+
+Gotchas:
+
+- Each deploy of live must run the action too. The proxy finds live by the
+  files hash of the bucket root, without the folders that hold builds.
+- Exclude the build folders from deploys that delete files, such as
+  `aws s3 sync dist/ s3://acme-site/ --delete --exclude 'builds/*'`.
+- A build must not change after CI records it. A changed or missing build
+  is not ready, and its subjects go to live.
+- `--fallback 200.html` serves that file of the build for a path without a
+  file extension that matches no file. Use it for a single-page app.
+- `--cache` keeps files in memory, in one cache of 256 MB.
+- A CDN in front of the proxy must not cache pages per visitor. Arm
+  responses get `Cache-Control: private, no-cache`.
+
 ## Starter statespace.toml
 
 Put this file in the folder of the app's code. It has one experiment, one
@@ -269,6 +301,18 @@ Add this step after the image build. Give the image by digest. The job needs
     image: ghcr.io/acme/shop@${{ steps.build.outputs.digest }}
     path: .          # the folder of statespace.toml
     # app: shop-prod # optional: a build for one app only
+```
+
+For a static site on `ssp proxy s3` or `ssp proxy gcs`, upload the files of
+each commit to a folder, then give the folder as `files`. The location ends
+with `/`. The job needs read access to the folder.
+
+```yaml
+- run: aws s3 sync dist/ s3://acme-site/builds/${{ github.sha }}/
+- uses: statespace-tech/action@v1
+  with:
+    files: s3://acme-site/builds/${{ github.sha }}/
+    path: .
 ```
 
 ## Test a change
