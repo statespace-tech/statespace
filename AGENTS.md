@@ -12,7 +12,7 @@ units, one for each arm of each starting or running experiment, through the
 `Orchestrator` trait in `src/proxy/orchestrator`. On a file runtime, every instance
 checks the build folders, because each instance serves the files itself.
 
-`../design.md` is the source of truth for the model.
+`../design/` is the source of truth for the model.
 
 ## Rules
 
