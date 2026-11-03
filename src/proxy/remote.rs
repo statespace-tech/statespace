@@ -8,7 +8,7 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::config::RuntimeConfig;
+use super::{config::RuntimeConfig, orchestrator::Build};
 use crate::api::segment;
 
 #[derive(Clone)]
@@ -23,6 +23,20 @@ pub struct Remote {
 #[derive(Debug, Deserialize)]
 pub struct Granted {
     pub lease: bool,
+}
+
+/// A recent build of the app: its commit, and its image or files.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+pub struct Recorded {
+    #[allow(dead_code)]
+    pub commit: String,
+    #[serde(flatten)]
+    pub build: Build,
+}
+
+#[derive(Deserialize)]
+struct Builds {
+    builds: Vec<Recorded>,
 }
 
 /// Why the configuration could not be read.
@@ -110,6 +124,22 @@ impl Remote {
     /// Report this instance. The answer says whether it holds the lease.
     pub async fn report(&self, report: &Value) -> anyhow::Result<Granted> {
         Ok(self.post(self.url("/report"), report).await?.json().await?)
+    }
+
+    /// The app's recent builds, newest first. A file runtime leaves out
+    /// their folders when it hashes live.
+    pub async fn builds(&self) -> anyhow::Result<Vec<Recorded>> {
+        let response = self
+            .client
+            .get(self.url("/builds"))
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            bail!("{}", Self::message(response).await);
+        }
+        Ok(response.json::<Builds>().await?.builds)
     }
 
     /// Send a batch of rows of this app.

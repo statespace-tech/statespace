@@ -24,7 +24,7 @@ use tokio::{
 };
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
+    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
 };
 use crate::{cli::DockerArgs, image};
 
@@ -622,7 +622,7 @@ impl Orchestrator for Docker {
         "docker"
     }
 
-    async fn live(&self) -> anyhow::Result<Image> {
+    async fn live(&self) -> anyhow::Result<Live> {
         let image = {
             let slots = self.slots.lock().expect("slots are never poisoned");
             slots
@@ -631,7 +631,7 @@ impl Orchestrator for Docker {
                 .and_then(|slot| slot.running.clone())
         }
         .context("live is not ready yet")?;
-        digest(&image).await
+        digest(&image).await.map(Live::Image)
     }
 
     fn live_address(&self) -> Address {
@@ -640,7 +640,7 @@ impl Orchestrator for Docker {
 
     async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
         let target = Target::Unit(unit.key());
-        self.ensure(target.clone(), unit.image.clone(), Some(unit.clone()));
+        self.ensure(target.clone(), unit.image().to_owned(), Some(unit.clone()));
         Ok(self.address(&target).unwrap_or_default())
     }
 
@@ -667,7 +667,7 @@ impl Orchestrator for Docker {
                     // The image that serves now, else the one that starts.
                     let ready = slot.state == State::Ready;
                     if ready && let Some(image) = &slot.running {
-                        unit.image = image.clone();
+                        unit.build = Build::Image(image.clone());
                     }
                     Some(Running {
                         unit,

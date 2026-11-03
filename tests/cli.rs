@@ -5,10 +5,11 @@
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
 //! Fargate test runs in a sandbox account of AWS when
 //! `STATESPACE_FARGATE_TESTS=1`; the real Fly.io test runs in a dedicated
-//! Fly.io app when `STATESPACE_FLY_TESTS=1`.
+//! Fly.io app when `STATESPACE_FLY_TESTS=1`. `ssp proxy s3` runs against a
+//! stand-in for S3.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     io::{BufRead, BufReader, Read, Write},
     net::{TcpListener, TcpStream},
     path::Path,
@@ -40,12 +41,37 @@ struct Received {
 /// What a stand-in answers: a status, a content type, and a body.
 type Answer = (u16, &'static str, String);
 
+/// An answer with its own headers and a body of any bytes.
+struct Reply {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl From<Answer> for Reply {
+    fn from((status, content_type, body): Answer) -> Self {
+        Self {
+            status,
+            headers: vec![
+                ("content-type".into(), content_type.into()),
+                ("cache-control".into(), "public, max-age=60".into()),
+            ],
+            body: body.into_bytes(),
+        }
+    }
+}
+
 fn json_answer(status: u16, body: &Value) -> Answer {
     (status, "application/json", body.to_string())
 }
 
 /// Serve `handler` on a free port of 127.0.0.1.
 fn serve(handler: impl Fn(&Received) -> Answer + Send + Sync + 'static) -> u16 {
+    serve_replies(move |received| handler(received).into())
+}
+
+/// Serve `handler`, which sets its own headers, on a free port of 127.0.0.1.
+fn serve_replies(handler: impl Fn(&Received) -> Reply + Send + Sync + 'static) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let handler = Arc::new(handler);
@@ -58,7 +84,7 @@ fn serve(handler: impl Fn(&Received) -> Answer + Send + Sync + 'static) -> u16 {
     port
 }
 
-fn answer(mut stream: TcpStream, handler: &dyn Fn(&Received) -> Answer) {
+fn answer(mut stream: TcpStream, handler: &dyn Fn(&Received) -> Reply) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
@@ -92,20 +118,26 @@ fn answer(mut stream: TcpStream, handler: &dyn Fn(&Received) -> Answer) {
         body: serde_json::from_slice(&body)
             .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned())),
     };
-    let (status, content_type, body) = handler(&received);
+    let reply = handler(&received);
+    let status = reply.status;
     // A stand-in that answers 429 asks to wait a second.
     let retry_after = if status == 429 {
         "retry-after: 1\r\n"
     } else {
         ""
     };
+    let headers: String = reply
+        .headers
+        .iter()
+        .map(|(name, value)| format!("{name}: {value}\r\n"))
+        .collect();
     let _ = write!(
         stream,
-        "HTTP/1.1 {status} OK\r\ncontent-type: {content_type}\r\n{retry_after}\
-         cache-control: public, max-age=60\r\ncontent-length: {}\r\n\
-         connection: close\r\n\r\n{body}",
-        body.len()
+        "HTTP/1.1 {status} OK\r\n{headers}{retry_after}content-length: {}\r\n\
+         connection: close\r\n\r\n",
+        reply.body.len()
     );
+    let _ = stream.write_all(&reply.body);
 }
 
 /// A small app that answers with its name and what it received.
@@ -151,6 +183,8 @@ struct Statespace {
     received: Vec<Received>,
     /// How often each experiment was read since its start.
     polls: HashMap<String, usize>,
+    /// The app's recent builds, for the file runtimes.
+    builds: Vec<Value>,
 }
 
 /// An experiment of `shop-prod`, as the API returns it.
@@ -200,6 +234,13 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                     .is_some_and(|app| path == format!("/v1/runtime/apps/{app}")) =>
             {
                 json_answer(200, &state.config)
+            }
+            ("GET", path)
+                if state.config["app"]
+                    .as_str()
+                    .is_some_and(|app| path == format!("/v1/runtime/apps/{app}/builds")) =>
+            {
+                json_answer(200, &json!({"builds": state.builds}))
             }
             ("GET", path) if path.starts_with("/v1/runtime/apps/") => {
                 json_answer(404, &json!({"error": "no app shop-gone"}))
@@ -5974,4 +6015,540 @@ fn a_pending_workspace_gets_one_clear_line() {
     let (ok, _, stderr) = ssp(directory.path(), &api, &token, &["--json", "app", "list"]);
     assert!(!ok);
     assert_eq!(parse(&stderr), json!({ "error": line }));
+}
+
+// ---------------------------------------------------------------------------
+// File runtimes: `ssp proxy s3` serves a static site from build folders.
+
+/// The app of the file runtime tests.
+const SITE_APP: &str = "site-prod";
+
+/// The objects of the test site: live at the bucket root, and the builds of
+/// `LIVE` and `ARM` in `builds/`.
+fn site_objects() -> BTreeMap<String, Vec<u8>> {
+    let live = [
+        ("index.html", "live home\n"),
+        ("about.html", "live about\n"),
+        ("docs/index.html", "live docs\n"),
+        ("404.html", "live 404\n"),
+        ("200.html", "live app\n"),
+        ("assets/app.js", "console.log('live')\n"),
+    ];
+    let arm = [
+        ("index.html", "arm home\n"),
+        ("about/index.html", "arm about\n"),
+        ("404.html", "arm 404\n"),
+        ("200.html", "arm app\n"),
+        ("assets/app.js", "console.log('arm')\n"),
+    ];
+    let mut objects = BTreeMap::new();
+    for (path, content) in live {
+        objects.insert(path.to_owned(), content.as_bytes().to_vec());
+        objects.insert(format!("builds/{LIVE}/{path}"), content.as_bytes().to_vec());
+    }
+    for (path, content) in arm {
+        objects.insert(format!("builds/{ARM}/{path}"), content.as_bytes().to_vec());
+    }
+    objects
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// The files hash v1 of the objects under `prefix`, without those under
+/// `excluded`.
+fn files_hash_of(objects: &BTreeMap<String, Vec<u8>>, prefix: &str, excluded: &[&str]) -> String {
+    let lines: String = objects
+        .iter()
+        .filter(|(key, _)| key.starts_with(prefix) && !key.ends_with('/'))
+        .filter(|(key, _)| !excluded.iter().any(|folder| key.starts_with(folder)))
+        .map(|(key, content)| format!("{}  {}\n", sha256_hex(content), &key[prefix.len()..]))
+        .collect();
+    format!("sha256:{}", sha256_hex(lines.as_bytes()))
+}
+
+#[test]
+fn files_hash_matches_the_shared_vector() {
+    let objects = BTreeMap::from([
+        ("index.html".to_owned(), b"hi\n".to_vec()),
+        ("a/b.txt".to_owned(), b"x".to_vec()),
+        ("404.html".to_owned(), b"<h1>404</h1>\n".to_vec()),
+    ]);
+    assert_eq!(
+        files_hash_of(&objects, "", &[]),
+        "sha256:7726e9b6dbc42157d5aad33260684c5737842185afaf55f654496460ea3b71ea"
+    );
+}
+
+/// The files build of `commit` in the bucket, as Statespace records it.
+fn site_build(scheme: &str, bucket: &str, commit: &str) -> Value {
+    json!({
+        "location": format!("{scheme}://{bucket}/builds/{commit}/"),
+        "hash": files_hash_of(&site_objects(), &format!("builds/{commit}/"), &[]),
+    })
+}
+
+/// The runtime configuration of the test site: `hero` sends 40% to the
+/// build of `LIVE` and 40% to the build of `ARM`; `video` has only an image
+/// build, which a file runtime ignores.
+fn site_config(scheme: &str, bucket: &str) -> Value {
+    json!({
+        "app": SITE_APP, "salt": "salt-1", "settings_hash": "h",
+        "settings": {"redact": []},
+        "live": {"commit": LIVE, "files": site_build(scheme, bucket, LIVE)},
+        "experiments": [
+            {"name": "hero", "version": 1, "state": "running",
+             "subject": null, "eligibility": null,
+             "events": [{"name": "about", "source": "request",
+                         "match": "request.path == \"/about\" && request.status == 200"}],
+             "arms": [
+                 {"commit": LIVE, "files": site_build(scheme, bucket, LIVE),
+                  "ranges": [[0.0, 0.4]]},
+                 {"commit": ARM, "files": site_build(scheme, bucket, ARM),
+                  "ranges": [[0.4, 0.8]]},
+             ]},
+            {"name": "video", "version": 1, "state": "running",
+             "subject": null, "eligibility": null, "events": [],
+             "arms": [{"commit": LANDING, "image": digest('3'), "ranges": [[0.8, 0.9]]}]},
+        ],
+        "lease": null, "poll_interval_seconds": 1,
+    })
+}
+
+/// The app's recent builds: the two files builds and one image build.
+fn site_builds(scheme: &str, bucket: &str) -> Vec<Value> {
+    vec![
+        json!({"commit": ARM, "files": site_build(scheme, bucket, ARM)}),
+        json!({"commit": LIVE, "files": site_build(scheme, bucket, LIVE)}),
+        json!({"commit": LANDING, "image": digest('3')}),
+    ]
+}
+
+/// What a test does to the arm's build folder in the bucket.
+#[derive(Clone, Copy, Debug)]
+enum Change {
+    /// Change `index.html` after the build was recorded.
+    Edit,
+    /// Put `index.html` back as it was recorded.
+    Restore,
+    /// Delete every file of the build.
+    Delete,
+}
+
+/// The status, the headers, and the body of a request to the proxy.
+fn fetch(
+    port: u16,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+) -> Option<(u16, reqwest::header::HeaderMap, String)> {
+    let response = send(port, method, target, headers)?;
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    Some((status, headers, response.text().unwrap_or_default()))
+}
+
+/// The body that a subject gets for `target`.
+fn page_of(port: u16, subject: &str, target: &str) -> Option<String> {
+    let cookie = format!("ssp_sid={subject}");
+    fetch(port, "GET", target, &[("cookie", &cookie)]).map(|(_, _, body)| body)
+}
+
+/// The unit of `commit` in the last report that names units.
+fn reported_unit(state: &Arc<Mutex<Statespace>>, commit: &str) -> Option<Value> {
+    let reports = state.lock().unwrap().reports();
+    let report = reports
+        .iter()
+        .rev()
+        .find(|report| report["units"].is_array())?;
+    report["units"]
+        .as_array()?
+        .iter()
+        .find(|unit| unit["commit"] == commit)
+        .cloned()
+}
+
+/// Check a file runtime over HTTP: live's hash, the split, the path rules,
+/// 404 and the fallback, overrides, the headers of arm responses, the
+/// records, and what a changed or deleted build does. `change` changes the
+/// arm's folder in the bucket.
+fn check_site(
+    name: &str,
+    port: u16,
+    state: &Arc<Mutex<Statespace>>,
+    wait: u64,
+    change: &mut dyn FnMut(Change),
+) {
+    let live_hash = files_hash_of(&site_objects(), "", &["builds/"]);
+    let reference = subject_in(0.0, 0.4);
+    let arm = subject_in(0.4, 0.8);
+    let video = subject_in(0.8, 0.9);
+    let live = subject_in(0.9, 1.0);
+
+    // Live is found by its files hash, without the build folders. The two
+    // files builds are ready; the image build is not run.
+    wait_until(
+        wait,
+        "a report with live's hash and the ready units",
+        || {
+            let ready =
+                |commit| reported_unit(state, commit).is_some_and(|unit| unit["ready"] == true);
+            let reports = state.lock().unwrap().reports();
+            reports.iter().any(|report| {
+                report["orchestrator"] == name && report["live_files"] == live_hash.as_str()
+            }) && ready(LIVE)
+                && ready(ARM)
+        },
+    );
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .all(|report| report.get("live_image").is_none())
+    );
+    let image = reported_unit(state, LANDING).unwrap();
+    assert_eq!(image["ready"], false);
+    let reason = image["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("is the image") && reason.contains("runs folders in"),
+        "{reason}"
+    );
+
+    // The split: each subject gets its build.
+    wait_until(wait, "the arm serves its subjects", || {
+        page_of(port, &arm, "/").as_deref() == Some("arm home\n")
+    });
+    assert_eq!(
+        page_of(port, &reference, "/").as_deref(),
+        Some("live home\n")
+    );
+    assert_eq!(page_of(port, &video, "/").as_deref(), Some("live home\n"));
+    assert_eq!(page_of(port, &live, "/").as_deref(), Some("live home\n"));
+
+    // Arm responses are private and ask again; live keeps its dates.
+    let arm_cookie = format!("ssp_sid={arm}");
+    let live_cookie = format!("ssp_sid={live}");
+    let (status, headers, _) = fetch(port, "GET", "/", &[("cookie", &arm_cookie)]).unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(headers["cache-control"], "private, no-cache");
+    assert!(headers.get("last-modified").is_none());
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/html")
+    );
+    let etag = headers["etag"].to_str().unwrap().to_owned();
+    let (status, _, body) = fetch(
+        port,
+        "GET",
+        "/",
+        &[("cookie", &arm_cookie), ("if-none-match", &etag)],
+    )
+    .unwrap();
+    assert_eq!((status, body.as_str()), (304, ""));
+    let (_, headers, _) = fetch(port, "GET", "/", &[("cookie", &live_cookie)]).unwrap();
+    assert!(headers.get("last-modified").is_some());
+    assert!(headers.get("etag").is_some());
+    assert!(
+        headers
+            .get("cache-control")
+            .is_none_or(|value| !value.to_str().unwrap().contains("private"))
+    );
+
+    // The path rules, 404, and the fallback of a single-page app.
+    for (subject, target, status, body) in [
+        (&arm, "/about", 200, "arm about\n"),
+        (&arm, "/about/", 200, "arm about\n"),
+        (&arm, "/missing.css", 404, "arm 404\n"),
+        (&arm, "/settings/profile", 200, "arm app\n"),
+        (&live, "/about", 200, "live about\n"),
+        (&live, "/docs", 200, "live docs\n"),
+        (&live, "/docs/", 200, "live docs\n"),
+        (&live, "/nope.png", 404, "live 404\n"),
+        (&live, "/settings/profile", 200, "live app\n"),
+    ] {
+        let cookie = format!("ssp_sid={subject}");
+        let (got, headers, text) = fetch(port, "GET", target, &[("cookie", &cookie)]).unwrap();
+        assert_eq!((got, text.as_str()), (status, body), "{target}");
+        if target == "/missing.css" {
+            assert_eq!(headers["cache-control"], "private, no-cache");
+        }
+    }
+    let (_, headers, _) =
+        fetch(port, "GET", "/assets/app.js", &[("cookie", &live_cookie)]).unwrap();
+    assert!(
+        headers["content-type"]
+            .to_str()
+            .unwrap()
+            .contains("javascript")
+    );
+    let (status, _, body) = fetch(port, "HEAD", "/", &[("cookie", &arm_cookie)]).unwrap();
+    assert_eq!((status, body.as_str()), (200, ""));
+    let (status, headers, _) = fetch(port, "POST", "/", &[("cookie", &arm_cookie)]).unwrap();
+    assert_eq!(status, 405);
+    assert_eq!(headers["allow"], "GET, HEAD");
+
+    // An override link sets the cookie and returns to the clean URL.
+    let link = "hero:a1b2c3d";
+    let (status, headers, _) = fetch(
+        port,
+        "GET",
+        &format!("/about?ssp={link}"),
+        &[("cookie", &live_cookie)],
+    )
+    .unwrap();
+    assert_eq!(status, 302);
+    assert_eq!(headers["location"], "/about");
+    assert!(headers.get_all("set-cookie").iter().any(|cookie| {
+        cookie
+            .to_str()
+            .unwrap()
+            .starts_with(&format!("ssp={link};"))
+    }));
+    let kept = format!("{live_cookie}; ssp={link}");
+    let (status, headers, body) = fetch(port, "GET", "/about", &[("cookie", &kept)]).unwrap();
+    assert_eq!((status, body.as_str()), (200, "arm about\n"));
+    assert_eq!(headers["cache-control"], "private, no-cache");
+    assert_eq!(
+        fetch(port, "GET", "/", &[("ssp", link)]).map(|(_, _, body)| body),
+        Some("arm home\n".into())
+    );
+
+    // The arm's requests, runs, and events are recorded; live's are not.
+    wait_until(wait, "the arm's requests and events", || {
+        let state = state.lock().unwrap();
+        state
+            .rows("requests")
+            .iter()
+            .any(|row| row["arm"] == ARM && row["path"] == "/about" && row["override"] == true)
+            && state
+                .rows("events")
+                .iter()
+                .any(|row| row["name"] == "about" && row["arm"] == ARM)
+            && state
+                .rows("runs")
+                .iter()
+                .any(|row| row["arm"] == ARM && row["reason"] == "override")
+    });
+    assert!(
+        state
+            .lock()
+            .unwrap()
+            .rows("requests")
+            .iter()
+            .all(|row| !row["arm"].is_null())
+    );
+
+    // A build that changed after it was recorded is not ready, and its
+    // subjects go to live. When it is back, the arm serves again.
+    change(Change::Edit);
+    wait_until(wait, "the changed build is not ready", || {
+        reported_unit(state, ARM).is_some_and(|unit| {
+            unit["ready"] == false
+                && unit["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("changed after it was recorded"))
+        })
+    });
+    assert_eq!(page_of(port, &arm, "/").as_deref(), Some("live home\n"));
+    change(Change::Restore);
+    wait_until(wait, "the restored build serves again", || {
+        page_of(port, &arm, "/").as_deref() == Some("arm home\n")
+    });
+
+    // A deleted build sends its subjects to live, and says where it was.
+    change(Change::Delete);
+    wait_until(wait, "the deleted build is not ready", || {
+        reported_unit(state, ARM).is_some_and(|unit| {
+            unit["ready"] == false
+                && unit["reason"]
+                    .as_str()
+                    .is_some_and(|reason| reason.contains("is missing at"))
+        })
+    });
+    assert_eq!(page_of(port, &arm, "/").as_deref(), Some("live home\n"));
+    assert_eq!(
+        page_of(port, &reference, "/").as_deref(),
+        Some("live home\n")
+    );
+}
+
+/// An in-memory bucket for the stand-in of S3. Each object has a version
+/// that changes when its content does.
+#[derive(Default)]
+struct FakeBucket {
+    objects: BTreeMap<String, (Vec<u8>, u64)>,
+    version: u64,
+    /// The keys read, in order.
+    reads: Vec<String>,
+}
+
+impl FakeBucket {
+    fn with(objects: BTreeMap<String, Vec<u8>>) -> Self {
+        let mut bucket = Self::default();
+        for (key, content) in objects {
+            bucket.put(&key, content);
+        }
+        bucket
+    }
+
+    fn put(&mut self, key: &str, content: Vec<u8>) {
+        self.version += 1;
+        self.objects.insert(key.to_owned(), (content, self.version));
+    }
+
+    /// Apply a change to the arm's build folder.
+    fn change(&mut self, change: Change) {
+        let index = format!("builds/{ARM}/index.html");
+        match change {
+            Change::Edit => self.put(&index, b"arm home, edited\n".to_vec()),
+            Change::Restore => self.put(&index, b"arm home\n".to_vec()),
+            Change::Delete => self
+                .objects
+                .retain(|key, _| !key.starts_with(&format!("builds/{ARM}/"))),
+        }
+    }
+
+    /// An object as a stand-in serves it: HTML files with their type, and
+    /// other files with `untyped`, as when no type was uploaded.
+    fn object(&mut self, key: &str, untyped: &str) -> Reply {
+        self.reads.push(key.to_owned());
+        let Some((content, version)) = self.objects.get(key) else {
+            return Reply {
+                status: 404,
+                headers: vec![("content-type".into(), "application/xml".into())],
+                body: b"<Error><Code>NoSuchKey</Code></Error>".to_vec(),
+            };
+        };
+        let content_type = if key.ends_with(".html") {
+            "text/html"
+        } else {
+            untyped
+        };
+        Reply {
+            status: 200,
+            headers: vec![
+                ("content-type".into(), content_type.into()),
+                ("etag".into(), format!("\"v{version}\"")),
+                (
+                    "last-modified".into(),
+                    "Tue, 03 Nov 2026 06:30:14 GMT".into(),
+                ),
+            ],
+            body: content.clone(),
+        }
+    }
+}
+
+/// The value of a query parameter, decoded.
+fn query_value(query: &str, name: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then(|| percent_decode(&value.replace('+', " ")))
+    })
+}
+
+/// A stand-in for S3 with path-style URLs: ListObjectsV2 and GetObject.
+fn fake_s3(bucket: Arc<Mutex<FakeBucket>>) -> u16 {
+    serve_replies(move |received| {
+        let mut bucket = bucket.lock().unwrap();
+        let Some(rest) = received.path.strip_prefix(&format!("/{SITE_BUCKET}/")) else {
+            return json_answer(404, &json!({})).into();
+        };
+        if rest.is_empty() {
+            let prefix = query_value(&received.query, "prefix").unwrap_or_default();
+            let contents: String = bucket
+                .objects
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, (content, version))| {
+                    format!(
+                        "<Contents><Key>{key}</Key><ETag>&quot;v{version}&quot;</ETag>\
+                         <Size>{}</Size></Contents>",
+                        content.len()
+                    )
+                })
+                .collect();
+            return Reply {
+                status: 200,
+                headers: vec![("content-type".into(), "application/xml".into())],
+                body: format!(
+                    "<ListBucketResult><IsTruncated>false</IsTruncated>{contents}</ListBucketResult>"
+                )
+                .into_bytes(),
+            };
+        }
+        bucket.object(&percent_decode(rest), "binary/octet-stream")
+    })
+}
+
+/// The bucket of the stand-in tests.
+const SITE_BUCKET: &str = "acme-site";
+
+/// A Statespace stand-in for the test site in `scheme://bucket`.
+fn site_statespace(scheme: &str, bucket: &str) -> Arc<Mutex<Statespace>> {
+    Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: site_config(scheme, bucket),
+        builds: site_builds(scheme, bucket),
+        ..Statespace::default()
+    }))
+}
+
+#[test]
+fn s3_proxies_serve_builds_from_folders() {
+    let bucket = Arc::new(Mutex::new(FakeBucket::with(site_objects())));
+    let s3 = fake_s3(bucket.clone());
+    let state = site_statespace("s3", SITE_BUCKET);
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("STATESPACE_CHECK_EVERY", "1")
+        .env("AWS_ACCESS_KEY_ID", "AKIDSTANDIN")
+        .env("AWS_SECRET_ACCESS_KEY", "secret-standin")
+        .env("AWS_CONFIG_FILE", directory.path().join("aws-config"))
+        .env(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            directory.path().join("aws-credentials"),
+        )
+        .env("AWS_EC2_METADATA_DISABLED", "true")
+        .env_remove("AWS_REGION")
+        .env_remove("AWS_DEFAULT_REGION")
+        .env_remove("AWS_PROFILE")
+        .args(["proxy", "s3", "--app", SITE_APP, "--bucket", SITE_BUCKET])
+        .args(["--endpoint", &format!("http://127.0.0.1:{s3}")])
+        .args(["--cache", "--fallback", "200.html"]);
+    let (_proxy, port) = spawn_proxy(command);
+
+    check_site("s3", port, &state, 30, &mut |change| {
+        bucket.lock().unwrap().change(change)
+    });
+
+    // With --cache, a live file is read once in 10 seconds.
+    let live = subject_in(0.9, 1.0);
+    page_of(port, &live, "/about").unwrap();
+    let reads = |bucket: &Arc<Mutex<FakeBucket>>| {
+        bucket
+            .lock()
+            .unwrap()
+            .reads
+            .iter()
+            .filter(|key| *key == "about.html")
+            .count()
+    };
+    let before = reads(&bucket);
+    page_of(port, &live, "/about").unwrap();
+    assert_eq!(reads(&bucket), before);
 }

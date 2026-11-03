@@ -25,7 +25,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
+    Address, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    channel,
 };
 use crate::{cli::CloudRunArgs, image};
 
@@ -297,7 +298,7 @@ impl CloudRun {
         Some(Unit {
             experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
             commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
-            image: revision["containers"][index]["image"].as_str()?.to_owned(),
+            build: Build::Image(revision["containers"][index]["image"].as_str()?.to_owned()),
             share: 0.0,
         })
     }
@@ -309,12 +310,12 @@ impl Orchestrator for CloudRun {
     }
 
     /// The image of the revision that gets the most traffic.
-    async fn live(&self) -> anyhow::Result<Image> {
+    async fn live(&self) -> anyhow::Result<Live> {
         let service = self.get_service().await?;
         let revision =
             serving_revision(&service).context("no revision of the service gets traffic")?;
         let revision = self.get_revision(&revision).await?;
-        self.revision_digest(&revision).await
+        self.revision_digest(&revision).await.map(Live::Image)
     }
 
     fn live_address(&self) -> Address {
@@ -812,7 +813,7 @@ pub fn new_revision(service: &mut Value, unit: &Unit, name: &str, tag: &str) -> 
     let container = template["containers"]
         .get_mut(index)
         .context("the service's template has no container")?;
-    container["image"] = json!(unit.image);
+    container["image"] = json!(unit.image());
     template["revision"] = json!(name);
     if !template["labels"].is_object() {
         template["labels"] = json!({});
@@ -894,7 +895,7 @@ mod tests {
         Unit {
             experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
-            image: format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64)),
+            build: Build::Image(format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64))),
             share: 0.05,
         }
     }
@@ -906,7 +907,7 @@ mod tests {
         assert_eq!(tag, "ssp-checkout-a1b2c3d4e5f6");
         new_revision(&mut changed, &arm(), "shop-ssp-1a2b3c", &tag).unwrap();
         let template = &changed["template"];
-        assert_eq!(template["containers"][1]["image"], arm().image);
+        assert_eq!(template["containers"][1]["image"], arm().image());
         assert_eq!(template["containers"][0]["image"], "otel/collector");
         assert_eq!(template["containers"][1]["env"][0]["value"], "prod");
         assert_eq!(

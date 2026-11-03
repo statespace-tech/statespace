@@ -28,8 +28,8 @@ use self::{
     assign::Routing,
     lease::Lease,
     orchestrator::{
-        Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker, fargate::Fargate,
-        fly::Fly, kubernetes::Kubernetes,
+        Build, Live, Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
+        fargate::Fargate, files::s3::S3, fly::Fly, kubernetes::Kubernetes,
     },
     recorder::{Origin, Recorder, Source},
     remote::{ConfigError, Remote},
@@ -77,6 +77,11 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 ProxyCommand::Fly { common, fly } => {
                     let remote = connect(endpoint, &common).await?;
                     let orchestrator = Fly::new(&common.app, fly).await?;
+                    serve(Arc::new(orchestrator), common, remote).await
+                }
+                ProxyCommand::S3 { common, s3 } => {
+                    let remote = connect(endpoint, &common).await?;
+                    let orchestrator = S3::connect(s3, remote.clone()).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
             }
@@ -131,13 +136,13 @@ pub struct Runtime<O> {
     pub in_flight: std::sync::atomic::AtomicUsize,
     /// The lease holder's work: when it last started or stopped each unit,
     /// and the readers of each unit's output.
-    attempts: Mutex<HashMap<(UnitKey, String, bool), Instant>>,
+    attempts: Mutex<HashMap<(UnitKey, Build, bool), Instant>>,
     /// Why the last start of a unit failed, for the report.
     failures: Mutex<HashMap<UnitKey, String>>,
     /// The version that each unit started for, so that its stop is recorded
     /// with that version after the experiment no longer runs.
     versions: Mutex<HashMap<UnitKey, i64>>,
-    readers: Mutex<HashMap<UnitKey, (String, JoinHandle<()>)>>,
+    readers: Mutex<HashMap<UnitKey, (Build, JoinHandle<()>)>>,
     /// Problems already printed, so each is printed once.
     noted: Mutex<HashSet<String>>,
 }
@@ -163,7 +168,7 @@ impl<O: Orchestrator> Runtime<O> {
         current.routing.clone().filter(|_| fresh)
     }
 
-    /// Where a unit that is ready, runs the image the configuration names,
+    /// Where a unit that is ready, runs the build the configuration names,
     /// and did not just fail takes traffic.
     pub fn address(&self, routing: &Routing, key: &UnitKey) -> Option<String> {
         let suspected = self
@@ -175,12 +180,12 @@ impl<O: Orchestrator> Runtime<O> {
         if suspected {
             return None;
         }
-        let wanted = routing.image(key)?;
+        let wanted = routing.build(key)?;
         let units = self.units.read().expect("units are never poisoned");
         units
             .get(key)
             .filter(|running| {
-                running.ready && running.unit.image == wanted && !running.address.is_empty()
+                running.ready && running.unit.build == *wanted && !running.address.is_empty()
             })
             .map(|running| running.address.clone())
     }
@@ -233,6 +238,11 @@ impl<O: Orchestrator> Runtime<O> {
                     }
                 }
             }
+            if !self.lease.held(Instant::now())
+                && let Some(routing) = self.routing()
+            {
+                self.orchestrator.follow(&self.desired(&routing));
+            }
             self.observe().await;
             if self.lease.held(Instant::now()) {
                 self.reconcile().await;
@@ -255,7 +265,7 @@ impl<O: Orchestrator> Runtime<O> {
                     let key = entry.unit.key();
                     let was_ready = previous
                         .get(&key)
-                        .is_some_and(|old| old.ready && old.unit.image == entry.unit.image);
+                        .is_some_and(|old| old.ready && old.unit.build == entry.unit.build);
                     if holder
                         && entry.ready
                         && !was_ready
@@ -264,7 +274,7 @@ impl<O: Orchestrator> Runtime<O> {
                         self.recorder.lifecycle(
                             &Self::origin(routing, &key),
                             "ready",
-                            json!({ "image": entry.unit.image, "address": entry.address }),
+                            with_build(&entry.unit.build, json!({ "address": entry.address })),
                         );
                     }
                     units.insert(key, entry);
@@ -280,7 +290,7 @@ impl<O: Orchestrator> Runtime<O> {
         let Some(routing) = self.routing() else {
             return;
         };
-        let desired = routing.units();
+        let desired = self.desired(&routing);
         let running: Vec<Running> = self
             .units
             .read()
@@ -291,8 +301,8 @@ impl<O: Orchestrator> Runtime<O> {
         for unit in &desired {
             let present = running
                 .iter()
-                .any(|entry| entry.unit.key() == unit.key() && entry.unit.image == unit.image);
-            if present || !self.attempt(&unit.key(), &unit.image, true) {
+                .any(|entry| entry.unit.key() == unit.key() && entry.unit.build == unit.build);
+            if present || !self.attempt(&unit.key(), &unit.build, true) {
                 continue;
             }
             let origin = Self::origin(&routing, &unit.key());
@@ -304,13 +314,13 @@ impl<O: Orchestrator> Runtime<O> {
             }
             match self.orchestrator.start(unit).await {
                 Ok(_) => {
-                    eprintln!("[ssp] starting {} from {}", unit.key(), unit.image);
+                    eprintln!("[ssp] starting {} from {}", unit.key(), unit.build);
                     self.failures
                         .lock()
                         .expect("failures are never poisoned")
                         .remove(&unit.key());
                     self.recorder
-                        .lifecycle(&origin, "started", json!({ "image": unit.image }));
+                        .lifecycle(&origin, "started", with_build(&unit.build, json!({})));
                 }
                 Err(error) => {
                     eprintln!("[ssp] could not start {}: {error:#}", unit.key());
@@ -321,7 +331,7 @@ impl<O: Orchestrator> Runtime<O> {
                     self.recorder.lifecycle(
                         &origin,
                         "failed",
-                        json!({ "image": unit.image, "error": format!("{error:#}") }),
+                        with_build(&unit.build, json!({ "error": format!("{error:#}") })),
                     );
                 }
             }
@@ -333,7 +343,7 @@ impl<O: Orchestrator> Runtime<O> {
             .retain(|key, _| wanted.contains(key));
         for entry in &running {
             let key = entry.unit.key();
-            if wanted.contains(&key) || !self.attempt(&key, &entry.unit.image, false) {
+            if wanted.contains(&key) || !self.attempt(&key, &entry.unit.build, false) {
                 continue;
             }
             let mut origin = Self::origin(&routing, &key);
@@ -349,7 +359,7 @@ impl<O: Orchestrator> Runtime<O> {
                     self.recorder.lifecycle(
                         &origin,
                         "stopped",
-                        json!({ "image": entry.unit.image }),
+                        with_build(&entry.unit.build, json!({})),
                     );
                 }
                 Err(error) => eprintln!("[ssp] could not stop {key}: {error:#}"),
@@ -370,10 +380,17 @@ impl<O: Orchestrator> Runtime<O> {
             let key = unit.key();
             let running = units
                 .get(&key)
-                .filter(|running| running.unit.image == unit.image);
+                .filter(|running| running.unit.build == unit.build);
             let ready = running.is_some_and(|running| running.ready);
             let reason = match running {
                 _ if ready => None,
+                _ if !self.orchestrator.runs(&unit.build) => Some(format!(
+                    "the build of {} is {}, and ssp proxy {} runs {}",
+                    short(&key.commit),
+                    describe(&unit.build),
+                    self.orchestrator.name(),
+                    self.orchestrator.kind(),
+                )),
                 Some(running) => running.reason.clone().or_else(|| Some("starting".into())),
                 None => Some(
                     failures
@@ -387,7 +404,7 @@ impl<O: Orchestrator> Runtime<O> {
                 "commit": key.commit,
                 "address": running.map(|running| running.address.clone()),
                 "ready": ready,
-                "reason": reason,
+                "reason": reason.as_deref().map(clip),
             }));
             listed.insert(key);
         }
@@ -398,7 +415,7 @@ impl<O: Orchestrator> Runtime<O> {
                     "commit": key.commit,
                     "address": null,
                     "ready": false,
-                    "reason": problem,
+                    "reason": clip(&problem),
                 }));
             }
         }
@@ -416,13 +433,23 @@ impl<O: Orchestrator> Runtime<O> {
         report
     }
 
+    /// The units that should run here: those of the routing whose build
+    /// this orchestrator runs.
+    fn desired(&self, routing: &Routing) -> Vec<Unit> {
+        routing
+            .units()
+            .into_iter()
+            .filter(|unit| self.orchestrator.runs(&unit.build))
+            .collect()
+    }
+
     /// Whether to start (or stop) a unit now: not more than once a minute
-    /// for the same unit and image.
-    fn attempt(&self, key: &UnitKey, image: &str, start: bool) -> bool {
+    /// for the same unit and build.
+    fn attempt(&self, key: &UnitKey, build: &Build, start: bool) -> bool {
         let mut attempts = self.attempts.lock().expect("attempts are never poisoned");
         let now = Instant::now();
         attempts.retain(|_, at| now.duration_since(*at) < RETRY_AFTER);
-        let entry = (key.clone(), image.to_owned(), start);
+        let entry = (key.clone(), build.clone(), start);
         if attempts.contains_key(&entry) {
             return false;
         }
@@ -433,10 +460,10 @@ impl<O: Orchestrator> Runtime<O> {
     /// Read each desired unit's lines, and stop reading the others.
     fn read_output(self: &Arc<Self>, desired: &[Unit]) {
         let mut readers = self.readers.lock().expect("readers are never poisoned");
-        readers.retain(|key, (image, task)| {
+        readers.retain(|key, (build, task)| {
             let keep = desired
                 .iter()
-                .any(|unit| &unit.key() == key && &unit.image == image)
+                .any(|unit| &unit.key() == key && &unit.build == build)
                 && !task.is_finished();
             if !keep {
                 task.abort();
@@ -449,7 +476,7 @@ impl<O: Orchestrator> Runtime<O> {
             }
             let stream = self.orchestrator.output(unit);
             let task = tokio::spawn(record_output(self.clone(), unit.key(), stream));
-            readers.insert(unit.key(), (unit.image.clone(), task));
+            readers.insert(unit.key(), (unit.build.clone(), task));
         }
     }
 
@@ -462,6 +489,36 @@ impl<O: Orchestrator> Runtime<O> {
         {
             task.abort();
         }
+    }
+}
+
+/// The fields of a lifecycle row: `extra` and the build, `{"image": …}` or
+/// `{"files": {…}}`.
+fn with_build(build: &Build, mut extra: Value) -> Value {
+    if let (Some(object), Value::Object(fields)) = (extra.as_object_mut(), build.fields()) {
+        object.extend(fields);
+    }
+    extra
+}
+
+/// How long a unit's reason may be in a report.
+const REASON_CHARS: usize = 1500;
+
+/// A reason cut to the length a report allows.
+fn clip(reason: &str) -> String {
+    reason.chars().take(REASON_CHARS).collect()
+}
+
+/// The first 7 characters of a commit.
+fn short(commit: &str) -> &str {
+    &commit[..commit.len().min(7)]
+}
+
+/// A build for a person: `the image <image>` or `files at <location>`.
+fn describe(build: &Build) -> String {
+    match build {
+        Build::Image(image) => format!("the image {image}"),
+        Build::Files(files) => format!("files at {}", files.location),
     }
 }
 
@@ -506,21 +563,18 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
             );
             dropped = now_dropped;
         }
-        let live_image = match runtime.orchestrator.live().await {
-            Ok(image) => Some(image),
-            Err(error) => {
-                runtime.note(format!("could not read the live image: {error:#}"));
-                None
-            }
-        };
         let routing = runtime.routing();
         let mut body = json!({
             "instance": runtime.instance,
             "version": env!("CARGO_PKG_VERSION"),
             "orchestrator": runtime.orchestrator.name(),
-            "live_image": live_image,
             "settings_hash": routing.as_ref().and_then(|routing| routing.settings_hash.clone()),
         });
+        match runtime.orchestrator.live().await {
+            Ok(Live::Image(image)) => body["live_image"] = json!(image),
+            Ok(Live::Files(hash)) => body["live_files"] = json!(hash),
+            Err(error) => runtime.note(format!("could not read what live runs: {error:#}")),
+        }
         if runtime.lease.held(sent) {
             body["units"] = json!(runtime.unit_report(routing.as_deref()));
         }

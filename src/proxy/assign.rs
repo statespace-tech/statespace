@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use super::{
     config::{ArmConfig, ExperimentConfig, RuntimeConfig, State},
     events::Events,
-    orchestrator::{Unit, UnitKey},
+    orchestrator::{Build, Unit, UnitKey},
 };
 
 /// The visitor cookie the proxy sets with the default subject.
@@ -178,7 +178,7 @@ impl Routing {
                 experiment.arms.iter().map(|arm| Unit {
                     experiment: experiment.name.clone(),
                     commit: arm.commit.clone(),
-                    image: arm.image.clone(),
+                    build: arm.build.clone(),
                     share: size(&arm.ranges),
                 })
             })
@@ -210,10 +210,10 @@ impl Routing {
             .find(|experiment| experiment.name == name)
     }
 
-    /// The image a unit runs now.
-    pub fn image(&self, key: &UnitKey) -> Option<&str> {
+    /// The build a unit runs now.
+    pub fn build(&self, key: &UnitKey) -> Option<&Build> {
         let arm = self.experiment(&key.experiment)?.arm(&key.commit)?;
-        Some(arm.image.as_str())
+        Some(&arm.build)
     }
 
     /// The version of a unit's experiment.
@@ -714,8 +714,8 @@ mod tests {
         assert!((units[1].share - 0.5).abs() < 1e-12);
         assert_eq!(routing.version(&key("checkout", ARM)), Some(3));
         assert_eq!(
-            routing.image(&key("us-landing", LANDING)),
-            Some("shop@sha256:3")
+            routing.build(&key("us-landing", LANDING)),
+            Some(&Build::Image("shop@sha256:3".into()))
         );
         let decision = decide(&routing, &request(Some("u_1"), None, "US"), |_| true);
         assert_eq!(decision.serve, None);

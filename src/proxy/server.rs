@@ -1,5 +1,6 @@
 //! The public listener: assign each request, then forward it to live or to
-//! the arm of a running experiment that takes it.
+//! the arm of a running experiment that takes it. On a file runtime, the
+//! proxy answers from the files of live or of the arm instead.
 
 use std::{
     convert::Infallible,
@@ -24,7 +25,7 @@ use serde_json::{Map, Value, json};
 use super::{
     Runtime,
     assign::{self, Decision, OVERRIDE, OVERRIDE_HEADER, Refused, Routing, SUBJECT_COOKIE},
-    orchestrator::{Orchestrator, UnitKey},
+    orchestrator::{FileRequest, Orchestrator, UnitKey},
     recorder::{Origin, RequestRow, Source},
     redact,
 };
@@ -268,6 +269,67 @@ async fn route<O: Orchestrator>(
     if address.is_empty() {
         return text(StatusCode::SERVICE_UNAVAILABLE, "the app is starting");
     }
+    // A file runtime answers from the files of live or of the arm.
+    let asked = FileRequest {
+        method: method.clone(),
+        path: path.clone(),
+        if_none_match: request
+            .headers()
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned),
+    };
+    if let Some(answer) = runtime.orchestrator.serve(&address, &asked).await {
+        let served = match answer {
+            Ok(served) => served,
+            Err(error) => {
+                let Some(key) = serve.take() else {
+                    eprintln!("[ssp] live could not be read: {error:#}");
+                    return text(StatusCode::BAD_GATEWAY, "the site could not be read");
+                };
+                // Fail open: the arm's subjects get live meanwhile.
+                eprintln!("[ssp] {key} could not be read: {error:#}");
+                runtime.suspect(&key);
+                let live = runtime.orchestrator.live_address();
+                match runtime.orchestrator.serve(&live, &asked).await {
+                    Some(Ok(served)) => served,
+                    _ => return text(StatusCode::BAD_GATEWAY, "the site could not be read"),
+                }
+            }
+        };
+        let record = Recording::of(
+            runtime,
+            &serve,
+            &routing,
+            &decision,
+            &view,
+            &method,
+            &path,
+            &query,
+            served.status,
+            started,
+            over,
+        );
+        if let Some(record) = record {
+            record.finish(Some(served.body.len() as u64));
+        }
+        let mut response = Response::new(
+            Full::new(served.body)
+                .map_err(|never| match never {})
+                .boxed(),
+        );
+        *response.status_mut() = served.status;
+        *response.headers_mut() = served.headers;
+        if let Some(cookie) = override_change
+            && let Ok(value) = HeaderValue::from_str(&cookie)
+        {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+        if serve.is_some() {
+            make_private(response.headers_mut());
+        }
+        return response;
+    }
     prepare_headers(
         &mut request,
         peer,
@@ -329,51 +391,10 @@ async fn route<O: Orchestrator>(
         }
     };
     let status = response.status();
-    let first_byte_ms = started.elapsed().as_secs_f64() * 1000.0;
-    let request_bytes = view["headers"]["content-length"]
-        .as_str()
-        .and_then(|length| length.parse::<u64>().ok());
 
-    // Only the units are recorded; live never is.
-    let recorder = runtime.recorder.clone();
-    let record = serve.clone().zip(routing.clone()).map(|(key, routing)| {
-        let origin = Runtime::<O>::origin(&routing, &key);
-        let subject = decision.subject.clone();
-        let method = method.as_str().to_owned();
-        let view = view.clone();
-        move |response_bytes: Option<u64>| {
-            let ms = started.elapsed().as_secs_f64() * 1000.0;
-            let path = redact::redact(&path, &routing.redact);
-            let query = redact::redact(&query, &routing.redact);
-            let request_id = recorder.request(
-                &origin,
-                RequestRow {
-                    subject: subject.as_deref(),
-                    method: &method,
-                    path: &path,
-                    query: &query,
-                    status: status.as_u16(),
-                    ms,
-                    first_byte_ms: Some(first_byte_ms),
-                    request_bytes,
-                    response_bytes,
-                    over,
-                },
-            );
-            // The unit's experiment decides which events apply.
-            let Some(events) = routing.events(&key) else {
-                return;
-            };
-            for name in events.request(&view, status.as_u16(), ms) {
-                recorder.event(
-                    &origin,
-                    name,
-                    subject.as_deref(),
-                    Source::Request(&request_id),
-                );
-            }
-        }
-    });
+    let record = Recording::of(
+        runtime, &serve, &routing, &decision, &view, &method, &path, &query, status, started, over,
+    );
 
     if status == StatusCode::SWITCHING_PROTOCOLS {
         if let Some(client_upgrade) = client_upgrade {
@@ -389,7 +410,7 @@ async fn route<O: Orchestrator>(
             });
         }
         if let Some(record) = record {
-            record(None);
+            record.finish(None);
         }
         let (parts, _) = response.into_parts();
         return Response::from_parts(parts, Empty::new().map_err(|never| match never {}).boxed());
@@ -406,7 +427,7 @@ async fn route<O: Orchestrator>(
         make_private(&mut parts.headers);
     }
     let finish: Option<Box<dyn FnOnce(u64) + Send + Sync>> = record.map(|record| {
-        Box::new(move |bytes: u64| record(Some(bytes))) as Box<dyn FnOnce(u64) + Send + Sync>
+        Box::new(move |bytes: u64| record.finish(Some(bytes))) as Box<dyn FnOnce(u64) + Send + Sync>
     });
     Response::from_parts(
         parts,
@@ -417,6 +438,97 @@ async fn route<O: Orchestrator>(
         }
         .boxed(),
     )
+}
+
+/// A request to a unit, recorded when its response ends. Live is never
+/// recorded.
+struct Recording {
+    recorder: Arc<super::recorder::Recorder>,
+    routing: Arc<Routing>,
+    key: UnitKey,
+    origin: Origin,
+    subject: Option<String>,
+    method: String,
+    path: String,
+    query: String,
+    view: Value,
+    status: StatusCode,
+    started: Instant,
+    first_byte_ms: f64,
+    request_bytes: Option<u64>,
+    over: bool,
+}
+
+impl Recording {
+    /// The recording of a response from `serve`, or `None` for live.
+    #[allow(clippy::too_many_arguments)]
+    fn of<O: Orchestrator>(
+        runtime: &Runtime<O>,
+        serve: &Option<UnitKey>,
+        routing: &Option<Arc<Routing>>,
+        decision: &Decision,
+        view: &Value,
+        method: &Method,
+        path: &str,
+        query: &str,
+        status: StatusCode,
+        started: Instant,
+        over: bool,
+    ) -> Option<Self> {
+        let (key, routing) = serve.clone().zip(routing.clone())?;
+        Some(Self {
+            recorder: runtime.recorder.clone(),
+            origin: Runtime::<O>::origin(&routing, &key),
+            routing,
+            key,
+            subject: decision.subject.clone(),
+            method: method.as_str().to_owned(),
+            path: path.to_owned(),
+            query: query.to_owned(),
+            view: view.clone(),
+            status,
+            started,
+            first_byte_ms: started.elapsed().as_secs_f64() * 1000.0,
+            request_bytes: view["headers"]["content-length"]
+                .as_str()
+                .and_then(|length| length.parse::<u64>().ok()),
+            over,
+        })
+    }
+
+    /// Record the request and the request events it matches.
+    fn finish(self, response_bytes: Option<u64>) {
+        let ms = self.started.elapsed().as_secs_f64() * 1000.0;
+        let path = redact::redact(&self.path, &self.routing.redact);
+        let query = redact::redact(&self.query, &self.routing.redact);
+        let request_id = self.recorder.request(
+            &self.origin,
+            RequestRow {
+                subject: self.subject.as_deref(),
+                method: &self.method,
+                path: &path,
+                query: &query,
+                status: self.status.as_u16(),
+                ms,
+                first_byte_ms: Some(self.first_byte_ms),
+                request_bytes: self.request_bytes,
+                response_bytes,
+                over: self.over,
+            },
+        );
+        // The unit's experiment decides which events apply.
+        let Some(events) = self.routing.events(&self.key) else {
+            return;
+        };
+        for name in events.request(&self.view, self.status.as_u16(), ms) {
+            self.recorder.event(
+                &self.origin,
+                name,
+                self.subject.as_deref(),
+                Source::Request(&request_id),
+            );
+        }
+    }
 }
 
 /// What the override of a request asks for.

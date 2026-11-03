@@ -4,6 +4,8 @@
 
 use serde::Deserialize;
 
+use super::orchestrator::Build;
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct RuntimeConfig {
     #[allow(dead_code)]
@@ -82,13 +84,17 @@ pub struct EventConfig {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Live {
     pub commit: String,
-    pub image: String,
+    /// The image or the files of live's build.
+    #[serde(flatten)]
+    pub build: Build,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct ArmConfig {
     pub commit: String,
-    pub image: String,
+    /// The image or the files of the arm's build.
+    #[serde(flatten)]
+    pub build: Build,
     /// Half-open `[start, end)` intervals of the app's hash space.
     pub ranges: Vec<[f64; 2]>,
 }
@@ -132,5 +138,31 @@ mod tests {
         assert_eq!(checkout.arms[0].ranges, [[0.05, 0.1]]);
         assert_eq!(config.experiments[1].state, State::Unknown);
         assert_eq!(config.experiments[1].subject, None);
+        assert_eq!(checkout.arms[0].build, Build::Image("shop@sha256:2".into()));
+    }
+
+    #[test]
+    fn reads_files_builds() {
+        let config: RuntimeConfig = serde_json::from_str(
+            r#"{"app": "site-prod", "salt": "s",
+                "live": {"commit": "c0ffee1",
+                         "files": {"location": "s3://acme-site/builds/c0ffee1/",
+                                   "hash": "sha256:1"}},
+                "experiments": [
+                  {"name": "hero", "version": 1, "state": "running",
+                   "arms": [{"commit": "a1b2c3d", "ranges": [[0.0, 0.5]],
+                             "files": {"location": "s3://acme-site/builds/a1b2c3d/",
+                                       "hash": "sha256:2"}}]}
+                ]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.experiments[0].arms[0].build,
+            Build::Files(super::super::orchestrator::Files {
+                location: "s3://acme-site/builds/a1b2c3d/".into(),
+                hash: "sha256:2".into(),
+            })
+        );
+        assert!(matches!(config.live.unwrap().build, Build::Files(_)));
     }
 }

@@ -377,6 +377,56 @@ pub enum ProxyCommand {
         #[command(flatten)]
         fly: FlyArgs,
     },
+    /// Serve a static site and the arms of experiments from build folders
+    /// in an S3 bucket.
+    S3 {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        s3: S3Args,
+    },
+}
+
+/// How a file runtime serves files.
+#[derive(Args, Clone)]
+pub struct FileArgs {
+    /// Keep files in memory, in one cache of 256 MB: the files of an arm
+    /// until the arm stops, and the files of live for 10 seconds.
+    #[arg(long)]
+    pub cache: bool,
+    /// The file of a build, such as `200.html`, that a single-page app
+    /// serves for a path without a file extension that matches no file.
+    /// It is served with status 200.
+    #[arg(long, value_name = "FILE")]
+    pub fallback: Option<String>,
+    /// How often, in seconds, the proxy checks live and the build folders
+    /// again. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_CHECK_EVERY",
+        hide = true,
+        default_value_t = 60
+    )]
+    pub check_every: u64,
+}
+
+#[derive(Args, Clone)]
+pub struct S3Args {
+    /// The bucket. Live is its root.
+    #[arg(long)]
+    pub bucket: String,
+    /// An S3-compatible endpoint, such as Cloudflare R2, Backblaze B2,
+    /// DigitalOcean Spaces, or MinIO. The bucket is the first segment of
+    /// the path.
+    #[arg(long, env = "AWS_ENDPOINT_URL_S3")]
+    pub endpoint: Option<String>,
+    /// The region of the bucket. Defaults to the region of the AWS
+    /// configuration, such as `AWS_REGION`, or to `us-east-1` with
+    /// `--endpoint`.
+    #[arg(long)]
+    pub region: Option<String>,
+    #[command(flatten)]
+    pub files: FileArgs,
 }
 
 #[derive(Args, Clone)]
@@ -713,6 +763,22 @@ mod tests {
                 "8000",
                 "--live-url",
                 "http://shop.flycast",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "s3",
+                "--app",
+                "site-prod",
+                "--token",
+                "t",
+                "--bucket",
+                "acme-site",
+                "--region",
+                "us-east-1",
+                "--cache",
+                "--fallback",
+                "200.html",
             ],
         ] {
             Cli::try_parse_from(&arguments)

@@ -24,7 +24,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey, channel,
+    Address, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    channel,
 };
 use crate::{cli::FlyArgs, image};
 
@@ -170,8 +171,8 @@ impl Orchestrator for Fly {
     }
 
     /// The digest that every live Machine runs.
-    async fn live(&self) -> anyhow::Result<Image> {
-        live_image(&self.machines().await?, &self.process_group, &self.fly_app)
+    async fn live(&self) -> anyhow::Result<Live> {
+        live_image(&self.machines().await?, &self.process_group, &self.fly_app).map(Live::Image)
     }
 
     fn live_address(&self) -> Address {
@@ -188,7 +189,7 @@ impl Orchestrator for Fly {
             if current.key() != key {
                 continue;
             }
-            if current.image != unit.image {
+            if current.image() != unit.image() {
                 self.destroy(machine).await?;
                 continue;
             }
@@ -531,7 +532,7 @@ pub fn unit_of(machine: &Value, app: &str) -> Option<(Unit, u16)> {
         Unit {
             experiment: metadata(machine, EXPERIMENT_METADATA)?.to_owned(),
             commit: metadata(machine, COMMIT_METADATA)?.to_owned(),
-            image: metadata(machine, IMAGE_METADATA)?.to_owned(),
+            build: Build::Image(metadata(machine, IMAGE_METADATA)?.to_owned()),
             share: 0.0,
         },
         metadata(machine, PORT_METADATA)?.parse().ok()?,
@@ -575,11 +576,11 @@ pub fn not_ready(machine: &Value, unit: &Unit) -> Option<String> {
             _ => format!("the Machine is {state}"),
         });
     }
-    let wanted = unit.image.split_once('@').map(|(_, digest)| digest);
+    let wanted = unit.image().split_once('@').map(|(_, digest)| digest);
     match machine["image_ref"]["digest"].as_str() {
         Some(digest) if Some(digest) == wanted => {}
         Some(digest) if !digest.is_empty() => {
-            return Some(format!("the Machine runs {digest}, not {}", unit.image));
+            return Some(format!("the Machine runs {digest}, not {}", unit.image()));
         }
         _ => return Some("the Machine reports no image digest".into()),
     }
@@ -648,7 +649,7 @@ pub fn unit_config(live: &Value, app: &str, unit: &Unit, port: u16) -> anyhow::R
     {
         bail!("live runs several containers in a Machine; ssp proxy fly does not support that yet");
     }
-    object.insert("image".into(), json!(unit.image));
+    object.insert("image".into(), json!(unit.image()));
     let mut checks = object
         .get("checks")
         .and_then(Value::as_object)
@@ -701,7 +702,7 @@ pub fn unit_config(live: &Value, app: &str, unit: &Unit, port: u16) -> anyhow::R
         (APP_METADATA, app.to_owned()),
         (EXPERIMENT_METADATA, unit.experiment.clone()),
         (COMMIT_METADATA, unit.commit.clone()),
-        (IMAGE_METADATA, unit.image.clone()),
+        (IMAGE_METADATA, unit.image().to_owned()),
         (PORT_METADATA, port.to_string()),
     ] {
         metadata.insert(key.into(), json!(value));
@@ -726,7 +727,7 @@ mod tests {
         Unit {
             experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
-            image: format!("ghcr.io/acme/shop@sha256:{}", digest('a')),
+            build: Build::Image(format!("ghcr.io/acme/shop@sha256:{}", digest('a'))),
             share: 0.05,
         }
     }
@@ -776,7 +777,7 @@ mod tests {
         let port = service_port(&live["config"]).unwrap();
         assert_eq!(port, 8000);
         let config = unit_config(&live["config"], "shop-prod", &arm(), port).unwrap();
-        assert_eq!(config["image"], arm().image);
+        assert_eq!(config["image"], arm().image());
         assert_eq!(config["guest"], live["config"]["guest"]);
         assert_eq!(config["init"], live["config"]["init"]);
         assert_eq!(config["restart"], live["config"]["restart"]);

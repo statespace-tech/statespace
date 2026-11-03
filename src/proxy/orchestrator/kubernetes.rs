@@ -19,7 +19,8 @@ use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, channel, kube::Kube,
+    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, channel,
+    kube::Kube,
 };
 use crate::{cli::KubernetesArgs, image};
 
@@ -104,7 +105,7 @@ impl Orchestrator for Kubernetes {
 
     /// The digest that the ready pods of the Deployment's current template
     /// run, from their status `imageID`.
-    async fn live(&self) -> anyhow::Result<Image> {
+    async fn live(&self) -> anyhow::Result<Live> {
         let live = self.live_deployment().await?;
         let pod = &live["spec"]["template"]["spec"];
         let index = app_container(pod, self.container.as_deref())?;
@@ -141,7 +142,7 @@ impl Orchestrator for Kubernetes {
             }
         }
         match digests.len() {
-            1 => Ok(digests.into_iter().next().expect("one digest")),
+            1 => Ok(Live::Image(digests.into_iter().next().expect("one digest"))),
             0 => bail!(
                 "no ready pod of {} reports an image digest",
                 self.deployment
@@ -223,7 +224,7 @@ impl Orchestrator for Kubernetes {
                     unit: Unit {
                         experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
                         commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
-                        image: annotations[IMAGE_ANNOTATION].as_str()?.to_owned(),
+                        build: Build::Image(annotations[IMAGE_ANNOTATION].as_str()?.to_owned()),
                         share: 0.0,
                     },
                     address: self.address(name, port),
@@ -451,7 +452,7 @@ pub fn unit_deployment(
     let mut pod = template["spec"].clone();
     let index = app_container(&pod, container)?;
     let app_container = &mut pod["containers"][index];
-    app_container["image"] = json!(unit.image);
+    app_container["image"] = json!(unit.image());
     let port = app_container["ports"]
         .as_array()
         .into_iter()
@@ -469,7 +470,7 @@ pub fn unit_deployment(
             )
         })?;
     let annotations = json!({
-        IMAGE_ANNOTATION: unit.image,
+        IMAGE_ANNOTATION: unit.image(),
         PORT_ANNOTATION: port.to_string(),
     });
     let mut pod_annotations = template["metadata"]["annotations"]
@@ -571,7 +572,7 @@ mod tests {
         Unit {
             experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
-            image: format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64)),
+            build: Build::Image(format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64))),
             share,
         }
     }
@@ -607,7 +608,7 @@ mod tests {
         assert_eq!(port, 8000);
         let spec = &deployment["spec"]["template"]["spec"];
         assert_eq!(spec["serviceAccountName"], "shop");
-        assert_eq!(spec["containers"][0]["image"], unit.image);
+        assert_eq!(spec["containers"][0]["image"], unit.image());
         assert_eq!(
             spec["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]["name"],
             "db"

@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Image, Line, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
     aws::{Aws, Endpoints, Service, xml_value},
     channel,
     kubernetes::replicas,
@@ -204,10 +204,12 @@ impl Fargate {
     pub async fn new(app: &str, arguments: FargateArgs) -> anyhow::Result<Self> {
         let aws = Aws::connect(
             arguments.region.clone(),
+            None,
             Endpoints {
                 ecs: arguments.ecs_api.clone(),
                 ec2: arguments.ec2_api.clone(),
                 logs: arguments.logs_api.clone(),
+                s3: None,
             },
         )
         .await?;
@@ -335,7 +337,7 @@ impl Orchestrator for Fargate {
     /// The image of the task definition of the service's primary
     /// deployment. When it names a tag, the digest that its running tasks
     /// report.
-    async fn live(&self) -> anyhow::Result<Image> {
+    async fn live(&self) -> anyhow::Result<Live> {
         let live = self.live_service().await?;
         let arn = primary(&live)["taskDefinition"]
             .as_str()
@@ -348,7 +350,7 @@ impl Orchestrator for Fargate {
         let container = &containers[index];
         let configured = container["image"].as_str().unwrap_or_default();
         if image::is_digest(configured) {
-            return Ok(configured.to_owned());
+            return Ok(Live::Image(configured.to_owned()));
         }
         let name = container["name"].as_str().unwrap_or_default();
         let mut digests = HashSet::new();
@@ -365,7 +367,7 @@ impl Orchestrator for Fargate {
             }
         }
         match digests.len() {
-            1 => Ok(digests.into_iter().next().expect("one digest")),
+            1 => Ok(Live::Image(digests.into_iter().next().expect("one digest"))),
             0 => bail!(
                 "no running task of {} reports the digest of {configured}",
                 self.service
@@ -393,7 +395,7 @@ impl Orchestrator for Fargate {
             let definition = self.ecs.task_definition(arn).await?;
             let containers = &definition["taskDefinition"]["containerDefinitions"];
             let index = app_container(containers, self.container.as_deref())?;
-            if containers[index]["image"] == unit.image.as_str() {
+            if containers[index]["image"] == unit.image() {
                 return Ok(String::new());
             }
         }
@@ -525,7 +527,7 @@ impl Orchestrator for Fargate {
             let unit = Unit {
                 experiment: experiment.to_owned(),
                 commit: commit.to_owned(),
-                image: container["image"].as_str().unwrap_or_default().to_owned(),
+                build: Build::Image(container["image"].as_str().unwrap_or_default().to_owned()),
                 share: 0.0,
             };
             let port = container["portMappings"][0]["containerPort"]
@@ -536,7 +538,7 @@ impl Orchestrator for Fargate {
             let mut addresses = Vec::new();
             let mut candidates = 0;
             for task in &tasks {
-                if !task_runs(task, arn, container, &unit.image) {
+                if !task_runs(task, arn, container, unit.image()) {
                     continue;
                 }
                 candidates += 1;
@@ -799,7 +801,7 @@ pub fn unit_task_definition(
         .context("the task definition has no container")?;
     containers
         .get_mut(index)
-        .context("the task definition has no such container")?["image"] = json!(unit.image);
+        .context("the task definition has no such container")?["image"] = json!(unit.image());
     for container in containers {
         for list in ["environment", "secrets"] {
             if let Some(entries) = container[list].as_array_mut() {
@@ -1061,10 +1063,10 @@ mod tests {
         Unit {
             experiment: "checkout".into(),
             commit: "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0".into(),
-            image: format!(
+            build: Build::Image(format!(
                 "123456789012.dkr.ecr.us-east-1.amazonaws.com/shop@sha256:{}",
                 "a".repeat(64)
-            ),
+            )),
             share,
         }
     }
@@ -1093,7 +1095,7 @@ mod tests {
         let copy = unit_task_definition(&definition, index, "shop-prod", name, &arm(0.05)).unwrap();
         assert_eq!(copy["family"], name);
         let containers = &copy["containerDefinitions"];
-        assert_eq!(containers[1]["image"], arm(0.05).image);
+        assert_eq!(containers[1]["image"], arm(0.05).image());
         assert_eq!(containers[0]["image"], "otel/collector");
         assert_eq!(
             containers[1]["environment"],
@@ -1211,8 +1213,8 @@ mod tests {
                 {"name": "privateIPv4Address", "value": "10.0.1.7"}]}],
             "containers": [{"name": "shop", "lastStatus": "RUNNING", "imageDigest": digest}],
         });
-        assert!(task_runs(&task, "td:1", container, &arm(0.05).image));
-        assert!(!task_runs(&task, "td:2", container, &arm(0.05).image));
+        assert!(task_runs(&task, "td:1", container, arm(0.05).image()));
+        assert!(!task_runs(&task, "td:2", container, arm(0.05).image()));
         let other = format!("shop@sha256:{}", "b".repeat(64));
         assert!(!task_runs(&task, "td:1", container, &other));
         assert_eq!(
@@ -1226,10 +1228,10 @@ mod tests {
         // With a health check, the container must be healthy.
         let mut checked = container.clone();
         checked["healthCheck"] = json!({"command": ["CMD", "true"]});
-        assert!(!task_runs(&task, "td:1", &checked, &arm(0.05).image));
+        assert!(!task_runs(&task, "td:1", &checked, arm(0.05).image()));
         let mut healthy = task.clone();
         healthy["containers"][0]["healthStatus"] = json!("HEALTHY");
-        assert!(task_runs(&healthy, "td:1", &checked, &arm(0.05).image));
+        assert!(task_runs(&healthy, "td:1", &checked, arm(0.05).image()));
     }
 
     #[test]
