@@ -10,3 +10,33 @@ The latest release receives security fixes.
 
 Treat API keys, terminal sessions, and database connection URLs as secrets. `ssp` prints a
 secret only once, in the response that creates it.
+
+## Verify a release
+
+The release workflow signs the image `ghcr.io/statespace-tech/statespace` with cosign,
+without a key. It also attaches an SBOM and a build provenance to the image, and
+records a build provenance for each archive of the GitHub release.
+
+1. Verify the signature of the image. Replace `<version>` with the version, such as
+   `0.4.2`.
+
+   ```shell
+   cosign verify ghcr.io/statespace-tech/statespace:<version> \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+     --certificate-identity-regexp \
+       '^https://github\.com/statespace-tech/statespace/\.github/workflows/release\.yml@refs/tags/v'
+   ```
+
+2. Verify the provenance of an archive.
+
+   ```shell
+   gh attestation verify ssp-x86_64-unknown-linux-musl.tar.gz \
+     --repo statespace-tech/statespace
+   ```
+
+3. Show the SBOM of the image.
+
+   ```shell
+   docker buildx imagetools inspect ghcr.io/statespace-tech/statespace:<version> \
+     --format '{{ json .SBOM }}'
+   ```
