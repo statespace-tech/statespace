@@ -21,7 +21,7 @@ services:
     # fallback in front of ssp.
 
   ssp:
-    image: ghcr.io/statespace-tech/statespace:0.4.2
+    image: ghcr.io/statespace-tech/statespace:0.4.3
     command: ["proxy", "docker", "--live-container", "shop", "--health", "/health"]
     environment:
       STATESPACE_TOKEN: ${STATESPACE_TOKEN}

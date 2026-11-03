@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "proxy",
-      "image": "ghcr.io/statespace-tech/statespace:0.4.2",
+      "image": "ghcr.io/statespace-tech/statespace:0.4.3",
       "essential": true,
       "command": [
         "proxy", "fargate",

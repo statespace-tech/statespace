@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.4.3 - 2026-11-03
 
 `ssp` runs alongside live, never inside it. It never changes a resource that it did
 not create, and each arm is a resource that it creates, labels, and deletes.

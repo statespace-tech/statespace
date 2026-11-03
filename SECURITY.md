@@ -18,7 +18,7 @@ without a key. It also attaches an SBOM and a build provenance to the image, and
 records a build provenance for each archive of the GitHub release.
 
 1. Verify the signature of the image. Replace `<version>` with the version, such as
-   `0.4.2`.
+   `0.4.3`.
 
    ```shell
    cosign verify ghcr.io/statespace-tech/statespace:<version> \
