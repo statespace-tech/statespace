@@ -94,8 +94,7 @@ agents can query and act on them.
 5. Run the proxy next to your app and point your traffic at it:
 
    ```shell
-   STATESPACE_TOKEN=<token> ssp proxy kubernetes \
-     --app shop-prod --deployment shop
+   STATESPACE_TOKEN=<token> ssp proxy kubernetes --deployment shop
    ```
 
 6. Give two commits a share of traffic and start:

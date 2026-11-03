@@ -327,13 +327,11 @@ pub struct VerifyFlag {
 /// What every `ssp proxy` subcommand takes.
 #[derive(Args, Clone)]
 pub struct ProxyArgs {
-    /// The app.
-    #[arg(long, env = "STATESPACE_APP", value_parser = app_name)]
-    pub app: String,
     /// The public address.
     #[arg(long, env = "STATESPACE_LISTEN", default_value = "0.0.0.0:8080")]
     pub listen: String,
-    /// The runtime token of the app, from `ssp token add`.
+    /// The runtime token of the app, from `ssp token add`. The proxy asks
+    /// Statespace which app the token is for.
     #[arg(long, env = "STATESPACE_TOKEN", hide_env_values = true)]
     pub token: String,
 }
@@ -703,8 +701,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "docker",
-                "--app",
-                "shop-dev",
                 "--token",
                 "t",
                 "--live-container",
@@ -716,8 +712,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "cloudrun",
-                "--app",
-                "shop-prod",
                 "--token",
                 "t",
                 "--service",
@@ -729,8 +723,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "kubernetes",
-                "--app",
-                "shop-prod",
                 "--token",
                 "t",
                 "--deployment",
@@ -742,8 +734,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "fargate",
-                "--app",
-                "shop-prod",
                 "--token",
                 "t",
                 "--cluster",
@@ -761,8 +751,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "fly",
-                "--app",
-                "shop-prod",
                 "--token",
                 "t",
                 "--fly-app",
@@ -774,8 +762,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "fly",
-                "--app",
-                "shop-prod",
                 "--token",
                 "t",
                 "--fly-app",
@@ -795,8 +781,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "s3",
-                "--app",
-                "site-prod",
                 "--token",
                 "t",
                 "--bucket",
@@ -811,8 +795,6 @@ mod tests {
                 "ssp",
                 "proxy",
                 "gcs",
-                "--app",
-                "site-prod",
                 "--token",
                 "t",
                 "--bucket",
@@ -893,13 +875,11 @@ mod tests {
             ],
             vec!["ssp", "experiment", "list", "--running", "--all"],
             vec!["ssp", "experiment", "stop"],
-            vec!["ssp", "proxy", "--app", "shop", "--token", "t"],
+            vec!["ssp", "proxy", "--token", "t"],
             vec![
                 "ssp",
                 "proxy",
                 "docker",
-                "--app",
-                "shop",
                 "--token",
                 "t",
                 "--live-container",
@@ -907,13 +887,36 @@ mod tests {
                 "--color",
                 "blue",
             ],
-            // Docker forwards to a live container; it no longer runs live.
+            // The app comes from the runtime token; no proxy takes --app.
             vec![
                 "ssp",
                 "proxy",
                 "docker",
                 "--app",
                 "shop-prod",
+                "--token",
+                "t",
+                "--live-container",
+                "shop",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "cloudrun",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--service",
+                "shop",
+                "--region",
+                "us-east1",
+            ],
+            // Docker forwards to a live container; it no longer runs live.
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
                 "--token",
                 "t",
                 "--image-file",

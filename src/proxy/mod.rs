@@ -61,27 +61,27 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
             match command {
                 ProxyCommand::Docker { common, docker } => {
                     let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Docker::new(&common.app, &common.listen, docker).await?;
+                    let orchestrator = Docker::new(remote.app(), &common.listen, docker).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Cloudrun { common, cloudrun } => {
                     let remote = connect(endpoint, &common).await?;
-                    let orchestrator = CloudRun::new(&common.app, cloudrun).await?;
+                    let orchestrator = CloudRun::new(remote.app(), cloudrun).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Kubernetes { common, kubernetes } => {
                     let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Kubernetes::new(&common.app, kubernetes).await?;
+                    let orchestrator = Kubernetes::new(remote.app(), kubernetes).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Fargate { common, fargate } => {
                     let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Fargate::new(&common.app, fargate).await?;
+                    let orchestrator = Fargate::new(remote.app(), fargate).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::Fly { common, fly } => {
                     let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Fly::new(&common.app, fly).await?;
+                    let orchestrator = Fly::new(remote.app(), fly).await?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
                 ProxyCommand::S3 { common, s3 } => {
@@ -98,15 +98,15 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
         })
 }
 
-/// A connection to Statespace for an app that exists. When Statespace
-/// cannot be reached, the proxy starts anyway and sends everything to live.
+/// A connection to Statespace for the app of the runtime token. When
+/// Statespace cannot be reached after the proxy learned its app, the proxy
+/// starts anyway and sends everything to live.
 async fn connect(endpoint: &str, common: &ProxyArgs) -> anyhow::Result<Remote> {
-    let remote = Remote::new(endpoint, common.token.clone(), common.app.clone())?;
+    let app = Remote::app_of(endpoint, &common.token).await?;
+    let remote = Remote::new(endpoint, common.token.clone(), app.clone())?;
     match remote.config().await {
         Err(ConfigError::Refused(message)) => bail!(
-            "Statespace refused the app {}: {message}. Add it with `ssp app add {}`, and use a runtime token of the app",
-            common.app,
-            common.app
+            "Statespace refused the app {app}: {message}. Use a runtime token of the app, from `ssp token add --app {app}`"
         ),
         Err(ConfigError::Other(error)) => {
             eprintln!("[ssp] could not reach Statespace: {error:#}; every request goes to live");
@@ -632,7 +632,7 @@ async fn serve<O: Orchestrator>(
 ) -> anyhow::Result<()> {
     let instance = instance_id();
     let runtime = Arc::new(Runtime {
-        app: common.app.clone(),
+        app: remote.app().to_owned(),
         instance: instance.clone(),
         orchestrator: orchestrator.clone(),
         recorder: Arc::new(Recorder::start(remote.clone())),
@@ -661,7 +661,7 @@ async fn serve<O: Orchestrator>(
         .map_or_else(|_| common.listen.clone(), |address| address.to_string());
     eprintln!(
         "[ssp] proxy {instance} of {} on {} listening on {address}",
-        common.app,
+        runtime.app,
         orchestrator.name(),
     );
     let (stop, stopped) = tokio::sync::watch::channel(false);

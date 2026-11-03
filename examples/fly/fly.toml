@@ -11,9 +11,6 @@ primary_region = "iad"
 [processes]
   app = "proxy fly --fly-app shop"
 
-[env]
-  STATESPACE_APP = "shop-prod"
-
 [http_service]
   internal_port = 8080
   force_https = true

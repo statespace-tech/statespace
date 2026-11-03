@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -47,7 +47,56 @@ pub enum ConfigError {
     Other(anyhow::Error),
 }
 
+/// How long the proxy waits at most between two tries to learn its app.
+const MOST_APP_WAIT: Duration = Duration::from_secs(60);
+
 impl Remote {
+    /// The app of a runtime token, from `GET /v1/runtime/app`. When
+    /// Statespace cannot be reached, it tries again until Statespace
+    /// answers. When Statespace refuses the token, it fails.
+    pub async fn app_of(endpoint: &str, token: &str) -> anyhow::Result<String> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .user_agent(concat!("statespace-proxy/", env!("CARGO_PKG_VERSION")))
+            .build()?;
+        let url = format!("{}/v1/runtime/app", endpoint.trim_end_matches('/'));
+        let mut wait = Duration::from_secs(1);
+        let mut said = false;
+        loop {
+            let problem = match client.get(&url).bearer_auth(token).send().await {
+                Ok(response) if response.status().is_success() => {
+                    let body: Value = response.json().await?;
+                    let app = body["app"]
+                        .as_str()
+                        .context("Statespace named no app for the runtime token")?;
+                    return crate::cli::app_name(app).map_err(|error| anyhow::anyhow!(error));
+                }
+                Ok(response)
+                    if matches!(
+                        response.status(),
+                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+                    ) =>
+                {
+                    bail!(
+                        "Statespace refused the runtime token: {}. Make one with `ssp token add --app <app>`",
+                        Self::message(response).await
+                    );
+                }
+                Ok(response) => Self::message(response).await,
+                Err(error) => error.to_string(),
+            };
+            if !said {
+                eprintln!(
+                    "[ssp] could not reach Statespace to learn the app of the runtime token: {problem}; trying again"
+                );
+                said = true;
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(MOST_APP_WAIT);
+        }
+    }
+
     pub fn new(endpoint: &str, token: String, app: String) -> anyhow::Result<Self> {
         Ok(Self {
             client: reqwest::Client::builder()
@@ -58,6 +107,11 @@ impl Remote {
             token,
             app,
         })
+    }
+
+    /// The app of the runtime token.
+    pub fn app(&self) -> &str {
+        &self.app
     }
 
     fn url(&self, path: &str) -> String {

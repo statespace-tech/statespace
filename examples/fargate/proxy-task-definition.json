@@ -19,7 +19,6 @@
         "--live-url", "http://internal-shop-123456789.us-east-1.elb.amazonaws.com"
       ],
       "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
-      "environment": [{"name": "STATESPACE_APP", "value": "shop-prod"}],
       "secrets": [
         {
           "name": "STATESPACE_TOKEN",

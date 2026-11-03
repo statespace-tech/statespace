@@ -560,6 +560,16 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
         state.received.push(received.clone());
         let path = received.path.as_str();
         match (received.method.as_str(), path) {
+            // The app of a runtime token. A token of no app gets 401.
+            ("GET", "/v1/runtime/app") => match state.config["app"].as_str() {
+                Some(app)
+                    if received.headers.get("authorization").map(String::as_str)
+                        != Some("Bearer gone") =>
+                {
+                    json_answer(200, &json!({"app": app}))
+                }
+                _ => json_answer(401, &json!({"error": "the token is not valid"})),
+            },
             ("GET", path)
                 if state.config["app"]
                     .as_str()
@@ -1467,40 +1477,33 @@ fn db_url_prints_only_the_connection_string() {
 }
 
 #[test]
-fn proxies_fail_for_an_app_that_does_not_exist() {
+fn proxies_fail_for_a_token_of_no_app() {
     let directory = tempfile::tempdir().unwrap();
-    let state = Arc::new(Mutex::new(Statespace::default()));
-    let api = statespace(state);
+    let state = Arc::new(Mutex::new(Statespace {
+        config: json!({"app": "shop-prod"}),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
     let (ok, _, stderr) = ssp(
         directory.path(),
         &api,
-        &[("STATESPACE_TOKEN", "t")],
-        &[
-            "proxy",
-            "docker",
-            "--app",
-            "shop-gone",
-            "--live-container",
-            "missing",
-        ],
+        &[("STATESPACE_TOKEN", "gone")],
+        &["proxy", "docker", "--live-container", "missing"],
     );
     assert!(!ok);
     assert!(
-        stderr.contains("Statespace refused the app shop-gone"),
+        stderr.contains("Statespace refused the runtime token: the token is not valid"),
         "{stderr}"
     );
+    // The proxy asks for the app of its token.
+    let asked = state.lock().unwrap().received.clone();
+    assert_eq!(asked[0].path, "/v1/runtime/app");
+    assert_eq!(asked[0].headers["authorization"], "Bearer gone");
     let (ok, _, stderr) = ssp(
         directory.path(),
         &api,
         &[],
-        &[
-            "proxy",
-            "docker",
-            "--app",
-            "shop-prod",
-            "--live-container",
-            "x",
-        ],
+        &["proxy", "docker", "--live-container", "x"],
     );
     assert!(!ok && stderr.contains("--token"), "{stderr}");
 }
@@ -1765,7 +1768,7 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
         .env("STATESPACE_CLOUDRUN_API", format!("http://{google_host}"))
         .env("STATESPACE_LOGGING_API", format!("http://{google_host}"))
         .env("GCE_METADATA_HOST", &google_host)
-        .args(["proxy", "cloudrun", "--app", "shop-prod"])
+        .args(["proxy", "cloudrun"])
         .args(["--service", "shop", "--region", "us-east1"]);
     let (proxy, port) = spawn_proxy(command);
     CloudRunTest {
@@ -2406,7 +2409,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
         .env("FLY_API_TOKEN", FLY_TOKEN)
         .env("STATESPACE_FLY_API", &fly_url)
         .env("STATESPACE_FLY_LOGS_API", &fly_url)
-        .args(["proxy", "fly", "--app", "shop-prod", "--fly-app", "shop"])
+        .args(["proxy", "fly", "--fly-app", "shop"])
         .args(["--live-url", &format!("http://127.0.0.1:{live}")]);
     let (_proxy, port) = spawn_proxy(command);
 
@@ -2749,14 +2752,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
                 .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
                 .env("STATESPACE_API", &api)
                 .env("STATESPACE_TOKEN", "runtime-secret")
-                .args([
-                    "proxy",
-                    "docker",
-                    "--app",
-                    app,
-                    "--live-container",
-                    &live_name,
-                ])
+                .args(["proxy", "docker", "--live-container", &live_name])
                 .args(["--health", "/"])
                 .args(["--listen", &format!("127.0.0.1:{listen_port}")])
                 .stdout(Stdio::null())
@@ -3066,8 +3062,6 @@ spec:
             .args([
                 "proxy",
                 "kubernetes",
-                "--app",
-                "shop-prod",
                 "--deployment",
                 "shop",
                 "--namespace",
@@ -3986,14 +3980,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-secret")
         .env("GCE_METADATA_HOST", &metadata)
-        .args([
-            "proxy",
-            "cloudrun",
-            "--app",
-            "shop-prod",
-            "--service",
-            &name,
-        ])
+        .args(["proxy", "cloudrun", "--service", &name])
         .args(["--region", &sandbox.region, "--project", &sandbox.project]);
     let (proxy, port, log) = spawn_logged_proxy(command);
     run.processes.push(proxy);
@@ -4264,7 +4251,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
             "scaling": {"minInstanceCount": 1, "maxInstanceCount": 1},
             "containers": [{
                 "image": ssp_image,
-                "args": ["proxy", "cloudrun", "--app", "shop-prod", "--service", &name,
+                "args": ["proxy", "cloudrun", "--service", &name,
                          "--region", &sandbox.region],
                 "env": [
                     {"name": "STATESPACE_API", "value": public},
@@ -4647,7 +4634,7 @@ fn fargate_proxies_run_units_as_services() {
         .env("AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", &endpoint)
         // The region comes from the AWS configuration, not --region.
         .env("AWS_REGION", "us-east-1")
-        .args(["proxy", "fargate", "--app", "shop-prod"])
+        .args(["proxy", "fargate"])
         .args(["--cluster", "shop", "--service", "shop"])
         .args(["--live-url", &format!("http://127.0.0.1:{live}")])
         .args(["--unit-ip", "public"]);
@@ -5653,7 +5640,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-secret")
         .env("AWS_REGION", &sandbox.region)
-        .args(["proxy", "fargate", "--app", "shop-prod"])
+        .args(["proxy", "fargate"])
         .args(["--cluster", &run, "--service", &run])
         .args(["--live-url", &live_url, "--unit-ip", "public"]);
     let (proxy, port) = spawn_proxy(command);
@@ -6299,7 +6286,7 @@ primary_region = "{region}"
             "config": {
                 "image": ssp_digest,
                 "init": {"cmd": [
-                    "proxy", "fly", "--app", run, "--fly-app", app,
+                    "proxy", "fly", "--fly-app", app,
                     "--live-url", format!("http://{app}.flycast:8081"),
                 ]},
                 "env": {
@@ -7053,7 +7040,7 @@ fn s3_proxies_serve_builds_from_folders() {
         .env_remove("AWS_REGION")
         .env_remove("AWS_DEFAULT_REGION")
         .env_remove("AWS_PROFILE")
-        .args(["proxy", "s3", "--app", SITE_APP, "--bucket", SITE_BUCKET])
+        .args(["proxy", "s3", "--bucket", SITE_BUCKET])
         .args(["--endpoint", &format!("http://127.0.0.1:{s3}")])
         .args(["--cache", "--fallback", "200.html"]);
     let (_proxy, port) = spawn_proxy(command);
@@ -7096,7 +7083,7 @@ fn gcs_proxies_serve_builds_from_folders() {
         .env("GCE_METADATA_HOST", format!("127.0.0.1:{gcs}"))
         .env("CLOUDSDK_CONFIG", directory.path())
         .env_remove("GOOGLE_APPLICATION_CREDENTIALS")
-        .args(["proxy", "gcs", "--app", SITE_APP, "--bucket", SITE_BUCKET])
+        .args(["proxy", "gcs", "--bucket", SITE_BUCKET])
         .args(["--fallback", "200.html"]);
     let (_proxy, port) = spawn_proxy(command);
 
@@ -7231,7 +7218,7 @@ fn aws_s3_proxies_serve_builds_from_a_real_bucket() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("STATESPACE_CHECK_EVERY", "5")
-        .args(["proxy", "s3", "--app", SITE_APP, "--bucket", &bucket])
+        .args(["proxy", "s3", "--bucket", &bucket])
         .args([
             "--region",
             &sandbox.region,
@@ -7437,7 +7424,7 @@ fn gcp_gcs_proxies_serve_builds_from_a_real_bucket() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("STATESPACE_CHECK_EVERY", "5")
-        .args(["proxy", "gcs", "--app", SITE_APP, "--bucket", &bucket])
+        .args(["proxy", "gcs", "--bucket", &bucket])
         .args(["--fallback", "200.html"]);
     let (_proxy, port) = spawn_proxy(command);
 

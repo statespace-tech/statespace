@@ -58,8 +58,6 @@ spec:
           image: ghcr.io/statespace-tech/statespace:0.4.2
           args: ["proxy", "kubernetes", "--deployment", "shop"]
           env:
-            - name: STATESPACE_APP
-              value: shop-prod
             - name: STATESPACE_TOKEN
               valueFrom:
                 secretKeyRef:
