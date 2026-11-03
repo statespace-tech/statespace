@@ -16,6 +16,12 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
   https://statespace.com/contact`, and exits 1. With `--json`, the line is
   the `error`.
 
+### Fixed
+
+- A response of an arm without a `Cache-Control` rule of its own gets
+  `private, no-cache` and no `Last-Modified`. A browser asks again before it
+  uses the response again, so a changed arm or a new override shows at once.
+
 ## 0.4.0 - 2026-11-02
 
 Experiments with commit arms. This release replaces the `exp/` branch model. Nothing of

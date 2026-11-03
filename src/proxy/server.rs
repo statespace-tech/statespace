@@ -642,7 +642,11 @@ fn same_site(uri: &http::Uri) -> String {
 }
 
 /// Mark a response of a unit as private, so a shared cache never gives one
-/// subject's arm to another.
+/// subject's arm to another. A response without a rule of its own gets
+/// `no-cache` too, and loses `Last-Modified`: the browser asks again before
+/// it reuses the response, and the date of one arm's file never passes for
+/// another's, so a changed arm or a new override shows at once. (Arms built
+/// at the same time have the same dates, and a CDN may drop the ETag.)
 pub fn make_private(headers: &mut HeaderMap) {
     let directives: Vec<String> = headers
         .get_all(header::CACHE_CONTROL)
@@ -666,6 +670,10 @@ pub fn make_private(headers: &mut HeaderMap) {
             directive != "public" && !directive.starts_with("s-maxage")
         })
         .collect();
+    if kept.is_empty() {
+        kept.push("no-cache".into());
+        headers.remove(header::LAST_MODIFIED);
+    }
     kept.insert(0, "private".into());
     if let Ok(value) = HeaderValue::from_str(&kept.join(", ")) {
         headers.insert(header::CACHE_CONTROL, value);
@@ -1093,15 +1101,25 @@ mod tests {
             if let Some(value) = value {
                 headers.insert(header::CACHE_CONTROL, value.parse().unwrap());
             }
+            headers.insert(
+                header::LAST_MODIFIED,
+                "Tue, 03 Nov 2026 06:30:14 GMT".parse().unwrap(),
+            );
             make_private(&mut headers);
-            headers[header::CACHE_CONTROL].to_str().unwrap().to_owned()
+            let dated = headers.contains_key(header::LAST_MODIFIED);
+            (
+                headers[header::CACHE_CONTROL].to_str().unwrap().to_owned(),
+                dated,
+            )
         };
-        assert_eq!(private(None), "private");
+        // Without a rule of its own: ask again, and drop the date.
+        assert_eq!(private(None), ("private, no-cache".into(), false));
+        assert_eq!(private(Some("public")), ("private, no-cache".into(), false));
         assert_eq!(
             private(Some("public, max-age=600, s-maxage=3600")),
-            "private, max-age=600"
+            ("private, max-age=600".into(), true)
         );
-        assert_eq!(private(Some("no-store")), "no-store");
+        assert_eq!(private(Some("no-store")), ("no-store".into(), true));
     }
 
     #[test]
