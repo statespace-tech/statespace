@@ -28,8 +28,13 @@ use self::{
     assign::Routing,
     lease::Lease,
     orchestrator::{
-        Build, Live, Orchestrator, Running, Unit, UnitKey, cloudrun::CloudRun, docker::Docker,
-        fargate::Fargate, files::s3::S3, fly::Fly, kubernetes::Kubernetes,
+        Build, Live, Orchestrator, Running, Unit, UnitKey,
+        cloudrun::CloudRun,
+        docker::Docker,
+        fargate::Fargate,
+        files::{gcs::Gcs, s3::S3},
+        fly::Fly,
+        kubernetes::Kubernetes,
     },
     recorder::{Origin, Recorder, Source},
     remote::{ConfigError, Remote},
@@ -82,6 +87,11 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 ProxyCommand::S3 { common, s3 } => {
                     let remote = connect(endpoint, &common).await?;
                     let orchestrator = S3::connect(s3, remote.clone()).await?;
+                    serve(Arc::new(orchestrator), common, remote).await
+                }
+                ProxyCommand::Gcs { common, gcs } => {
+                    let remote = connect(endpoint, &common).await?;
+                    let orchestrator = Gcs::connect(gcs, remote.clone())?;
                     serve(Arc::new(orchestrator), common, remote).await
                 }
             }

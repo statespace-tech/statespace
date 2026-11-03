@@ -1,7 +1,8 @@
-//! File runtimes, such as `ssp proxy s3`. Live is the bucket root, and each
-//! unit is a build folder, such as `s3://acme-site/builds/a1b2c3d/`. The
-//! proxy serves the files itself, like a static website endpoint, and never
-//! writes to the bucket.
+//! File runtimes: `ssp proxy s3` and `ssp proxy gcs`. Live is the bucket
+//! root, and each unit is a build folder, such as
+//! `s3://acme-site/builds/a1b2c3d/`. Both share this module and differ only
+//! by their [`Storage`]. The proxy serves the files itself, like a static
+//! website endpoint, and never writes to the bucket.
 //!
 //! A unit is ready only while the files hash of its folder is the hash that
 //! CI recorded. The proxy checks each folder again every 60 seconds by
@@ -9,6 +10,7 @@
 //! by its files hash too: the hash of the bucket root without the folders
 //! that hold the app's builds.
 
+pub mod gcs;
 pub mod s3;
 
 use std::{

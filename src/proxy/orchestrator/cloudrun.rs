@@ -8,7 +8,8 @@
 //! Logging.
 //!
 //! The proxy uses the Cloud Run Admin API v2 with the credentials of the
-//! metadata server: the service account of the proxy's own service.
+//! metadata server (see `google`): the service account of the proxy's own
+//! service.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -26,7 +27,7 @@ use tokio::sync::mpsc;
 
 use super::{
     Address, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
-    channel,
+    channel, google::Google,
 };
 use crate::{cli::CloudRunArgs, image};
 
@@ -54,6 +55,9 @@ pub struct CloudRun {
     /// `projects/<project>/locations/<region>/services/<service>`.
     path: String,
     live_address: String,
+    /// Access tokens of the metadata server.
+    google: Arc<Google>,
+    /// ID tokens, by audience.
     tokens: Mutex<HashMap<String, (String, Instant)>>,
     /// Revisions that were ready, which never change after.
     ready: Mutex<HashMap<String, (Unit, String)>>,
@@ -74,6 +78,7 @@ impl CloudRun {
         } else {
             format!("http://{host}")
         };
+        let google = Arc::new(Google::metadata(&metadata)?);
         let mut cloudrun = Self {
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
@@ -87,6 +92,7 @@ impl CloudRun {
             service: arguments.service.clone(),
             path: String::new(),
             live_address: String::new(),
+            google,
             tokens: Mutex::default(),
             ready: Mutex::default(),
             listeners: Listeners::default(),
@@ -125,44 +131,26 @@ impl CloudRun {
         Ok(response.text().await?.trim().to_owned())
     }
 
-    /// A cached token, or a new one from the metadata server.
-    async fn token(&self, audience: Option<&str>) -> anyhow::Result<String> {
-        let key = audience.unwrap_or("").to_owned();
-        if let Some((token, until)) = self.tokens.lock().expect("never poisoned").get(&key)
+    /// A cached ID token for `audience`, or a new one from the metadata
+    /// server.
+    async fn id_token(&self, audience: &str) -> anyhow::Result<String> {
+        if let Some((token, until)) = self.tokens.lock().expect("never poisoned").get(audience)
             && Instant::now() < *until
         {
             return Ok(token.clone());
         }
-        let account = "/computeMetadata/v1/instance/service-accounts/default";
-        let (token, lifetime) = match audience {
-            Some(audience) => {
-                let token = self
-                    .metadata_text(&format!(
-                        "{account}/identity?audience={}&format=full",
-                        encode(audience)
-                    ))
-                    .await?;
-                // ID tokens last an hour.
-                (token, Duration::from_secs(50 * 60))
-            }
-            None => {
-                let text = self.metadata_text(&format!("{account}/token")).await?;
-                let body: Value = serde_json::from_str(&text)?;
-                let token = body["access_token"]
-                    .as_str()
-                    .context("the metadata server gave no access token")?
-                    .to_owned();
-                let seconds = body["expires_in"].as_u64().unwrap_or(300);
-                (
-                    token,
-                    Duration::from_secs(seconds.saturating_sub(60).max(10)),
-                )
-            }
-        };
+        let token = self
+            .metadata_text(&format!(
+                "/computeMetadata/v1/instance/service-accounts/default/identity?audience={}&format=full",
+                encode(audience)
+            ))
+            .await?;
+        // ID tokens last an hour.
+        let until = Instant::now() + Duration::from_secs(50 * 60);
         self.tokens
             .lock()
             .expect("never poisoned")
-            .insert(key, (token.clone(), Instant::now() + lifetime));
+            .insert(audience.to_owned(), (token.clone(), until));
         Ok(token)
     }
 
@@ -172,7 +160,7 @@ impl CloudRun {
         url: String,
         body: Option<&Value>,
     ) -> anyhow::Result<Value> {
-        let token = self.token(None).await?;
+        let token = self.google.token().await?;
         let mut request = self.client.request(method, &url).bearer_auth(token);
         if let Some(body) = body {
             request = request.json(body);
@@ -448,10 +436,7 @@ impl Orchestrator for CloudRun {
                 project: self.project.clone(),
                 service: self.service.clone(),
                 service_url: format!("{}/v2/{}", self.run_api, self.path),
-                tokens: TokenSource {
-                    metadata: self.metadata.clone(),
-                    client: self.client.clone(),
-                },
+                google: self.google.clone(),
                 listeners: self.listeners.clone(),
             };
             tokio::spawn(reader.run());
@@ -462,7 +447,7 @@ impl Orchestrator for CloudRun {
     /// An ID token for the service's URL. Cloud Run accepts it at every tag
     /// URL of the service, and refuses one for the tag URL itself.
     async fn credential(&self, address: &str) -> Option<(HeaderName, HeaderValue)> {
-        match self.token(Some(&self.live_address)).await {
+        match self.id_token(&self.live_address).await {
             Ok(token) => Some((
                 HeaderName::from_static(AUTHORIZATION),
                 HeaderValue::from_str(&format!("Bearer {token}")).ok()?,
@@ -472,32 +457,6 @@ impl Orchestrator for CloudRun {
                 None
             }
         }
-    }
-}
-
-/// An access token from the metadata server, for the output reader.
-struct TokenSource {
-    metadata: String,
-    client: reqwest::Client,
-}
-
-impl TokenSource {
-    async fn token(&self) -> anyhow::Result<String> {
-        let body: Value = self
-            .client
-            .get(format!(
-                "{}/computeMetadata/v1/instance/service-accounts/default/token",
-                self.metadata
-            ))
-            .header("Metadata-Flavor", "Google")
-            .send()
-            .await?
-            .json()
-            .await?;
-        body["access_token"]
-            .as_str()
-            .map(str::to_owned)
-            .context("the metadata server gave no access token")
     }
 }
 
@@ -567,7 +526,7 @@ struct Reader {
     project: String,
     service: String,
     service_url: String,
-    tokens: TokenSource,
+    google: Arc<Google>,
     listeners: Listeners,
 }
 
@@ -618,7 +577,7 @@ impl Reader {
         listeners: &[(String, mpsc::Sender<Line>)],
         cursor: &mut Cursor,
     ) -> Result<(), PollError> {
-        let token = self.tokens.token().await?;
+        let token = self.google.token().await?;
         let service: Value = self
             .client
             .get(&self.service_url)

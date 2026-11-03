@@ -5,8 +5,8 @@
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
 //! Fargate test runs in a sandbox account of AWS when
 //! `STATESPACE_FARGATE_TESTS=1`; the real Fly.io test runs in a dedicated
-//! Fly.io app when `STATESPACE_FLY_TESTS=1`. `ssp proxy s3` runs against a
-//! stand-in for S3.
+//! Fly.io app when `STATESPACE_FLY_TESTS=1`. The file runtimes run against
+//! stand-ins for S3 and Cloud Storage.
 
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
@@ -6018,7 +6018,8 @@ fn a_pending_workspace_gets_one_clear_line() {
 }
 
 // ---------------------------------------------------------------------------
-// File runtimes: `ssp proxy s3` serves a static site from build folders.
+// File runtimes: `ssp proxy s3` and `ssp proxy gcs` serve a static site from
+// build folders.
 
 /// The app of the file runtime tests.
 const SITE_APP: &str = "site-prod";
@@ -6381,8 +6382,8 @@ fn check_site(
     );
 }
 
-/// An in-memory bucket for the stand-in of S3. Each object has a version
-/// that changes when its content does.
+/// An in-memory bucket for the stand-ins of S3 and Cloud Storage. Each
+/// object has a version that changes when its content does.
 #[derive(Default)]
 struct FakeBucket {
     objects: BTreeMap<String, (Vec<u8>, u64)>,
@@ -6490,6 +6491,60 @@ fn fake_s3(bucket: Arc<Mutex<FakeBucket>>) -> u16 {
     })
 }
 
+/// A stand-in for the Cloud Storage JSON API and the metadata server.
+fn fake_gcs(bucket: Arc<Mutex<FakeBucket>>) -> u16 {
+    serve_replies(move |received| {
+        let mut bucket = bucket.lock().unwrap();
+        if received.path == "/computeMetadata/v1/instance/service-accounts/default/token" {
+            return json_answer(
+                200,
+                &json!({"access_token": "gcs-token", "expires_in": 3600}),
+            )
+            .into();
+        }
+        if received.headers.get("authorization").map(String::as_str) != Some("Bearer gcs-token") {
+            return json_answer(401, &json!({"error": {"message": "no token"}})).into();
+        }
+        let objects = format!("/storage/v1/b/{SITE_BUCKET}/o");
+        if received.path == objects {
+            let prefix = query_value(&received.query, "prefix").unwrap_or_default();
+            let items: Vec<Value> = bucket
+                .objects
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, (_, version))| json!({"name": key, "generation": version.to_string()}))
+                .collect();
+            return json_answer(200, &json!({"items": items})).into();
+        }
+        let Some(name) = received.path.strip_prefix(&format!("{objects}/")) else {
+            return json_answer(404, &json!({"error": {"message": "no route"}})).into();
+        };
+        let name = percent_decode(name);
+        if received.query == "alt=media" {
+            // An authenticated download carries no metadata of the object.
+            let mut reply = bucket.object(&name, "application/octet-stream");
+            reply.headers.retain(|(header, _)| header == "content-type");
+            reply.headers.push((
+                "cache-control".into(),
+                "no-cache, no-store, max-age=0, must-revalidate".into(),
+            ));
+            return reply;
+        }
+        match bucket.objects.get(&name) {
+            Some((_, version)) => json_answer(
+                200,
+                &json!({
+                    "contentType": if name.ends_with(".html") { "text/html" } else { "application/octet-stream" },
+                    "generation": version.to_string(),
+                    "updated": "2026-11-03T06:30:14.123Z",
+                }),
+            )
+            .into(),
+            None => json_answer(404, &json!({"error": {"message": "No such object"}})).into(),
+        }
+    })
+}
+
 /// The bucket of the stand-in tests.
 const SITE_BUCKET: &str = "acme-site";
 
@@ -6551,4 +6606,45 @@ fn s3_proxies_serve_builds_from_folders() {
     let before = reads(&bucket);
     page_of(port, &live, "/about").unwrap();
     assert_eq!(reads(&bucket), before);
+}
+
+#[test]
+fn gcs_proxies_serve_builds_from_folders() {
+    let bucket = Arc::new(Mutex::new(FakeBucket::with(site_objects())));
+    let gcs = fake_gcs(bucket.clone());
+    let state = site_statespace("gs", SITE_BUCKET);
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("STATESPACE_CHECK_EVERY", "1")
+        .env("STATESPACE_GCS_API", format!("http://127.0.0.1:{gcs}"))
+        .env("GCE_METADATA_HOST", format!("127.0.0.1:{gcs}"))
+        .env("CLOUDSDK_CONFIG", directory.path())
+        .env_remove("GOOGLE_APPLICATION_CREDENTIALS")
+        .args(["proxy", "gcs", "--app", SITE_APP, "--bucket", SITE_BUCKET])
+        .args(["--fallback", "200.html"]);
+    let (_proxy, port) = spawn_proxy(command);
+
+    check_site("gcs", port, &state, 30, &mut |change| {
+        bucket.lock().unwrap().change(change)
+    });
+
+    // Without --cache, every request reads the bucket.
+    let live = subject_in(0.9, 1.0);
+    let count = || {
+        bucket
+            .lock()
+            .unwrap()
+            .reads
+            .iter()
+            .filter(|key| *key == "about.html")
+            .count()
+    };
+    let before = count();
+    page_of(port, &live, "/about").unwrap();
+    assert_eq!(count(), before + 1);
 }

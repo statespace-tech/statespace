@@ -385,6 +385,14 @@ pub enum ProxyCommand {
         #[command(flatten)]
         s3: S3Args,
     },
+    /// Serve a static site and the arms of experiments from build folders
+    /// in a Cloud Storage bucket.
+    Gcs {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        gcs: GcsArgs,
+    },
 }
 
 /// How a file runtime serves files.
@@ -427,6 +435,32 @@ pub struct S3Args {
     pub region: Option<String>,
     #[command(flatten)]
     pub files: FileArgs,
+}
+
+#[derive(Args, Clone)]
+pub struct GcsArgs {
+    /// The bucket. Live is its root.
+    #[arg(long)]
+    pub bucket: String,
+    #[command(flatten)]
+    pub files: FileArgs,
+    /// The Cloud Storage API. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_GCS_API",
+        hide = true,
+        default_value = "https://storage.googleapis.com"
+    )]
+    pub gcs_api: String,
+    /// The metadata server that gives credentials when no application
+    /// default credentials exist. For tests.
+    #[arg(
+        long,
+        env = "GCE_METADATA_HOST",
+        hide = true,
+        default_value = "metadata.google.internal"
+    )]
+    pub metadata_host: String,
 }
 
 #[derive(Args, Clone)]
@@ -779,6 +813,17 @@ mod tests {
                 "--cache",
                 "--fallback",
                 "200.html",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "gcs",
+                "--app",
+                "site-prod",
+                "--token",
+                "t",
+                "--bucket",
+                "acme-site",
             ],
         ] {
             Cli::try_parse_from(&arguments)
