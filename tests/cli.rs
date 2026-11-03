@@ -187,6 +187,9 @@ struct Statespace {
     polls: HashMap<String, usize>,
     /// The app's recent builds, for the file runtimes.
     builds: Vec<Value>,
+    /// What Statespace refused: reports that fail its checks, and builds
+    /// that it could never hold. `reports()` fails the test on any.
+    rejected: Vec<String>,
 }
 
 /// An experiment of `shop-prod`, as the API returns it.
@@ -216,12 +219,339 @@ impl Statespace {
     }
 
     fn reports(&self) -> Vec<Value> {
+        assert!(
+            self.rejected.is_empty(),
+            "Statespace refused: {:?}",
+            self.rejected
+        );
         self.received
             .iter()
             .filter(|received| received.path.ends_with("/report"))
             .map(|received| received.body.clone())
             .collect()
     }
+}
+
+// The checks of Statespace, as the backend makes them, with its messages.
+// A report that fails one gets 400, as it does in production.
+
+/// `POST /v1/runtime/apps/{app}/report`: the status and the error of a
+/// report that Statespace refuses.
+fn check_report(report: &Value) -> Result<(), (u16, String)> {
+    let shape = |error: String| {
+        (
+            422,
+            format!("Failed to deserialize the JSON body into the target type: {error}"),
+        )
+    };
+    let bad = |error: &str| (400, error.to_owned());
+    let Some(fields) = report.as_object() else {
+        return Err(shape("a report is an object".into()));
+    };
+    for key in fields.keys() {
+        if ![
+            "instance",
+            "version",
+            "orchestrator",
+            "live_image",
+            "live_files",
+            "settings_hash",
+            "units",
+        ]
+        .contains(&key.as_str())
+        {
+            return Err(shape(format!("unknown field `{key}`")));
+        }
+    }
+    let optional = |key: &str| -> Result<Option<&str>, (u16, String)> {
+        match &report[key] {
+            Value::Null => Ok(None),
+            Value::String(value) => Ok(Some(value)),
+            _ => Err(shape(format!("{key}: invalid type"))),
+        }
+    };
+    let text = |value: Option<&str>, label: &str, max: usize| match value {
+        Some(value) if value.is_empty() || value.len() > max => {
+            Err(bad(&format!("{label} must contain 1 to {max} characters")))
+        }
+        _ => Ok(()),
+    };
+    let instance = optional("instance")?.ok_or_else(|| shape("missing field `instance`".into()))?;
+    text(Some(instance), "instance", 128)?;
+    text(optional("version")?, "version", 64)?;
+    text(optional("orchestrator")?, "orchestrator", 32)?;
+    text(optional("settings_hash")?, "settings_hash", 128)?;
+    let live_image = optional("live_image")?;
+    if let Some(image) = live_image {
+        text(Some(image), "live_image", 512)?;
+        if !is_digest(image) {
+            return Err(bad(
+                "live_image must name its digest, such as …@sha256:<64 hex>",
+            ));
+        }
+    }
+    if let Some(hash) = optional("live_files")? {
+        if live_image.is_some() {
+            return Err(bad("a report names live_image or live_files, not both"));
+        }
+        if !is_files_hash(hash) {
+            return Err(bad("live_files is the files hash of live"));
+        }
+    }
+    let units = match &report["units"] {
+        Value::Null => return Ok(()),
+        Value::Array(units) => units,
+        _ => return Err(shape("units: invalid type".into())),
+    };
+    if units.len() > 100 {
+        return Err(bad("a report holds at most 100 units"));
+    }
+    for unit in units {
+        let Some(fields) = unit.as_object() else {
+            return Err(shape("a unit is an object".into()));
+        };
+        for key in fields.keys() {
+            if !["experiment", "commit", "address", "ready", "reason"].contains(&key.as_str()) {
+                return Err(shape(format!("unknown field `{key}`")));
+            }
+        }
+        let string = |key: &str| match &unit[key] {
+            Value::Null => Ok(None),
+            Value::String(value) => Ok(Some(value.as_str())),
+            _ => Err(shape(format!("{key}: invalid type"))),
+        };
+        if !unit["ready"].is_boolean() {
+            return Err(shape("missing field `ready`".into()));
+        }
+        let experiment =
+            string("experiment")?.ok_or_else(|| shape("missing field `experiment`".into()))?;
+        let commit = string("commit")?.ok_or_else(|| shape("missing field `commit`".into()))?;
+        if !is_experiment_name(experiment) {
+            return Err(bad("a unit names its experiment"));
+        }
+        if !is_commit(commit) {
+            return Err(bad("a unit names its full commit"));
+        }
+        text(string("reason")?, "a unit's reason", 1500)?;
+        if string("address")?.is_some_and(|address| {
+            address.len() > 2048
+                || !["http://", "https://", "s3://", "gs://"]
+                    .iter()
+                    .any(|scheme| address.starts_with(scheme))
+        }) {
+            return Err(bad(
+                "a unit's address must be an HTTP URL or an s3:// or gs:// folder of at most 2048 bytes",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Why Statespace could never hold `build`, a commit with its image or
+/// files, as CI records it with `POST /v1/builds`.
+fn check_build(build: &Value) -> Result<(), String> {
+    let commit = build["commit"].as_str().unwrap_or_default();
+    if !is_commit(commit) {
+        return Err(format!(
+            "{commit:?}: a commit must be 40 lowercase hexadecimal digits"
+        ));
+    }
+    match (&build["image"], &build["files"]) {
+        (Value::String(image), Value::Null) if is_image(image) => Ok(()),
+        (Value::Null, files @ Value::Object(_)) if is_files(files) => Ok(()),
+        _ => Err(format!(
+            "{commit}: a build names one image by digest or one folder of files with its hash"
+        )),
+    }
+}
+
+/// The builds of a runtime config: live's and every arm's.
+fn check_config(config: &Value) -> Result<(), String> {
+    if let Some(live) = config.get("live").filter(|live| !live.is_null()) {
+        // Live's image is the digest that the lease holder reported.
+        match &live["image"] {
+            Value::String(image) if is_digest(image) => {}
+            Value::String(image) => return Err(format!("live image {image:?} has no digest")),
+            _ => check_build(live)?,
+        }
+    }
+    for experiment in config["experiments"].as_array().into_iter().flatten() {
+        for arm in experiment["arms"].as_array().into_iter().flatten() {
+            check_build(arm)?;
+        }
+    }
+    Ok(())
+}
+
+fn is_lower_hex(text: &str, length: usize) -> bool {
+    text.len() == length
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_commit(commit: &str) -> bool {
+    is_lower_hex(commit, 40)
+}
+
+fn is_files_hash(hash: &str) -> bool {
+    hash.strip_prefix("sha256:")
+        .is_some_and(|hex| is_lower_hex(hex, 64))
+}
+
+/// `…@sha256:<64 hex>` or a bare `sha256:<64 hex>`.
+fn is_digest(image: &str) -> bool {
+    let digest = image.rsplit_once('@').map_or(image, |(_, digest)| digest);
+    is_files_hash(digest)
+}
+
+fn is_image(image: &str) -> bool {
+    image
+        .split_once("@sha256:")
+        .is_some_and(|(repository, digest)| {
+            !repository.is_empty()
+                && repository.len() <= 400
+                && repository.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'_' | b'-' | b'/' | b':')
+                })
+                && is_lower_hex(digest, 64)
+        })
+}
+
+/// `s3://<bucket>/<prefix>/` or `gs://<bucket>/<prefix>/` of at most 1024
+/// characters, and its files hash.
+fn is_files(files: &Value) -> bool {
+    let (Some(location), Some(hash)) = (files["location"].as_str(), files["hash"].as_str()) else {
+        return false;
+    };
+    let rest = location
+        .strip_prefix("s3://")
+        .or_else(|| location.strip_prefix("gs://"));
+    let folder = location.len() <= 1024
+        && rest.is_some_and(|rest| {
+            let Some((bucket, prefix)) = rest.split_once('/') else {
+                return false;
+            };
+            let folders: Vec<&str> = prefix.split('/').collect();
+            (3..=63).contains(&bucket.len())
+                && bucket.bytes().all(|byte| {
+                    byte.is_ascii_lowercase() || byte.is_ascii_digit() || b".-_".contains(&byte)
+                })
+                && prefix.ends_with('/')
+                && folders[..folders.len() - 1]
+                    .iter()
+                    .all(|folder| !folder.is_empty() && *folder != "." && *folder != "..")
+                && !prefix.chars().any(char::is_control)
+        });
+    folder && is_files_hash(hash) && files.as_object().is_some_and(|fields| fields.len() == 2)
+}
+
+fn is_experiment_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 40
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+#[test]
+fn stand_in_refuses_what_statespace_refuses() {
+    let unit = |address: &str| json!({"experiment": "hero", "commit": LIVE, "address": address, "ready": true});
+    let report = |units: Value| json!({"instance": "proxy-1", "version": "0.4.2", "units": units});
+    for address in [
+        "http://10.0.0.7:8000",
+        "https://shop-abc.a.run.app",
+        "s3://acme-site/builds/a1b2c3d/",
+        "gs://acme-site/builds/a1b2c3d/",
+    ] {
+        assert_eq!(
+            check_report(&report(json!([unit(address)]))),
+            Ok(()),
+            "{address}"
+        );
+    }
+    let address_error = Err((
+        400,
+        "a unit's address must be an HTTP URL or an s3:// or gs:// folder of at most 2048 bytes"
+            .to_owned(),
+    ));
+    for address in [
+        "10.0.0.7:8000",
+        "file:///srv/site/",
+        &format!("s3://a/{}", "b".repeat(2048)),
+    ] {
+        assert_eq!(check_report(&report(json!([unit(address)]))), address_error);
+    }
+    let bad = |report: Value, error: &str| {
+        assert_eq!(
+            check_report(&report),
+            Err((400, error.to_owned())),
+            "{report}"
+        );
+    };
+    bad(
+        json!({"instance": ""}),
+        "instance must contain 1 to 128 characters",
+    );
+    bad(
+        json!({"instance": "i".repeat(129)}),
+        "instance must contain 1 to 128 characters",
+    );
+    bad(
+        json!({"instance": "i", "version": "v".repeat(65)}),
+        "version must contain 1 to 64 characters",
+    );
+    bad(
+        json!({"instance": "i", "orchestrator": "o".repeat(33)}),
+        "orchestrator must contain 1 to 32 characters",
+    );
+    bad(
+        json!({"instance": "i", "settings_hash": ""}),
+        "settings_hash must contain 1 to 128 characters",
+    );
+    bad(
+        json!({"instance": "i", "live_image": "ghcr.io/acme/shop:latest"}),
+        "live_image must name its digest, such as …@sha256:<64 hex>",
+    );
+    bad(
+        json!({"instance": "i", "live_image": digest('1'), "live_files": format!("sha256:{}", "a".repeat(64))}),
+        "a report names live_image or live_files, not both",
+    );
+    bad(
+        json!({"instance": "i", "live_files": "sha256:abc"}),
+        "live_files is the files hash of live",
+    );
+    bad(
+        report(json!(vec![unit("http://a"); 101])),
+        "a report holds at most 100 units",
+    );
+    bad(
+        report(json!([{"experiment": "Hero", "commit": LIVE, "ready": true}])),
+        "a unit names its experiment",
+    );
+    bad(
+        report(json!([{"experiment": "hero", "commit": &LIVE[..7], "ready": true}])),
+        "a unit names its full commit",
+    );
+    // The limit is in bytes: 1500 characters of two bytes each are too many.
+    bad(
+        report(
+            json!([{"experiment": "hero", "commit": LIVE, "ready": false, "reason": "é".repeat(1500)}]),
+        ),
+        "a unit's reason must contain 1 to 1500 characters",
+    );
+    assert_eq!(
+        check_report(&json!({"instance": "i", "extra": 1})).map_err(|(status, _)| status),
+        Err(422)
+    );
+    assert!(check_build(&json!({"commit": LIVE, "image": digest('1')})).is_ok());
+    assert!(check_build(&json!({"commit": LIVE, "image": "ghcr.io/acme/shop:1"})).is_err());
+    assert!(
+        check_build(&json!({"commit": LIVE, "files": {"location": "s3://acme-site/builds", "hash": format!("sha256:{}", "a".repeat(64))}}))
+            .is_err()
+    );
 }
 
 fn statespace(state: Arc<Mutex<Statespace>>) -> String {
@@ -235,6 +565,9 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                     .as_str()
                     .is_some_and(|app| path == format!("/v1/runtime/apps/{app}")) =>
             {
+                if let Err(error) = check_config(&state.config) {
+                    state.rejected.push(format!("runtime config: {error}"));
+                }
                 json_answer(200, &state.config)
             }
             ("GET", path)
@@ -242,15 +575,29 @@ fn statespace(state: Arc<Mutex<Statespace>>) -> String {
                     .as_str()
                     .is_some_and(|app| path == format!("/v1/runtime/apps/{app}/builds")) =>
             {
+                let errors: Vec<String> = state
+                    .builds
+                    .iter()
+                    .filter_map(|build| check_build(build).err())
+                    .collect();
+                state.rejected.extend(errors);
                 json_answer(200, &json!({"builds": state.builds}))
             }
             ("GET", path) if path.starts_with("/v1/runtime/apps/") => {
                 json_answer(404, &json!({"error": "no app shop-gone"}))
             }
-            ("POST", path) if path.ends_with("/report") => json_answer(
-                200,
-                &json!({"lease": state.lease, "expires_at": "2026-10-28T10:00:30Z"}),
-            ),
+            ("POST", path) if path.ends_with("/report") => match check_report(&received.body) {
+                Ok(()) => json_answer(
+                    200,
+                    &json!({"lease": state.lease, "expires_at": "2026-10-28T10:00:30Z"}),
+                ),
+                Err((status, error)) => {
+                    state
+                        .rejected
+                        .push(format!("report {}: {error}", received.body));
+                    json_answer(status, &json!({"error": error}))
+                }
+            },
             ("POST", "/v1/events") => json_answer(202, &json!({"accepted": true})),
             ("GET", "/v1/whoami") => json_answer(
                 200,
