@@ -33,7 +33,7 @@ use tokio::{
 };
 
 use super::{
-    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
     channel, engine::Engine,
 };
 use crate::{cli::DockerArgs, image};
@@ -172,7 +172,6 @@ enum Place {
 #[derive(Clone)]
 pub struct Docker {
     engine: Arc<Engine>,
-    app: String,
     listen: String,
     live_name: String,
     live_port: Option<u16>,
@@ -181,48 +180,24 @@ pub struct Docker {
     live: Arc<RwLock<Option<LiveContainer>>>,
     slots: Arc<Mutex<HashMap<UnitKey, Slot>>>,
     tasks: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    /// The app's containers of an earlier run, by unit label, until a unit
+    /// adopts them or they are removed as strays.
     found: Arc<Mutex<HashMap<String, Found>>>,
-    started: Instant,
+    /// When the proxy listed the containers of an earlier run. It lists
+    /// them once it knows the app.
+    listed: Arc<tokio::sync::OnceCell<Instant>>,
     /// Whether the proxy itself stops.
     stopping: Arc<AtomicBool>,
 }
 
 impl Docker {
-    /// Find live and where the proxy runs, adopt the app's containers from
-    /// an earlier run, and follow live.
-    pub async fn new(app: &str, listen: &str, arguments: DockerArgs) -> anyhow::Result<Self> {
+    /// Find live and where the proxy runs, and follow live. The proxy
+    /// reaches live with this alone.
+    pub async fn new(listen: &str, arguments: DockerArgs) -> anyhow::Result<Self> {
         let engine = Arc::new(Engine::connect()?);
-        let listed = engine
-            .containers(&[
-                format!("{APP_LABEL}={app}"),
-                format!("{PROXY_LABEL}={listen}"),
-            ])
-            .await
-            .context(
-                "could not list containers; is Docker running, and may this user use its socket?",
-            )?;
-        let mut found = HashMap::new();
-        for container in listed {
-            let labels = &container["Labels"];
-            if let (Some(id), Some(unit), Some(image)) = (
-                container["Id"].as_str(),
-                labels[UNIT_LABEL].as_str(),
-                labels[IMAGE_LABEL].as_str(),
-            ) {
-                found.insert(
-                    unit.to_owned(),
-                    Found {
-                        id: id.to_owned(),
-                        image: image.to_owned(),
-                        running: container["State"] == "running",
-                    },
-                );
-            }
-        }
         let place = place(&engine).await;
         let docker = Self {
             engine,
-            app: app.to_owned(),
             listen: listen.to_owned(),
             live_name: arguments.live_container,
             live_port: arguments.live_port,
@@ -231,8 +206,8 @@ impl Docker {
             live: Arc::default(),
             slots: Arc::default(),
             tasks: Arc::default(),
-            found: Arc::new(Mutex::new(found)),
-            started: Instant::now(),
+            found: Arc::default(),
+            listed: Arc::default(),
             stopping: Arc::default(),
         };
         let live = docker.inspect_live().await?;
@@ -244,6 +219,46 @@ impl Docker {
         let watcher = docker.clone();
         tokio::spawn(async move { watcher.follow_live().await });
         Ok(docker)
+    }
+
+    /// List the app's containers of an earlier run once, so units adopt the
+    /// ones that still run.
+    async fn adopt(&self, app: &str) -> anyhow::Result<()> {
+        self.listed
+            .get_or_try_init(|| async {
+                let listed = self
+                    .engine
+                    .containers(&[
+                        format!("{APP_LABEL}={app}"),
+                        format!("{PROXY_LABEL}={}", self.listen),
+                    ])
+                    .await
+                    .context("could not list containers; may this user use the Docker socket?")?;
+                let mut found = self
+                    .found
+                    .lock()
+                    .expect("found containers are never poisoned");
+                for container in listed {
+                    let labels = &container["Labels"];
+                    if let (Some(id), Some(unit), Some(image)) = (
+                        container["Id"].as_str(),
+                        labels[UNIT_LABEL].as_str(),
+                        labels[IMAGE_LABEL].as_str(),
+                    ) {
+                        found.insert(
+                            unit.to_owned(),
+                            Found {
+                                id: id.to_owned(),
+                                image: image.to_owned(),
+                                running: container["State"] == "running",
+                            },
+                        );
+                    }
+                }
+                anyhow::Ok(Instant::now())
+            })
+            .await
+            .map(drop)
     }
 
     /// The live container now, and where it takes requests.
@@ -339,7 +354,7 @@ impl Docker {
 
     /// Run `unit`. A unit that runs another image switches to this one once
     /// its new container is ready.
-    fn ensure(&self, unit: &Unit) {
+    fn ensure(&self, app: &str, unit: &Unit) {
         let key = unit.key();
         let image = unit.image().to_owned();
         let mut slots = self.slots.lock().expect("slots are never poisoned");
@@ -368,8 +383,9 @@ impl Docker {
             },
         );
         let docker = self.clone();
+        let app = app.to_owned();
         let task = tokio::spawn(async move {
-            docker.supervise(key, images, stopped).await;
+            docker.supervise(&app, key, images, stopped).await;
         });
         self.tasks
             .lock()
@@ -399,6 +415,7 @@ impl Docker {
 
     async fn supervise(
         &self,
+        app: &str,
         key: UnitKey,
         mut images: watch::Receiver<String>,
         mut stopped: watch::Receiver<bool>,
@@ -412,7 +429,7 @@ impl Docker {
             let image = images.borrow_and_update().clone();
             let started = Instant::now();
             let starting = tokio::select! {
-                result = self.start_container(&key, &image) => Some(result),
+                result = self.start_container(app, &key, &image) => Some(result),
                 _ = stopped.wait_for(|stop| *stop) => None,
             };
             let instance = match starting {
@@ -530,7 +547,12 @@ impl Docker {
     }
 
     /// Start a container for a unit, or adopt one an earlier run left.
-    async fn start_container(&self, key: &UnitKey, image: &str) -> anyhow::Result<Instance> {
+    async fn start_container(
+        &self,
+        app: &str,
+        key: &UnitKey,
+        image: &str,
+    ) -> anyhow::Result<Instance> {
         let label = label(key);
         let found = self
             .found
@@ -552,7 +574,7 @@ impl Docker {
             .await?
             .with_context(|| format!("Docker has no image {image}"))?;
         let labels = BTreeMap::from([
-            (APP_LABEL, self.app.clone()),
+            (APP_LABEL, app.to_owned()),
             (UNIT_LABEL, label.clone()),
             (PROXY_LABEL, self.listen.clone()),
             (IMAGE_LABEL, image.to_owned()),
@@ -707,7 +729,7 @@ impl Orchestrator for Docker {
     }
 
     /// The digest of the live container's image.
-    async fn live(&self) -> anyhow::Result<Live> {
+    async fn live(&self, _app: &App) -> anyhow::Result<Live> {
         let live = self.live_container().context("live is not known yet")?;
         Ok(Live::Image(digest(&live.container, &live.image)?))
     }
@@ -718,12 +740,13 @@ impl Orchestrator for Docker {
             .unwrap_or_default()
     }
 
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
-        self.ensure(unit);
+    async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
+        self.adopt(&app.name).await?;
+        self.ensure(&app.name, unit);
         Ok(self.address(&unit.key()).unwrap_or_default())
     }
 
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
         if let Some(slot) = self
             .slots
             .lock()
@@ -735,7 +758,8 @@ impl Orchestrator for Docker {
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
+        self.adopt(&app.name).await?;
         let (running, labels): (Vec<Running>, HashSet<String>) = {
             let slots = self.slots.lock().expect("slots are never poisoned");
             let running = slots
@@ -759,13 +783,17 @@ impl Orchestrator for Docker {
         };
         // Containers of an earlier run that no unit adopted in the first
         // minute are strays: the lease holder decided what runs by then.
-        if self.started.elapsed() > STRAYS_AFTER {
+        if self
+            .listed
+            .get()
+            .is_some_and(|listed| listed.elapsed() > STRAYS_AFTER)
+        {
             self.remove_strays(&labels).await;
         }
         Ok(running)
     }
 
-    fn output(&self, unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let docker = self.clone();
         let key = unit.key();

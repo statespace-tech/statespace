@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
     aws::{Aws, Endpoints, Service, xml_value},
     channel,
     kubernetes::replicas,
@@ -189,7 +189,6 @@ impl Ecs {
 
 pub struct Fargate {
     ecs: Ecs,
-    app: String,
     service: String,
     container: Option<String>,
     unit_ip: UnitIp,
@@ -201,7 +200,7 @@ pub struct Fargate {
 }
 
 impl Fargate {
-    pub async fn new(app: &str, arguments: FargateArgs) -> anyhow::Result<Self> {
+    pub async fn new(arguments: FargateArgs) -> anyhow::Result<Self> {
         let aws = Aws::connect(
             arguments.region.clone(),
             None,
@@ -219,7 +218,6 @@ impl Fargate {
                 cluster: arguments.cluster.clone(),
                 definitions: Arc::default(),
             },
-            app: app.to_owned(),
             service: arguments.service.clone(),
             container: arguments.container.clone(),
             unit_ip: arguments.unit_ip,
@@ -337,7 +335,7 @@ impl Orchestrator for Fargate {
     /// The image of the task definition of the service's primary
     /// deployment. When it names a tag, the digest that its running tasks
     /// report.
-    async fn live(&self) -> anyhow::Result<Live> {
+    async fn live(&self, _app: &App) -> anyhow::Result<Live> {
         let live = self.live_service().await?;
         let arn = primary(&live)["taskDefinition"]
             .as_str()
@@ -383,7 +381,7 @@ impl Orchestrator for Fargate {
         self.live_address.clone()
     }
 
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
+    async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let name = self.unit_name(&unit.key());
         let current = self.ecs.service(&name).await?;
         let active = current
@@ -415,7 +413,7 @@ impl Orchestrator for Fargate {
             &definition["taskDefinition"]["containerDefinitions"],
             self.container.as_deref(),
         )?;
-        let registration = unit_task_definition(&definition, index, &self.app, &name, unit)?;
+        let registration = unit_task_definition(&definition, index, &app.name, &name, unit)?;
         let registered = self
             .ecs
             .call("RegisterTaskDefinition", registration)
@@ -437,14 +435,14 @@ impl Orchestrator for Fargate {
                 .await?;
             eprintln!("[ssp] updated service {name} for {}", unit.key());
         } else {
-            let service = unit_service(&live, &unit_arn, &self.ecs.cluster, &self.app, &name, unit);
+            let service = unit_service(&live, &unit_arn, &self.ecs.cluster, &app.name, &name, unit);
             self.ecs.call("CreateService", service).await?;
             eprintln!("[ssp] created service {name} for {}", unit.key());
         }
         Ok(String::new())
     }
 
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = self.unit_name(&unit.key());
         if let Some(service) = self.ecs.service(&name).await?
             && service["status"] == "ACTIVE"
@@ -501,14 +499,14 @@ impl Orchestrator for Fargate {
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
         let prefix = format!("{}-ssp-", self.service);
         let names = self.ecs.service_names(&prefix).await?;
         let services = self.ecs.services(&names).await?;
         let turn = self.turn.fetch_add(1, Ordering::Relaxed);
         let mut running = Vec::new();
         for service in &services {
-            if service["status"] != "ACTIVE" || tag(&service["tags"], APP_TAG) != Some(&self.app) {
+            if service["status"] != "ACTIVE" || tag(&service["tags"], APP_TAG) != Some(&app.name) {
                 continue;
             }
             let (Some(experiment), Some(commit), Some(arn)) = (
@@ -571,7 +569,7 @@ impl Orchestrator for Fargate {
         Ok(running)
     }
 
-    fn output(&self, unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let reader = Reader {
             ecs: self.ecs.clone(),

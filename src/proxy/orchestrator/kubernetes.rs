@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use super::{
-    Address, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, channel,
+    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, channel,
     kube::Kube,
 };
 use crate::{cli::KubernetesArgs, image};
@@ -38,14 +38,13 @@ const HASH_ANNOTATION: &str = "statespace.com/spec-hash";
 
 pub struct Kubernetes {
     kube: Kube,
-    app: String,
     deployment: String,
     container: Option<String>,
     live_address: String,
 }
 
 impl Kubernetes {
-    pub async fn new(app: &str, arguments: KubernetesArgs) -> anyhow::Result<Self> {
+    pub async fn new(arguments: KubernetesArgs) -> anyhow::Result<Self> {
         let kube = Kube::connect(arguments.namespace.clone())?;
         let service_name = arguments
             .service
@@ -66,7 +65,6 @@ impl Kubernetes {
         let live_address = format!("http://{service_name}.{}.svc:{port}", kube.namespace);
         Ok(Self {
             kube,
-            app: app.to_owned(),
             deployment: arguments.deployment,
             container: arguments.container,
             live_address,
@@ -105,7 +103,7 @@ impl Orchestrator for Kubernetes {
 
     /// The digest that the ready pods of the Deployment's current template
     /// run, from their status `imageID`.
-    async fn live(&self) -> anyhow::Result<Live> {
+    async fn live(&self, _app: &App) -> anyhow::Result<Live> {
         let live = self.live_deployment().await?;
         let pod = &live["spec"]["template"]["spec"];
         let index = app_container(pod, self.container.as_deref())?;
@@ -158,11 +156,11 @@ impl Orchestrator for Kubernetes {
         self.live_address.clone()
     }
 
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
+    async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let live = self.live_deployment().await?;
         let name = unit_name(&self.deployment, unit);
         let (deployment, port) =
-            unit_deployment(&live, self.container.as_deref(), &self.app, &name, unit)?;
+            unit_deployment(&live, self.container.as_deref(), &app.name, &name, unit)?;
         let deployments = self.deployments();
         match self.kube.get(&format!("{deployments}/{name}")).await? {
             Some(current) if current_hash(&current) == current_hash(&deployment) => {}
@@ -180,7 +178,7 @@ impl Orchestrator for Kubernetes {
                 eprintln!("[ssp] created Deployment {name} for {}", unit.key());
             }
         }
-        let service = unit_service(&self.app, &name, port, unit);
+        let service = unit_service(&app.name, &name, port, unit);
         let services = self.services();
         match self.kube.get(&format!("{services}/{name}")).await? {
             Some(current) if current_hash(&current) == current_hash(&service) => {}
@@ -195,7 +193,7 @@ impl Orchestrator for Kubernetes {
         Ok(self.address(&name, port))
     }
 
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = unit_name(&self.deployment, unit);
         self.kube
             .delete(&format!("{}/{name}", self.deployments()))
@@ -207,10 +205,10 @@ impl Orchestrator for Kubernetes {
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
         let deployments = self
             .kube
-            .list(&self.deployments(), &format!("{APP_LABEL}={}", self.app))
+            .list(&self.deployments(), &format!("{APP_LABEL}={}", app.name))
             .await?;
         Ok(deployments
             .iter()
@@ -235,7 +233,7 @@ impl Orchestrator for Kubernetes {
             .collect())
     }
 
-    fn output(&self, unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let kube = self.kube.clone();
         let name = unit_name(&self.deployment, unit);

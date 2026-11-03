@@ -24,8 +24,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
-    channel,
+    Address, App, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit,
+    UnitKey, channel,
 };
 use crate::{cli::FlyArgs, image};
 
@@ -49,7 +49,6 @@ pub struct Fly {
     machines_api: String,
     logs_api: String,
     authorization: String,
-    app: String,
     fly_app: String,
     region: Option<String>,
     process_group: String,
@@ -59,7 +58,7 @@ pub struct Fly {
 }
 
 impl Fly {
-    pub async fn new(app: &str, arguments: FlyArgs) -> anyhow::Result<Self> {
+    pub async fn new(arguments: FlyArgs) -> anyhow::Result<Self> {
         let fly = Self {
             client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(10))
@@ -68,7 +67,6 @@ impl Fly {
             machines_api: arguments.machines_api.trim_end_matches('/').to_owned(),
             logs_api: arguments.logs_api.trim_end_matches('/').to_owned(),
             authorization: authorization(&arguments.fly_token),
-            app: app.to_owned(),
             live_address: arguments.live_url.as_deref().map_or_else(
                 || format!("http://{}.flycast", arguments.fly_app),
                 |url| url.trim_end_matches('/').to_owned(),
@@ -171,7 +169,7 @@ impl Orchestrator for Fly {
     }
 
     /// The digest that every live Machine runs.
-    async fn live(&self) -> anyhow::Result<Live> {
+    async fn live(&self, _app: &App) -> anyhow::Result<Live> {
         live_image(&self.machines().await?, &self.process_group, &self.fly_app).map(Live::Image)
     }
 
@@ -179,11 +177,11 @@ impl Orchestrator for Fly {
         self.live_address.clone()
     }
 
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
+    async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let machines = self.machines().await?;
         let key = unit.key();
         for machine in &machines {
-            let Some((current, port)) = unit_of(machine, &self.app) else {
+            let Some((current, port)) = unit_of(machine, &app.name) else {
                 continue;
             };
             if current.key() != key {
@@ -225,7 +223,7 @@ impl Orchestrator for Fly {
                 )
             })?,
         };
-        let config = unit_config(&live["config"], &self.app, unit, port)?;
+        let config = unit_config(&live["config"], &app.name, unit, port)?;
         let name = unit_name(unit);
         let region = self
             .region
@@ -245,22 +243,22 @@ impl Orchestrator for Fly {
         Ok(address(&created, port).unwrap_or_default())
     }
 
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, app: &App, unit: &Unit) -> anyhow::Result<()> {
         let key = unit.key();
         for machine in self.machines().await? {
-            if unit_of(&machine, &self.app).is_some_and(|(current, _)| current.key() == key) {
+            if unit_of(&machine, &app.name).is_some_and(|(current, _)| current.key() == key) {
                 self.destroy(&machine).await?;
             }
         }
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
         let machines = self.machines().await?;
         let mut running = Vec::new();
         let mut instances: HashMap<UnitKey, HashSet<String>> = HashMap::new();
         for machine in &machines {
-            let Some((unit, port)) = unit_of(machine, &self.app) else {
+            let Some((unit, port)) = unit_of(machine, &app.name) else {
                 continue;
             };
             if let Some(id) = machine["id"].as_str() {
@@ -286,7 +284,7 @@ impl Orchestrator for Fly {
         Ok(running)
     }
 
-    fn output(&self, unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         let reader = Reader {
             client: self.client.clone(),

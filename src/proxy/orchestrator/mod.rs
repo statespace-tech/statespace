@@ -22,6 +22,15 @@ use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 pub use self::files::{FileRequest, Served};
+use super::remote::Remote;
+
+/// The app of a proxy, which Statespace names for the runtime token. An
+/// orchestrator reaches live without it; it needs it to report live and
+/// to run units, which carry the app's name in their labels.
+pub struct App {
+    pub name: String,
+    pub remote: Remote,
+}
 
 /// An image by digest, such as `ghcr.io/acme/shop@sha256:…`.
 pub type Image = String;
@@ -170,12 +179,15 @@ pub struct Line {
 /// The lines of a unit, as they come. Dropping it stops the reading.
 pub type OutputStream = mpsc::Receiver<Line>;
 
+/// An orchestrator is built from the flags of its subcommand alone, so the
+/// proxy can send requests to live before it knows the app. The calls that
+/// report live or run units take the app.
 pub trait Orchestrator: Send + Sync + 'static {
     /// The name the report gives: `docker`, `cloudrun`, `kubernetes`,
     /// `fargate`, `fly`, `s3`, or `gcs`.
     fn name(&self) -> &'static str;
     /// What live runs now.
-    fn live(&self) -> impl Future<Output = anyhow::Result<Live>> + Send;
+    fn live(&self, app: &App) -> impl Future<Output = anyhow::Result<Live>> + Send;
     /// Whether this orchestrator runs a build. Image runtimes run images
     /// only; a file runtime runs only folders of its own storage.
     fn runs(&self, build: &Build) -> bool {
@@ -189,12 +201,14 @@ pub trait Orchestrator: Send + Sync + 'static {
     /// Where the proxy sends live traffic.
     fn live_address(&self) -> Address;
     /// Start a unit. Idempotent.
-    fn start(&self, unit: &Unit) -> impl Future<Output = anyhow::Result<Address>> + Send;
-    fn stop(&self, unit: &Unit) -> impl Future<Output = anyhow::Result<()>> + Send;
-    /// What runs now: each unit, its address, and whether it is ready.
-    fn running(&self) -> impl Future<Output = anyhow::Result<Vec<Running>>> + Send;
+    fn start(&self, app: &App, unit: &Unit)
+    -> impl Future<Output = anyhow::Result<Address>> + Send;
+    fn stop(&self, app: &App, unit: &Unit) -> impl Future<Output = anyhow::Result<()>> + Send;
+    /// What runs now: each unit of the app, its address, and whether it is
+    /// ready.
+    fn running(&self, app: &App) -> impl Future<Output = anyhow::Result<Vec<Running>>> + Send;
     /// Output lines of a unit, as they come.
-    fn output(&self, unit: &Unit) -> OutputStream;
+    fn output(&self, app: &App, unit: &Unit) -> OutputStream;
     /// A header that a request to `address` needs, such as a credential.
     fn credential(
         &self,
@@ -209,7 +223,7 @@ pub trait Orchestrator: Send + Sync + 'static {
     /// The units that should run, on an instance without the lease. A file
     /// runtime checks their builds on every instance; an image runtime reads
     /// what runs from its platform and ignores this.
-    fn follow(&self, _units: &[Unit]) {}
+    fn follow(&self, _app: &App, _units: &[Unit]) {}
     /// Answer a request from the files at `address`, on a file runtime. An
     /// image runtime gives `None`, and the proxy forwards the request.
     fn serve(

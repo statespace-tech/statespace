@@ -6,10 +6,7 @@
 use super::{FileRuntime, Listed, Object, Storage};
 use crate::{
     cli::S3Args,
-    proxy::{
-        orchestrator::aws::{Aws, Endpoints, Reply, Service, encode, xml_value},
-        remote::Remote,
-    },
+    proxy::orchestrator::aws::{Aws, Endpoints, Reply, Service, encode, xml_value},
 };
 
 /// `ssp proxy s3`.
@@ -20,7 +17,7 @@ pub struct S3Storage {
 }
 
 impl S3 {
-    pub async fn connect(arguments: S3Args, remote: Remote) -> anyhow::Result<Self> {
+    pub async fn connect(arguments: S3Args) -> anyhow::Result<Self> {
         // An S3-compatible store may need no region, but SigV4 names one.
         let fallback = arguments.endpoint.is_some().then_some("us-east-1");
         let aws = Aws::connect(
@@ -37,7 +34,6 @@ impl S3 {
             ("s3", "s3", "folders in S3"),
             arguments.bucket.clone(),
             &arguments.files,
-            remote,
         ))
     }
 }

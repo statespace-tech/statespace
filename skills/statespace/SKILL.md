@@ -109,7 +109,9 @@ subcommand from where live runs:
 | Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
 
 Each subcommand needs the runtime token in `STATESPACE_TOKEN`. The proxy
-asks Statespace which app the token is for, so it takes no `--app`. Units
+asks Statespace which app the token is for, so it takes no `--app`. It
+sends every request to live from the start, also while Statespace is
+down, and routes experiments once Statespace names the app. Units
 never get a variable that starts with `STATESPACE_`. The proxy never
 changes live: you run live as before, and each arm is a resource that the
 proxy makes, labels, and deletes. The flags tell where live runs:

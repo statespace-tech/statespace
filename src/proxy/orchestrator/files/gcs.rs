@@ -11,10 +11,7 @@ use serde_json::Value;
 use super::{FileRuntime, Listed, Object, Storage};
 use crate::{
     cli::GcsArgs,
-    proxy::{
-        orchestrator::{aws::encode, google::Google},
-        remote::Remote,
-    },
+    proxy::orchestrator::{aws::encode, google::Google},
 };
 
 /// `ssp proxy gcs`.
@@ -27,7 +24,7 @@ pub struct GcsStorage {
 }
 
 impl Gcs {
-    pub fn connect(arguments: GcsArgs, remote: Remote) -> anyhow::Result<Self> {
+    pub fn connect(arguments: GcsArgs) -> anyhow::Result<Self> {
         let storage = GcsStorage {
             client: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
@@ -41,7 +38,6 @@ impl Gcs {
             ("gs", "gcs", "folders in Cloud Storage"),
             arguments.bucket.clone(),
             &arguments.files,
-            remote,
         ))
     }
 }

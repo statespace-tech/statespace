@@ -210,10 +210,10 @@ async fn route<O: Orchestrator>(
     let ready = |routing: &Routing, key: &UnitKey| runtime.address(routing, key).is_some();
     // A link may name the arm that serves the request.
     let navigation = matches!(method, Method::GET | Method::HEAD);
-    let (chosen, override_change) = match routing.as_ref() {
+    let (chosen, override_change) = match routing.as_ref().zip(runtime.session()) {
         None => (None, None),
-        Some(routing) => match choose_override(
-            &runtime.app,
+        Some((routing, session)) => match choose_override(
+            &session.app.name,
             routing,
             &view,
             &requested,
@@ -242,7 +242,7 @@ async fn route<O: Orchestrator>(
         (None, Some(routing)) => assign::decide(routing, &view, |key| ready(routing, key)),
         (None, None) => Decision::live(None),
     };
-    if let Some(routing) = &routing {
+    if let Some((routing, session)) = routing.as_ref().zip(runtime.session()) {
         for run in &decision.runs {
             let origin = Origin {
                 experiment: run.experiment.clone(),
@@ -251,7 +251,7 @@ async fn route<O: Orchestrator>(
                     .experiment(&run.experiment)
                     .map(|experiment| experiment.version),
             };
-            runtime.recorder.run(&origin, &run.subject, run.reason);
+            session.recorder.run(&origin, &run.subject, run.reason);
         }
     }
     let mut serve = decision.serve.clone();
@@ -477,7 +477,7 @@ impl Recording {
     ) -> Option<Self> {
         let (key, routing) = serve.clone().zip(routing.clone())?;
         Some(Self {
-            recorder: runtime.recorder.clone(),
+            recorder: runtime.session()?.recorder.clone(),
             origin: Runtime::<O>::origin(&routing, &key),
             routing,
             key,

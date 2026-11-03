@@ -9,11 +9,15 @@ not create, and each arm is a resource that it creates, labels, and deletes.
 
 ### Changed
 
-- **Breaking:** `ssp proxy` takes no `--app` and reads no `STATESPACE_APP`. At start,
-  the proxy asks Statespace which app its runtime token is for
-  (`GET /v1/runtime/app`). Until Statespace answers, the proxy tries again. When
+- **Breaking:** `ssp proxy` takes no `--app` and reads no `STATESPACE_APP`. The proxy
+  asks Statespace which app its runtime token is for (`GET /v1/runtime/app`). When
   Statespace refuses the token, the proxy stops with an error. `--app` stays on the
   other commands, such as `ssp experiment` and `ssp token`.
+- The proxy starts in two phases. It reaches live from its flags alone, listens, and
+  sends every request to live at once. In the background, it asks Statespace for its
+  app until Statespace answers. Then it reports, reads the configuration, and routes
+  experiments. So a proxy that starts or restarts while Statespace is down still
+  serves the app.
 - **Breaking:** `ssp proxy cloudrun` runs each arm as its own Cloud Run service,
   `<service>-ssp-<experiment>-<commit 12>`, in the project and region of live. A name
   longer than 49 characters ends with a short hash. The service is a copy of live's

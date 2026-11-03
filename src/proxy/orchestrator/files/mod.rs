@@ -25,7 +25,9 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use sha2::{Digest, Sha256};
 
-use super::{Address, Build, Live, Orchestrator, OutputStream, Running, Unit, UnitKey, channel};
+use super::{
+    Address, App, Build, Live, Orchestrator, OutputStream, Running, Unit, UnitKey, channel,
+};
 use crate::{cli::FileArgs, proxy::remote::Remote};
 
 /// How long the cache keeps a file of live.
@@ -343,7 +345,6 @@ struct Inner<S> {
     /// What the runtime runs, such as `folders in S3`.
     kind: &'static str,
     bucket: String,
-    remote: Remote,
     cache: Option<Mutex<Cache>>,
     fallback: Option<String>,
     check_every: Duration,
@@ -362,7 +363,6 @@ impl<S: Storage> FileRuntime<S> {
         names: (&'static str, &'static str, &'static str),
         bucket: String,
         files: &FileArgs,
-        remote: Remote,
     ) -> Self {
         let (scheme, name, kind) = names;
         let inner = Arc::new(Inner {
@@ -371,7 +371,6 @@ impl<S: Storage> FileRuntime<S> {
             name,
             kind,
             bucket,
-            remote,
             cache: files.cache.then(|| Mutex::new(Cache::new(CACHE_BYTES))),
             fallback: files
                 .fallback
@@ -521,9 +520,8 @@ impl<S: Storage> Inner<S> {
 
     /// The folders of the app's builds in this bucket: the recent builds
     /// that Statespace recorded, and the tracked units.
-    async fn build_folders(&self) -> anyhow::Result<HashSet<String>> {
-        let recorded = self
-            .remote
+    async fn build_folders(&self, remote: &Remote) -> anyhow::Result<HashSet<String>> {
+        let recorded = remote
             .builds()
             .await
             .context("could not read the app's builds")?;
@@ -552,14 +550,14 @@ impl<S: Storage> Inner<S> {
     }
 
     /// Live's files hash, found again when it is older than `check_every`.
-    async fn live_hash(&self) -> anyhow::Result<String> {
+    async fn live_hash(&self, remote: &Remote) -> anyhow::Result<String> {
         let mut live = self.live.lock().await;
         if let Some((hash, at)) = &live.hash
             && at.elapsed() < self.check_every
         {
             return Ok(hash.clone());
         }
-        let folders: Vec<String> = self.build_folders().await?.into_iter().collect();
+        let folders: Vec<String> = self.build_folders(remote).await?.into_iter().collect();
         let hash = hash_folder(&self.storage, &self.bucket, "", &folders, &mut live.known)
             .await?
             .with_context(|| format!("{} holds no files", self.live_address()))?;
@@ -772,8 +770,8 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
         self.inner.name
     }
 
-    async fn live(&self) -> anyhow::Result<Live> {
-        self.inner.live_hash().await.map(Live::Files)
+    async fn live(&self, app: &App) -> anyhow::Result<Live> {
+        self.inner.live_hash(&app.remote).await.map(Live::Files)
     }
 
     fn runs(&self, build: &Build) -> bool {
@@ -789,7 +787,7 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
     }
 
     /// Track the unit and check its folder now.
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
+    async fn start(&self, _app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let Build::Files(files) = &unit.build else {
             anyhow::bail!("{} is not a files build", unit.build);
         };
@@ -800,7 +798,7 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
     }
 
     /// Forget the unit and its cached files.
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
         self.inner
             .units
             .lock()
@@ -812,7 +810,7 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, _app: &App) -> anyhow::Result<Vec<Running>> {
         let units = self.inner.units.lock().expect("units are never poisoned");
         Ok(units
             .values()
@@ -832,11 +830,11 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
     }
 
     /// A unit of a file runtime prints nothing.
-    fn output(&self, _unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, _unit: &Unit) -> OutputStream {
         channel().1
     }
 
-    fn follow(&self, units: &[Unit]) {
+    fn follow(&self, _app: &App, units: &[Unit]) {
         let gone: Vec<Unit> = {
             let mut tracked = self.inner.units.lock().expect("units are never poisoned");
             let gone = tracked

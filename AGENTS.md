@@ -30,7 +30,9 @@ checks the build folders, because each instance serves the files itself.
 - Print secrets only in the response that creates them. Never pass `STATESPACE_*`
   variables to units or live.
 - `ssp proxy` must never block or slow the app: drop rows rather than wait, and send a
-  request to live rather than fail it.
+  request to live rather than fail it. Build an orchestrator from its flags alone, so the
+  proxy serves live before Statespace names the app; the calls that report live or run
+  units take the `App`.
 - Never record live.
 - Never change the bucket function: it would move the subjects of running experiments.
 - Keep no legacy: when the design changes, remove the old way.

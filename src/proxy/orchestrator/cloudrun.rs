@@ -27,8 +27,8 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    Address, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
-    channel, google::Google,
+    Address, App, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit,
+    UnitKey, channel, google::Google,
 };
 use crate::{cli::CloudRunArgs, image};
 
@@ -53,7 +53,6 @@ pub struct CloudRun {
     run_api: String,
     logging_api: String,
     metadata: String,
-    app: String,
     project: String,
     region: String,
     service: String,
@@ -76,7 +75,9 @@ pub struct CloudRun {
 type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<Line>>>>;
 
 impl CloudRun {
-    pub async fn new(app: &str, arguments: CloudRunArgs) -> anyhow::Result<Self> {
+    /// Find live's service from the flags. The proxy reaches live with this
+    /// alone.
+    pub async fn new(arguments: CloudRunArgs) -> anyhow::Result<Self> {
         let host = arguments.metadata_host.trim_end_matches('/');
         let metadata = if host.contains("://") {
             host.to_owned()
@@ -92,7 +93,6 @@ impl CloudRun {
             run_api: arguments.run_api.trim_end_matches('/').to_owned(),
             logging_api: arguments.logging_api.trim_end_matches('/').to_owned(),
             metadata,
-            app: app.to_owned(),
             project: String::new(),
             region: arguments.region.clone(),
             service: arguments.service.clone(),
@@ -332,10 +332,10 @@ impl CloudRun {
         .map(drop)
     }
 
-    /// Whether `service` is a unit's service of this app. The proxy changes
-    /// no other service.
-    fn ours(&self, service: &Value) -> bool {
-        service["labels"][APP_LABEL] == self.app.as_str()
+    /// Whether `service` is a unit's service of `app`. The proxy changes no
+    /// other service.
+    fn ours(service: &Value, app: &App) -> bool {
+        service["labels"][APP_LABEL] == app.name.as_str()
     }
 }
 
@@ -345,7 +345,7 @@ impl Orchestrator for CloudRun {
     }
 
     /// The image of the revision that gets the most traffic.
-    async fn live(&self) -> anyhow::Result<Live> {
+    async fn live(&self, _app: &App) -> anyhow::Result<Live> {
         let service = self.live_service().await?;
         let revision =
             serving_revision(&service).context("no revision of the service gets traffic")?;
@@ -357,11 +357,11 @@ impl Orchestrator for CloudRun {
         self.live_address.clone()
     }
 
-    async fn start(&self, unit: &Unit) -> anyhow::Result<Address> {
+    async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let name = unit_name(&self.service, &unit.key());
         if let Some(current) = self.get_service(&name).await? {
-            if !self.ours(&current) {
-                bail!("service {name} exists and is not a unit of {}", self.app);
+            if !Self::ours(&current, app) {
+                bail!("service {name} exists and is not a unit of {}", app.name);
             }
             if unit_of(&current).is_some_and(|running| running.image() == unit.image()) {
                 return Ok(String::new());
@@ -371,7 +371,7 @@ impl Orchestrator for CloudRun {
             bail!("service {name} runs another image; it starts again when it is deleted");
         }
         let live = self.live_service().await?;
-        let body = unit_service(&live, &self.app, unit)?;
+        let body = unit_service(&live, &app.name, unit)?;
         self.call(
             reqwest::Method::POST,
             format!(
@@ -391,10 +391,10 @@ impl Orchestrator for CloudRun {
         Ok(String::new())
     }
 
-    async fn stop(&self, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = unit_name(&self.service, &unit.key());
         if let Some(service) = self.get_service(&name).await?
-            && self.ours(&service)
+            && Self::ours(&service, app)
         {
             self.delete_service(&name).await?;
             eprintln!("[ssp] deleted service {name}");
@@ -402,10 +402,10 @@ impl Orchestrator for CloudRun {
         Ok(())
     }
 
-    async fn running(&self) -> anyhow::Result<Vec<Running>> {
+    async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
         let mut running = Vec::new();
         for service in self.services().await? {
-            if !self.ours(&service) {
+            if !Self::ours(&service, app) {
                 continue;
             }
             let Some(unit) = unit_of(&service) else {
@@ -428,7 +428,7 @@ impl Orchestrator for CloudRun {
 
     /// The lines of a unit. One reader reads the lines of every unit with
     /// one query per poll, and gives each unit its own.
-    fn output(&self, unit: &Unit) -> OutputStream {
+    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
         let (sender, stream) = channel();
         self.listeners
             .lock()

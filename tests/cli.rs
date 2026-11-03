@@ -69,12 +69,24 @@ fn json_answer(status: u16, body: &Value) -> Answer {
 
 /// Serve `handler` on a free port of 127.0.0.1.
 fn serve(handler: impl Fn(&Received) -> Answer + Send + Sync + 'static) -> u16 {
-    serve_replies(move |received| handler(received).into())
+    serve_on(0, handler)
+}
+
+/// Serve `handler` on `port` of 127.0.0.1, or on a free port for 0.
+fn serve_on(port: u16, handler: impl Fn(&Received) -> Answer + Send + Sync + 'static) -> u16 {
+    serve_replies_on(port, move |received| handler(received).into())
 }
 
 /// Serve `handler`, which sets its own headers, on a free port of 127.0.0.1.
 fn serve_replies(handler: impl Fn(&Received) -> Reply + Send + Sync + 'static) -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    serve_replies_on(0, handler)
+}
+
+fn serve_replies_on(
+    port: u16,
+    handler: impl Fn(&Received) -> Reply + Send + Sync + 'static,
+) -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
     let port = listener.local_addr().unwrap().port();
     let handler = Arc::new(handler);
     std::thread::spawn(move || {
@@ -555,7 +567,12 @@ fn stand_in_refuses_what_statespace_refuses() {
 }
 
 fn statespace(state: Arc<Mutex<Statespace>>) -> String {
-    let port = serve(move |received| {
+    statespace_on(0, state)
+}
+
+/// The stand-in for Statespace on `port`, or on a free port for 0.
+fn statespace_on(port: u16, state: Arc<Mutex<Statespace>>) -> String {
+    let port = serve_on(port, move |received| {
         let mut state = state.lock().unwrap();
         state.received.push(received.clone());
         let path = received.path.as_str();
@@ -1484,12 +1501,24 @@ fn proxies_fail_for_a_token_of_no_app() {
         ..Statespace::default()
     }));
     let api = statespace(state.clone());
-    let (ok, _, stderr) = ssp(
-        directory.path(),
-        &api,
-        &[("STATESPACE_TOKEN", "gone")],
-        &["proxy", "docker", "--live-container", "missing"],
-    );
+    // The proxy reaches live from its flags alone, then learns its app.
+    let s3 = [
+        "proxy",
+        "s3",
+        "--bucket",
+        "acme-site",
+        "--endpoint",
+        "http://127.0.0.1:9",
+        "--listen",
+        "127.0.0.1:0",
+    ];
+    let credentials = [
+        ("AWS_ACCESS_KEY_ID", "test"),
+        ("AWS_SECRET_ACCESS_KEY", "test"),
+    ];
+    let mut environment = vec![("STATESPACE_TOKEN", "gone")];
+    environment.extend(credentials);
+    let (ok, _, stderr) = ssp(directory.path(), &api, &environment, &s3);
     assert!(!ok);
     assert!(
         stderr.contains("Statespace refused the runtime token: the token is not valid"),
@@ -1499,13 +1528,52 @@ fn proxies_fail_for_a_token_of_no_app() {
     let asked = state.lock().unwrap().received.clone();
     assert_eq!(asked[0].path, "/v1/runtime/app");
     assert_eq!(asked[0].headers["authorization"], "Bearer gone");
-    let (ok, _, stderr) = ssp(
-        directory.path(),
-        &api,
-        &[],
-        &["proxy", "docker", "--live-container", "x"],
-    );
+    let (ok, _, stderr) = ssp(directory.path(), &api, &credentials, &s3);
     assert!(!ok && stderr.contains("--token"), "{stderr}");
+}
+
+/// While Statespace cannot be reached, a proxy that starts sends every
+/// request to live. When Statespace answers, the proxy learns its app and
+/// starts the experiments.
+#[test]
+fn proxies_serve_live_until_statespace_answers() {
+    let test = cloudrun_proxy_with(true, false);
+    let arm_subject = subject_in(0.4, 0.8);
+    let get = |subject: &str| -> Option<Value> {
+        send(
+            test.port,
+            "GET",
+            "/",
+            &[("cookie", &format!("ssp_sid={subject}"))],
+        )?
+        .json()
+        .ok()
+    };
+    // Live answers at once, also for the subjects of an arm.
+    for _ in 0..3 {
+        let body = get(&arm_subject).expect("live answers");
+        assert_eq!(body["name"], "live");
+        assert!(body["headers"].get("x-statespace-arm").is_none());
+    }
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(get(&arm_subject).unwrap()["name"], "live");
+    assert!(
+        test.google.lock().unwrap().changes.is_empty(),
+        "no unit starts before the proxy knows its app"
+    );
+    // Statespace comes up: the proxy learns its app and starts the arms.
+    statespace_on(test.statespace_port, test.statespace.clone());
+    wait_until(60, "the arm serves", || {
+        get(&arm_subject).is_some_and(|body| body["name"] == "arm")
+    });
+    let state = test.statespace.lock().unwrap();
+    assert_eq!(state.received[0].path, "/v1/runtime/app");
+    assert!(
+        state
+            .reports()
+            .iter()
+            .any(|report| report["orchestrator"] == "cloudrun")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1682,6 +1750,8 @@ fn google(state: Arc<Mutex<Google>>) -> String {
 
 struct CloudRunTest {
     statespace: Arc<Mutex<Statespace>>,
+    /// Where the stand-in for Statespace listens, or will listen.
+    statespace_port: u16,
     google: Arc<Mutex<Google>>,
     port: u16,
     _proxy: Process,
@@ -1690,6 +1760,12 @@ struct CloudRunTest {
 
 /// A Cloud Run proxy of `shop-prod`.
 fn cloudrun_proxy(lease: bool) -> CloudRunTest {
+    cloudrun_proxy_with(lease, true)
+}
+
+/// A Cloud Run proxy of `shop-prod`. Without `up`, nothing answers at the
+/// address of Statespace until the test starts the stand-in there.
+fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
     let live = echo("live");
     let reference = echo("reference");
     let arm = echo("arm");
@@ -1758,7 +1834,12 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
         }),
         ..Statespace::default()
     }));
-    let api = statespace(state.clone());
+    let api = if up {
+        statespace(state.clone())
+    } else {
+        format!("http://127.0.0.1:{}", free_port())
+    };
+    let statespace_port: u16 = api.rsplit(':').next().unwrap().parse().unwrap();
     let directory = tempfile::tempdir().unwrap();
     let mut command = std::process::Command::new(cargo_bin("ssp"));
     command
@@ -1773,6 +1854,7 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
     let (proxy, port) = spawn_proxy(command);
     CloudRunTest {
         statespace: state,
+        statespace_port,
         google: google_state,
         port,
         _proxy: proxy,

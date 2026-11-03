@@ -3,6 +3,12 @@
 //! to one arm of a running experiment. Only the instance that holds the
 //! app's lease orchestrates: it starts and stops the units of starting and
 //! running experiments and records their output.
+//!
+//! The proxy starts in two phases. First it builds the orchestrator from
+//! the flags alone, listens, and sends every request to live. Then, in the
+//! background, it asks Statespace for the app of the runtime token until
+//! Statespace answers, and only then reports, reads the configuration, and
+//! routes experiments. So the app is served also when Statespace is down.
 
 pub mod assign;
 pub mod config;
@@ -16,19 +22,19 @@ mod server;
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, Mutex, RwLock, atomic::Ordering},
+    sync::{Arc, Mutex, OnceLock, RwLock, atomic::Ordering},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
-use tokio::task::JoinHandle;
+use tokio::{sync::mpsc, task::JoinHandle};
 
 use self::{
     assign::Routing,
     lease::Lease,
     orchestrator::{
-        Build, Live, Orchestrator, Running, Unit, UnitKey,
+        App, Build, Live, Orchestrator, Running, Unit, UnitKey,
         cloudrun::CloudRun,
         docker::Docker,
         fargate::Fargate,
@@ -60,50 +66,43 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
         .block_on(async move {
             match command {
                 ProxyCommand::Docker { common, docker } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Docker::new(remote.app(), &common.listen, docker).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = Docker::new(&common.listen, docker).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Cloudrun { common, cloudrun } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = CloudRun::new(remote.app(), cloudrun).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = CloudRun::new(cloudrun).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Kubernetes { common, kubernetes } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Kubernetes::new(remote.app(), kubernetes).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = Kubernetes::new(kubernetes).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Fargate { common, fargate } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Fargate::new(remote.app(), fargate).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = Fargate::new(fargate).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Fly { common, fly } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Fly::new(remote.app(), fly).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = Fly::new(fly).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::S3 { common, s3 } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = S3::connect(s3, remote.clone()).await?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = S3::connect(s3).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Gcs { common, gcs } => {
-                    let remote = connect(endpoint, &common).await?;
-                    let orchestrator = Gcs::connect(gcs, remote.clone())?;
-                    serve(Arc::new(orchestrator), common, remote).await
+                    let orchestrator = Gcs::connect(gcs)?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
                 }
             }
         })
 }
 
-/// A connection to Statespace for the app of the runtime token. When
-/// Statespace cannot be reached after the proxy learned its app, the proxy
-/// starts anyway and sends everything to live.
-async fn connect(endpoint: &str, common: &ProxyArgs) -> anyhow::Result<Remote> {
-    let app = Remote::app_of(endpoint, &common.token).await?;
-    let remote = Remote::new(endpoint, common.token.clone(), app.clone())?;
+/// A connection to Statespace for the app of the runtime token. It waits
+/// until Statespace names the app, and fails when Statespace refuses the
+/// token or the app.
+async fn connect(endpoint: &str, token: &str) -> anyhow::Result<Remote> {
+    let app = Remote::app_of(endpoint, token).await?;
+    let remote = Remote::new(endpoint, token.to_owned(), app.clone())?;
     match remote.config().await {
         Err(ConfigError::Refused(message)) => bail!(
             "Statespace refused the app {app}: {message}. Use a runtime token of the app, from `ssp token add --app {app}`"
@@ -133,18 +132,25 @@ struct Current {
     fetched: Option<Instant>,
 }
 
+/// What the proxy has once Statespace named its app: the app, and the
+/// recorder that sends its rows.
+pub struct Session {
+    pub app: App,
+    pub recorder: Arc<Recorder>,
+}
+
 /// What every task of a proxy shares.
 pub struct Runtime<O> {
-    pub app: String,
     pub instance: String,
     pub orchestrator: Arc<O>,
-    remote: Remote,
+    /// Set once Statespace names the app. Until then, every request goes
+    /// to live.
+    session: OnceLock<Arc<Session>>,
     current: RwLock<Current>,
     /// What runs, by unit, as the orchestrator last said.
     units: RwLock<HashMap<UnitKey, Running>>,
     suspects: Mutex<HashMap<UnitKey, Instant>>,
     pub lease: Lease,
-    pub recorder: Arc<Recorder>,
     pub in_flight: std::sync::atomic::AtomicUsize,
     /// The lease holder's work: when it last started or stopped each unit,
     /// and the readers of each unit's output.
@@ -169,6 +175,11 @@ impl<O: Orchestrator> Runtime<O> {
         {
             eprintln!("[ssp] {message}");
         }
+    }
+
+    /// The app and its recorder, once Statespace named the app.
+    pub fn session(&self) -> Option<&Arc<Session>> {
+        self.session.get()
     }
 
     /// The routing, while its configuration is recent.
@@ -220,11 +231,11 @@ impl<O: Orchestrator> Runtime<O> {
 
     /// Keep the configuration and what runs current, and orchestrate while
     /// this instance holds the lease.
-    async fn poll(self: Arc<Self>) {
+    async fn poll(self: Arc<Self>, session: Arc<Session>) {
         let mut interval = Duration::from_secs(5);
         let mut failing = false;
         loop {
-            match self.remote.config().await {
+            match session.app.remote.config().await {
                 Ok(config) => {
                     if failing {
                         eprintln!("[ssp] reached Statespace again");
@@ -253,11 +264,12 @@ impl<O: Orchestrator> Runtime<O> {
             if !self.lease.held(Instant::now())
                 && let Some(routing) = self.routing()
             {
-                self.orchestrator.follow(&self.desired(&routing));
+                self.orchestrator
+                    .follow(&session.app, &self.desired(&routing));
             }
-            self.observe().await;
+            self.observe(&session).await;
             if self.lease.held(Instant::now()) {
-                self.reconcile().await;
+                self.reconcile(&session).await;
             } else {
                 self.stop_readers();
             }
@@ -266,8 +278,8 @@ impl<O: Orchestrator> Runtime<O> {
     }
 
     /// Read what runs from the orchestrator.
-    async fn observe(&self) {
-        match self.orchestrator.running().await {
+    async fn observe(&self, session: &Session) {
+        match self.orchestrator.running(&session.app).await {
             Ok(running) => {
                 let holder = self.lease.held(Instant::now());
                 let routing = self.routing();
@@ -283,7 +295,7 @@ impl<O: Orchestrator> Runtime<O> {
                         && !was_ready
                         && let Some(routing) = &routing
                     {
-                        self.recorder.lifecycle(
+                        session.recorder.lifecycle(
                             &Self::origin(routing, &key),
                             "ready",
                             with_build(&entry.unit.build, json!({ "address": entry.address })),
@@ -298,7 +310,7 @@ impl<O: Orchestrator> Runtime<O> {
 
     /// Make the units match the configuration: start what is missing, stop
     /// what no longer runs, and read the output of each.
-    async fn reconcile(self: &Arc<Self>) {
+    async fn reconcile(self: &Arc<Self>, session: &Arc<Session>) {
         let Some(routing) = self.routing() else {
             return;
         };
@@ -324,15 +336,18 @@ impl<O: Orchestrator> Runtime<O> {
                     .expect("versions are never poisoned")
                     .insert(unit.key(), version);
             }
-            match self.orchestrator.start(unit).await {
+            match self.orchestrator.start(&session.app, unit).await {
                 Ok(_) => {
                     eprintln!("[ssp] starting {} from {}", unit.key(), unit.build);
                     self.failures
                         .lock()
                         .expect("failures are never poisoned")
                         .remove(&unit.key());
-                    self.recorder
-                        .lifecycle(&origin, "started", with_build(&unit.build, json!({})));
+                    session.recorder.lifecycle(
+                        &origin,
+                        "started",
+                        with_build(&unit.build, json!({})),
+                    );
                 }
                 Err(error) => {
                     eprintln!("[ssp] could not start {}: {error:#}", unit.key());
@@ -340,7 +355,7 @@ impl<O: Orchestrator> Runtime<O> {
                         .lock()
                         .expect("failures are never poisoned")
                         .insert(unit.key(), format!("could not start: {error:#}"));
-                    self.recorder.lifecycle(
+                    session.recorder.lifecycle(
                         &origin,
                         "failed",
                         with_build(&unit.build, json!({ "error": format!("{error:#}") })),
@@ -365,10 +380,10 @@ impl<O: Orchestrator> Runtime<O> {
                 .expect("versions are never poisoned")
                 .remove(&key);
             origin.version = origin.version.or(started);
-            match self.orchestrator.stop(&entry.unit).await {
+            match self.orchestrator.stop(&session.app, &entry.unit).await {
                 Ok(()) => {
                     eprintln!("[ssp] stopped {key}");
-                    self.recorder.lifecycle(
+                    session.recorder.lifecycle(
                         &origin,
                         "stopped",
                         with_build(&entry.unit.build, json!({})),
@@ -377,7 +392,7 @@ impl<O: Orchestrator> Runtime<O> {
                 Err(error) => eprintln!("[ssp] could not stop {key}: {error:#}"),
             }
         }
-        self.read_output(&desired);
+        self.read_output(session, &desired);
     }
 
     /// The units for the report: each unit that should run, ready or with
@@ -470,7 +485,7 @@ impl<O: Orchestrator> Runtime<O> {
     }
 
     /// Read each desired unit's lines, and stop reading the others.
-    fn read_output(self: &Arc<Self>, desired: &[Unit]) {
+    fn read_output(self: &Arc<Self>, session: &Arc<Session>, desired: &[Unit]) {
         let mut readers = self.readers.lock().expect("readers are never poisoned");
         readers.retain(|key, (build, task)| {
             let keep = desired
@@ -486,8 +501,13 @@ impl<O: Orchestrator> Runtime<O> {
             if readers.contains_key(&unit.key()) {
                 continue;
             }
-            let stream = self.orchestrator.output(unit);
-            let task = tokio::spawn(record_output(self.clone(), unit.key(), stream));
+            let stream = self.orchestrator.output(&session.app, unit);
+            let task = tokio::spawn(record_output(
+                self.clone(),
+                session.clone(),
+                unit.key(),
+                stream,
+            ));
             readers.insert(unit.key(), (unit.build.clone(), task));
         }
     }
@@ -550,6 +570,7 @@ fn describe(build: &Build) -> String {
 /// Record a unit's lines, redacted, and the output events they match.
 async fn record_output<O: Orchestrator>(
     runtime: Arc<Runtime<O>>,
+    session: Arc<Session>,
     key: UnitKey,
     mut stream: orchestrator::OutputStream,
 ) {
@@ -559,14 +580,14 @@ async fn record_output<O: Orchestrator>(
         };
         let origin = Runtime::<O>::origin(&routing, &key);
         let text = redact::redact(&line.text, &routing.redact);
-        let log_id = runtime.recorder.output(&origin, line.stream.table(), &text);
+        let log_id = session.recorder.output(&origin, line.stream.table(), &text);
         // A unit's experiment decides which events apply.
         for name in routing
             .events(&key)
             .map(|events| events.output(line.stream, &text))
             .unwrap_or_default()
         {
-            runtime
+            session
                 .recorder
                 .event(&origin, name, None, Source::Log(&log_id));
         }
@@ -575,12 +596,12 @@ async fn record_output<O: Orchestrator>(
 
 /// Report this instance every 10 seconds. The answer grants or renews the
 /// lease; the holder also reports what runs.
-async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
+async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>) {
     let mut held = false;
     let mut dropped = 0;
     loop {
         let sent = Instant::now();
-        let now_dropped = runtime.recorder.dropped();
+        let now_dropped = session.recorder.dropped();
         if now_dropped > dropped {
             eprintln!(
                 "[ssp] dropped {} rows because the buffer was full",
@@ -595,7 +616,7 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
             "orchestrator": runtime.orchestrator.name(),
             "settings_hash": routing.as_ref().and_then(|routing| routing.settings_hash.clone()),
         });
-        match runtime.orchestrator.live().await {
+        match runtime.orchestrator.live(&session.app).await {
             Ok(Live::Image(image)) => body["live_image"] = json!(image),
             Ok(Live::Files(hash)) => body["live_files"] = json!(hash),
             Err(error) => runtime.note(format!("could not read what live runs: {error:#}")),
@@ -603,7 +624,7 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
         if runtime.lease.held(sent) {
             body["units"] = json!(runtime.unit_report(routing.as_deref()));
         }
-        match runtime.remote.report(&body).await {
+        match session.app.remote.report(&body).await {
             Ok(granted) => {
                 runtime.lease.granted(granted.lease, sent);
                 if granted.lease != held {
@@ -614,7 +635,7 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
                         } else {
                             "does not hold"
                         },
-                        runtime.app
+                        session.app.name
                     );
                     held = granted.lease;
                 }
@@ -625,18 +646,19 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>) {
     }
 }
 
+/// Listen and send every request to live at once; learn the app in the
+/// background, and then route experiments. Stop on a signal, or when
+/// Statespace refuses the runtime token.
 async fn serve<O: Orchestrator>(
     orchestrator: Arc<O>,
     common: ProxyArgs,
-    remote: Remote,
+    endpoint: &str,
 ) -> anyhow::Result<()> {
     let instance = instance_id();
     let runtime = Arc::new(Runtime {
-        app: remote.app().to_owned(),
         instance: instance.clone(),
         orchestrator: orchestrator.clone(),
-        recorder: Arc::new(Recorder::start(remote.clone())),
-        remote,
+        session: OnceLock::new(),
         current: RwLock::new(Current {
             routing: None,
             fetched: None,
@@ -651,8 +673,6 @@ async fn serve<O: Orchestrator>(
         readers: Mutex::default(),
         noted: Mutex::default(),
     });
-    tokio::spawn(runtime.clone().poll());
-    tokio::spawn(report(runtime.clone()));
     let listener = tokio::net::TcpListener::bind(&common.listen)
         .await
         .with_context(|| format!("could not listen on {}", common.listen))?;
@@ -660,13 +680,22 @@ async fn serve<O: Orchestrator>(
         .local_addr()
         .map_or_else(|_| common.listen.clone(), |address| address.to_string());
     eprintln!(
-        "[ssp] proxy {instance} of {} on {} listening on {address}",
-        runtime.app,
+        "[ssp] proxy {instance} on {} listening on {address}",
         orchestrator.name(),
     );
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(server::serve(listener, runtime.clone(), stopped));
-    signal().await?;
+    let (fail, mut failed) = mpsc::channel(1);
+    tokio::spawn(begin(
+        runtime.clone(),
+        endpoint.to_owned(),
+        common.token.clone(),
+        fail,
+    ));
+    let outcome = tokio::select! {
+        result = signal() => result,
+        Some(error) = failed.recv() => Err(error),
+    };
     eprintln!("[ssp] stopping");
     let _ = stop.send(true);
     let _ = server.await;
@@ -678,7 +707,41 @@ async fn serve<O: Orchestrator>(
     orchestrator.shutdown().await;
     // Give the last rows a moment to leave.
     tokio::time::sleep(Duration::from_millis(1500)).await;
-    Ok(())
+    outcome
+}
+
+/// The second phase: learn the app of the runtime token, then report, read
+/// the configuration, and orchestrate. Until then, every request goes to
+/// live. A refused token or app goes to `fail`, which stops the proxy.
+async fn begin<O: Orchestrator>(
+    runtime: Arc<Runtime<O>>,
+    endpoint: String,
+    token: String,
+    fail: mpsc::Sender<anyhow::Error>,
+) {
+    let remote = match connect(&endpoint, &token).await {
+        Ok(remote) => remote,
+        Err(error) => {
+            let _ = fail.send(error).await;
+            return;
+        }
+    };
+    let session = Arc::new(Session {
+        app: App {
+            name: remote.app().to_owned(),
+            remote: remote.clone(),
+        },
+        recorder: Arc::new(Recorder::start(remote)),
+    });
+    if runtime.session.set(session.clone()).is_err() {
+        return;
+    }
+    eprintln!(
+        "[ssp] proxy {} serves the app {}",
+        runtime.instance, session.app.name
+    );
+    tokio::spawn(runtime.clone().poll(session.clone()));
+    tokio::spawn(report(runtime, session));
 }
 
 #[cfg(unix)]
