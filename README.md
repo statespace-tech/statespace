@@ -21,10 +21,7 @@
 
 </div>
 
-Statespace lets you A/B test code changes on your own infrastructure. A
-reverse proxy sends a small share of your traffic to experimental versions
-of your app. Their requests, logs, and events land in Postgres so your
-agents can query and act on them.
+Statespace lets you A/B test code changes on your own infrastructure. A reverse proxy runs beside your app and routes a small share of your traffic to experimental versions of it. Their requests, logs, and events land in Postgres so your agents can query and act on them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.png">
