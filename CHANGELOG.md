@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.5.0 - 2026-11-04
 
 Statespace records counts per subject, not requests, log lines, or bodies. Your own
 data tools keep the detail, and each arm carries labels that they can filter by.
@@ -28,8 +28,7 @@ data tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** the proxy sends no rows to `/v1/events`: no runs, requests, stdout,
   stderr, events, or lifecycle rows.
 - **Breaking:** `redact` is removed from `statespace.toml`. Statespace stores no
-  request data. The backend refuses a file with `redact`: "redact is not a setting:
-  Statespace stores no request data. Remove it".
+  request data. The backend refuses `redact` as an unknown key.
 - **Breaking:** the proxy reads no logs on any runtime: no Docker logs, Kubernetes pod
   logs, CloudWatch Logs, Cloud Logging, or Fly.io logs. Readiness and the reason that
   an arm is not ready come from the platform: the exit code and out of memory on
