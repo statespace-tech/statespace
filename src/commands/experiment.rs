@@ -42,7 +42,20 @@ pub fn run(api: &Api, command: ExperimentCommand) -> anyhow::Result<()> {
             if running {
                 experiments.retain(|experiment| experiment["state"] == "running");
             }
-            let document = json!({ "experiments": experiments });
+            let listed: Vec<Value> = experiments
+                .iter()
+                .map(|experiment| {
+                    json!({
+                        "name": experiment["name"],
+                        "state": experiment["state"],
+                        "reason": experiment["reason"],
+                        "version": experiment["version"],
+                        "arms": arm_shares(experiment),
+                        "headline": experiment["headline"],
+                    })
+                })
+                .collect();
+            let document = json!({ "experiments": listed });
             emit(&document, || {
                 if experiments.is_empty() {
                     return format!(
@@ -114,7 +127,7 @@ fn update(
     let path = experiment_path(app, name);
     let before: Value = api.get(&path)?;
     if arms.is_empty() {
-        return emit(&before, || arm_list(&before, None));
+        return emit(&arms_document(&before, None), || arm_list(&before, None));
     }
     let mut shares = serde_json::Map::new();
     for arm in arms {
@@ -130,14 +143,61 @@ fn update(
         &format!("{path}/arms"),
         &json!({ "arms": shares, "note": note_text }),
     )?;
-    emit(&changed, || {
-        let change = Change {
-            added: commits(&changed["added"]),
-            changed: commits(&changed["changed"]),
-            removed: commits(&changed["removed"]),
-            before: &before,
-        };
-        arm_list(&changed["experiment"], Some(&change))
+    let change = Change {
+        added: commits(&changed["added"]),
+        changed: commits(&changed["changed"]),
+        removed: commits(&changed["removed"]),
+        before: &before,
+    };
+    let after = &changed["experiment"];
+    emit(&arms_document(after, Some(&change)), || {
+        arm_list(after, Some(&change))
+    })
+}
+
+/// `[{"commit", "share"}]`: the arms of an experiment.
+fn arm_shares(experiment: &Value) -> Vec<Value> {
+    experiment["arms"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|arm| json!({"commit": arm["commit"], "share": arm["share"]}))
+        .collect()
+}
+
+/// What `update` prints, as one document: the same information as
+/// [`arm_list`], and nothing more. With a change, each arm has `change`
+/// (`added`, `changed`, or `removed`), and a changed arm has `was`.
+fn arms_document(experiment: &Value, change: Option<&Change<'_>>) -> Value {
+    let mut arms = Vec::new();
+    if let Some(change) = change {
+        for commit in &change.removed {
+            arms.push(json!({
+                "commit": commit,
+                "share": share_of(change.before, commit),
+                "change": "removed",
+            }));
+        }
+    }
+    for mut arm in arm_shares(experiment) {
+        let commit = arm["commit"].as_str().unwrap_or_default().to_owned();
+        if let Some(change) = change {
+            if change.added.contains(&commit) {
+                arm["change"] = json!("added");
+            } else if change.changed.contains(&commit) {
+                arm["change"] = json!("changed");
+                arm["was"] = json!(share_of(change.before, &commit));
+            }
+        }
+        arms.push(arm);
+    }
+    json!({
+        "name": experiment["name"],
+        "app": experiment["app"],
+        "state": experiment["state"],
+        "reason": experiment["reason"],
+        "arms": arms,
+        "max_traffic": experiment["definition"]["max_traffic"],
     })
 }
 
@@ -302,7 +362,20 @@ fn start(api: &Api, app: &str, name: &str, note_text: Option<String>) -> anyhow:
         match experiment["state"].as_str() {
             Some("running") => {
                 if output::json() {
-                    return emit(&experiment, String::new);
+                    let arms: Vec<Value> = experiment["arms"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|arm| json!({"commit": arm["commit"], "ready": arm["ready"]}))
+                        .collect();
+                    let document = json!({
+                        "name": name,
+                        "app": app,
+                        "state": experiment["state"],
+                        "version": experiment["version"],
+                        "arms": arms,
+                    });
+                    return emit(&document, String::new);
                 }
                 say(format!(
                     "{name} runs on {app}, version {}.\nResults: ssp experiment show {name}",
@@ -405,7 +478,8 @@ fn stop(api: &Api, app: &str, names: &[String], note_text: Option<String>) -> an
         });
         match result {
             Ok((before, after)) => {
-                lines.push(if before["state"] == "stopped" {
+                let already = before["state"] == "stopped";
+                lines.push(if already {
                     format!("{name} on {app} was stopped already.")
                 } else {
                     format!(
@@ -413,7 +487,12 @@ fn stop(api: &Api, app: &str, names: &[String], note_text: Option<String>) -> an
                         text(&after["version"])
                     )
                 });
-                stopped.push(after);
+                stopped.push(json!({
+                    "name": name,
+                    "app": app,
+                    "version": after["version"],
+                    "stopped_before": already,
+                }));
             }
             Err(error) => failures.push(format!("{name}: {error:#}")),
         }

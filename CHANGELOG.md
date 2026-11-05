@@ -101,6 +101,10 @@ tools keep the detail, and each arm carries labels that they can filter by.
   `lookup {"statespace.arm": [...]}`, and `versions`. Each arm has `commit`,
   `subjects`, `latency_ms {p50, p95, p99}`, and `events`, in order, each
   `{"estimate", "ci95": [low, high]}`. `ci95` is null below 30 subjects.
+  The other commands follow the same rule: `app list`, `app show`, `app add`,
+  `app remove`, `experiment list`, `experiment update`, `experiment start`,
+  `experiment stop`, `token add`, `token list`, `token remove`, `login`, and
+  `whoami` print only the fields of their text, not the document of the API.
 
 ### Removed
 

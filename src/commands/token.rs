@@ -19,7 +19,8 @@ pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
                 "/v1/tokens",
                 &json!({ "app": app, "note": flag.note }),
             )?;
-            emit(&token, || {
+            let document = json!({"token": token["token"], "id": token["id"], "app": token["app"]});
+            emit(&document, || {
                 let rows = vec![
                     ("Token", text(&token["token"])),
                     ("ID", text(&token["id"])),
@@ -34,17 +35,12 @@ pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
             Ok(())
         }
         TokenCommand::Remove { id, note } => {
-            let removed: Value = api.send(
+            let _: Value = api.send(
                 Method::DELETE,
                 &format!("/v1/tokens/{}", segment(&id)),
                 &json!({ "note": note.note }),
             )?;
-            let document = if removed.is_null() {
-                json!({ "removed": id })
-            } else {
-                removed
-            };
-            emit(&document, || {
+            emit(&json!({ "removed": id }), || {
                 format!(
                     "Removed token {id}. Proxies that use it stop at their next request to Statespace."
                 )
@@ -59,7 +55,19 @@ pub fn run(api: &Api, command: TokenCommand) -> anyhow::Result<()> {
             if let Some(app) = &app {
                 tokens.retain(|token| token["app"] == app.as_str());
             }
-            let document = json!({ "tokens": tokens });
+            let listed: Vec<Value> = tokens
+                .iter()
+                .map(|token| {
+                    json!({
+                        "id": token["id"],
+                        "app": token["app"],
+                        "note": token["note"],
+                        "created_at": token["created_at"],
+                        "last_used_at": token["last_used_at"],
+                    })
+                })
+                .collect();
+            let document = json!({ "tokens": listed });
             emit(&document, || {
                 if tokens.is_empty() {
                     return "No runtime tokens. Add one with `ssp token add --app <app>`.".into();

@@ -1722,6 +1722,14 @@ fn experiments_update_start_and_stop() {
         .map(|experiment| experiment["name"].clone())
         .collect();
     assert_eq!(names, [json!("checkout")]);
+    // --json has the columns of the table, and nothing more.
+    let listed = parse(&stdout)["experiments"][0].clone();
+    let keys: Vec<&String> = listed.as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        ["name", "state", "reason", "version", "arms", "headline"]
+    );
+    assert_eq!(listed["arms"][0], json!({"commit": LIVE, "share": 0.05}));
     let (ok, stdout, _) = run(&["experiment", "list", "--all"]);
     assert!(ok && stdout.contains("pricing     gone"), "{stdout}");
 }

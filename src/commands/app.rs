@@ -28,8 +28,13 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
                 &app_path(&name),
                 &json!({ "note": note.note }),
             )?;
-            emit(&deleted, || {
-                let app = &deleted["deleted"];
+            let app = &deleted["deleted"];
+            let document = json!({
+                "removed": name,
+                "repo": app["repo"],
+                "path": app["path"],
+            });
+            emit(&document, || {
                 format!(
                     "Removed app {name} ({}, {}) and all its data: experiments, versions, runs, \
                      requests, output, and events.",
@@ -40,7 +45,21 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
         }
         AppCommand::List => {
             let apps: Value = api.get("/v1/apps")?;
-            emit(&apps, || {
+            let listed: Vec<Value> = apps["apps"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|app| {
+                    json!({
+                        "name": app["name"],
+                        "repo": app["repo"],
+                        "path": app["path"],
+                        "live": app["live"]["commit"],
+                        "experiments": app["experiments"],
+                    })
+                })
+                .collect();
+            emit(&json!({ "apps": listed }), || {
                 let rows = apps["apps"]
                     .as_array()
                     .into_iter()
@@ -64,7 +83,8 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
         }
         AppCommand::Show { name } => {
             let app: Value = api.get(&app_path(&name))?;
-            emit(&app, || show(&app))
+            let shown = shown(&app);
+            emit(&shown, || show(&shown))
         }
     }
 }
@@ -166,7 +186,8 @@ fn add(
     if !detected.is_empty() {
         note(&format!("Detected {}.", detected.join(" and ")));
     }
-    emit(&app, || {
+    let document = json!({ "name": name, "repo": app["repo"], "path": app["path"] });
+    emit(&document, || {
         format!(
             "Added app {name} for {} in {}.\n\
              Next: ssp token add --app {name}, then run ssp proxy in front of the app.",
@@ -197,6 +218,75 @@ fn live(live: &Value) -> String {
     }
 }
 
+/// What `app show` prints, as one document: the same information as the
+/// text, and nothing more.
+fn shown(app: &Value) -> Value {
+    let live = &app["live"];
+    let lease = &app["lease"];
+    let experiments: Option<Vec<Value>> = app["experiments"].as_array().map(|experiments| {
+        experiments
+            .iter()
+            .map(|experiment| {
+                json!({
+                    "name": experiment["name"],
+                    "state": experiment["state"],
+                    "version": experiment["version"],
+                    "reason": experiment["reason"],
+                })
+            })
+            .collect()
+    });
+    let instances: Vec<Value> = app["instances"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|instance| {
+            json!({
+                "instance": instance["instance"],
+                "version": instance["version"],
+                "orchestrator": instance["orchestrator"],
+                "live_image": instance["live_image"],
+                "reported_at": instance["reported_at"],
+            })
+        })
+        .collect();
+    let settings: Option<serde_json::Map<String, Value>> =
+        app["settings"].as_object().map(|settings| {
+            settings
+                .iter()
+                .map(|(key, value)| (key.clone(), json!(compact(value))))
+                .collect()
+        });
+    json!({
+        "name": app["name"],
+        "repo": app["repo"],
+        "path": app["path"],
+        "note": app["note"],
+        "live": match live["commit"].as_str() {
+            Some(_) => json!({
+                "commit": live["commit"],
+                "image": live["image"],
+                "built_at": live["built_at"],
+            }),
+            None => Value::Null,
+        },
+        "orchestrator": app["orchestrator"],
+        "lease": match lease.is_null() {
+            true => Value::Null,
+            false => json!({"holder": lease["holder"], "expires_at": lease["expires_at"]}),
+        },
+        "problem": app["problem"],
+        "experiments": experiments,
+        "source": match app["source"]["commit"].is_null() {
+            true => Value::Null,
+            false => json!({"commit": app["source"]["commit"], "path": app["source"]["path"]}),
+        },
+        "settings": settings,
+        "instances": instances,
+    })
+}
+
+/// The text of `app show`, from the document of [`shown`].
 fn show(app: &Value) -> String {
     let mut rows = vec![
         ("App", text(&app["name"])),
@@ -272,7 +362,7 @@ fn show(app: &Value) -> String {
         out.push_str(":\n");
         let rows: Vec<(&str, String)> = settings
             .iter()
-            .map(|(key, value)| (key.as_str(), compact(value)))
+            .map(|(key, value)| (key.as_str(), text(value)))
             .collect();
         out.push_str(&indent(&fields(&rows)));
     }

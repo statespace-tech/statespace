@@ -43,10 +43,10 @@ pub fn login(api: &Api, no_open: bool) -> anyhow::Result<()> {
         token: Some(token),
     }
     .save()?;
-    emit(&json!({ "status": "signed_in", "whoami": me }), || {
-        let login = me["person"]["login"]
-            .as_str()
-            .map_or_else(|| text(&me["login"]), str::to_owned);
+    let login = me["person"]["login"]
+        .as_str()
+        .map_or_else(|| text(&me["login"]), str::to_owned);
+    emit(&json!({ "status": "signed_in", "login": login }), || {
         format!("Signed in as {login}.")
     })
 }
