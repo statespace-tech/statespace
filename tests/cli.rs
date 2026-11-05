@@ -6010,14 +6010,17 @@ fn aws_fargate_proxies_run_arms_as_services() {
     assert_eq!(arm_definition["family"], arm_name.as_str());
     let container = &arm_definition["containerDefinitions"][0];
     assert_eq!(container["image"], arm_digest.as_str());
+    // ECS does not keep the order of the variables, so compare them by name.
+    let mut environment = container["environment"].as_array().unwrap().clone();
+    environment.sort_by_key(|variable| variable["name"].as_str().unwrap().to_owned());
     assert_eq!(
-        container["environment"],
+        json!(environment),
         json!([
-            {"name": "SHARED", "value": "from-live"},
-            {"name": "SSP_EXPERIMENT", "value": "checkout"},
-            {"name": "SSP_ARM", "value": ARM},
             {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": format!(
                 "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")},
+            {"name": "SHARED", "value": "from-live"},
+            {"name": "SSP_ARM", "value": ARM},
+            {"name": "SSP_EXPERIMENT", "value": "checkout"},
         ])
     );
     assert_eq!(
