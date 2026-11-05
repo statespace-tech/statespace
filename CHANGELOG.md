@@ -26,8 +26,10 @@ data tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** no subject leaves the proxy. It sends
   `hex(HMAC-SHA256(key = app salt, message = subject))`.
 - **Breaking:** the proxy sends no rows to `/v1/events`: no runs, requests, stdout,
-  stderr, events, or lifecycle rows. `redact` has no effect, because nothing that it
-  changed leaves the proxy.
+  stderr, events, or lifecycle rows.
+- **Breaking:** `redact` is removed from `statespace.toml`. Statespace stores no
+  request data. The backend refuses a file with `redact`: "redact is not a setting:
+  Statespace stores no request data. Remove it".
 - **Breaking:** the proxy reads no logs on any runtime: no Docker logs, Kubernetes pod
   logs, CloudWatch Logs, Cloud Logging, or Fly.io logs. Readiness and the reason that
   an arm is not ready come from the platform: the exit code and out of memory on
