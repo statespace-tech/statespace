@@ -2077,7 +2077,6 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
             "app": "shop-prod",
             "salt": "salt-1",
             "settings_hash": "settings-1",
-            "settings": {},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
@@ -2670,7 +2669,6 @@ fn fly_proxies_run_units_as_machines_without_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
@@ -3027,7 +3025,6 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         lease: true,
         config: json!({
             "app": app, "salt": "salt-1", "settings_hash": "h",
-            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -3340,7 +3337,6 @@ spec:
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -4279,7 +4275,6 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [],
             "lease": null, "poll_interval_seconds": 2,
@@ -4942,7 +4937,6 @@ fn fargate_proxies_run_units_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {},
             "live": {"commit": LIVE, "image": fargate_digest('1')},
             "experiments": [{
                 "name": "checkout", "version": 3, "state": "running",
@@ -5920,7 +5914,6 @@ fn aws_fargate_proxies_run_arms_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -6578,7 +6571,6 @@ primary_region = "{region}"
         lease: true,
         config: json!({
             "app": run, "salt": "salt-1", "settings_hash": "h",
-            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
@@ -6893,7 +6885,6 @@ fn site_build(scheme: &str, bucket: &str, commit: &str) -> Value {
 fn site_config(scheme: &str, bucket: &str) -> Value {
     json!({
         "app": SITE_APP, "salt": "salt-1", "settings_hash": "h",
-        "settings": {},
         "live": {"commit": LIVE, "files": site_build(scheme, bucket, LIVE)},
         "experiments": [
             {"name": "hero", "version": 1, "state": "running",
