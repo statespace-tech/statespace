@@ -141,6 +141,13 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn json_keeps_the_api_numbers() {
+        // `--json` prints what the API sent, to the last digit.
+        let value: serde_json::Value = serde_json::from_str("1.9237793928837839").unwrap();
+        assert_eq!(value.to_string(), "1.9237793928837839");
+    }
+
+    #[test]
     fn formats_values() {
         assert_eq!(
             time(&json!("2026-10-15T17:40:12.5+00:00")),

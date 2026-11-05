@@ -43,7 +43,7 @@ rand = "0.10"
 ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 sha2 = "0.11"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 tempfile = "3"
