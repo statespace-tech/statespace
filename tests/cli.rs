@@ -5346,7 +5346,7 @@ impl AwsSandbox {
 
     /// Delete the resources of every test run that `select` picks: ECS
     /// services and clusters, task definitions, security groups, ECR
-    /// repositories, log groups, and VPCs that a test made.
+    /// repositories, and VPCs that a test made.
     fn sweep(&self, select: impl Fn(&str) -> bool) {
         // Clusters, after their services.
         let clusters = self.aws(&["ecs", "list-clusters"])["clusterArns"]
