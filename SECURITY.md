@@ -8,8 +8,8 @@ include real customer data.
 
 The latest release receives security fixes.
 
-Treat API keys, terminal sessions, and database connection URLs as secrets. `ssp` prints a
-secret only once, in the response that creates it.
+Treat runtime tokens and the session of `ssp login` as secrets. `ssp` prints a secret
+only once, in the response that creates it.
 
 ## Verify a release
 
