@@ -220,7 +220,7 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
         "headline": {"label": "purchase", "values": {LIVE: 0.028, ARM: 0.034}},
         "arms": arms.iter().map(|(commit, share, ready, reason)| json!({
             "commit": commit, "share": share, "image": digest('2'), "ready": ready,
-            "reason": reason, "ahead": 1, "behind": 0, "live_contains": false,
+            "reason": reason,
         })).collect::<Vec<_>>(),
     })
 }

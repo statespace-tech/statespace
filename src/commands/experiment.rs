@@ -972,7 +972,6 @@ mod tests {
             ],
             "lookup": {"statespace.arm": [FIRST, ARM]},
         });
-        detail["drift"] = json!({"live_commit": "f2f2f2f000"});
         detail["override_urls"] =
             json!({ARM: "?ssp=checkout:a1b2c3d", FIRST: "?ssp=checkout:c0ffee1"});
         detail["versions"] = json!([{"version": 1, "arms": {FIRST: 0.05, ARM: 0.05},
@@ -1069,14 +1068,7 @@ Versions:
                 "a1b2c3d000000000000000000000000000000000"]})
         );
         let text = serde_json::to_string(&shown).unwrap();
-        for hidden in [
-            "drift",
-            "override_urls",
-            "history",
-            "ready",
-            "reason",
-            "definition",
-        ] {
+        for hidden in ["override_urls", "history", "ready", "reason", "definition"] {
             assert!(!text.contains(hidden), "{hidden} in {text}");
         }
     }
