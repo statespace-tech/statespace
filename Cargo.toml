@@ -41,13 +41,13 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "ring", "tls12", "webpki-tokio"] }
 rand = "0.10"
 ring = "0.17"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 sha2 = "0.11"
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
 tempfile = "3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "1.1"
 webbrowser = "1"
 
