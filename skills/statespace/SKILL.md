@@ -6,7 +6,7 @@ description: Run commits of an app as arms of an experiment on shares of live tr
 # Statespace
 
 Statespace runs commits of an app on small shares of live traffic and counts
-what happens to their visitors.
+what happens to their subjects.
 
 - An **app** is one running copy of a service, such as `shop-prod`. A proxy is
   in front of it.
@@ -216,7 +216,7 @@ Gotchas:
   `registry.fly.io/shop` or to a public registry.
 - Arms get the secrets of the app. Never set a secret that starts with
   `STATESPACE_` on the app.
-- Remove the public addresses of the app, so that all visitors go through
+- Remove the public addresses of the app, so that all requests go through
   the proxy.
 
 ### S3 and Cloud Storage
@@ -244,7 +244,7 @@ Gotchas:
 - `--fallback 200.html` serves that file of the build for a path without a
   file extension that matches no file. Use it for a single-page app.
 - `--cache` keeps files in memory, in one cache of 256 MB.
-- A CDN in front of the proxy must not cache pages per visitor. Arm
+- A CDN in front of the proxy must not cache pages per subject. Arm
   responses get `Cache-Control: private, no-cache`.
 
 ## Starter statespace.toml
@@ -272,7 +272,7 @@ request.method == "POST"
 # their priority. Set its arms with:
 #   ssp experiment update signup --arm <commit>=<share>
 [experiment.signup]
-# The subject ID. The default is the visitor cookie that
+# The subject ID. The default is the cookie ssp_sid that
 # the proxy sets.
 # subject = 'request.headers["x-user-id"]'
 # Who may enter. The default is everyone.
@@ -350,18 +350,23 @@ with `/`. The job needs read access to the folder.
      --note "<hypothesis>" --json
    ```
 
-5. Read the evidence:
+5. Read the results:
 
    ```shell
    ssp experiment show <experiment> --app <app> --json
    ```
 
-   - `results` has, for each arm: `visitors`, `requests_per_visitor`,
-     `error_rate`, `latency_p50_ms`, `latency_p90_ms`, and `events` (each
-     event's `visitors` and `rate`). A rate has a `value` and a 95%
-     `margin`. The margin is null below 30 visitors.
-   - `split` tells whether the visitors match the shares. Do not trust
-     evidence when `split.ok` is false.
+   - `results` has, for each arm:
+     - `subjects`: the subjects that the arm served.
+     - `latency_p50_ms` and `latency_p90_ms`.
+     - `error_rate`: 100 × responses with status 500 to 599 / requests.
+     - `events`: for each event, `name`, `subjects` (subjects with at
+       least one match), `total` (all matches), and `rate` (the % of
+       subjects with at least one match).
+   - A rate has a `value` and a 95% `margin`, both in percent. The margin
+     is null below 30 subjects.
+   - `split` tells whether the subjects match the shares. Do not trust
+     the results when `split.ok` is false.
    - `lookup` gives the time window and the labels of the arms, to find the
      version in the user's own tools.
    - `--version N` shows the results of an earlier version.
@@ -421,7 +426,8 @@ match = 'request.path == "/checkout/coupon" && response.status == 200'
 - A missing field is no match.
 - To count an event that no request shows, let the app name it in a
   response header, and match that header.
-- The results give, for each event, the share of visitors with the event.
+- The results give, for each event, the % of subjects with at least one
+  match.
 - A release that changes a shared event, or the event, `subject`,
   `eligibility`, or `max_traffic` of an experiment, stops the experiment.
 
@@ -434,7 +440,7 @@ The proxy labels each arm. Live gets none of these labels.
   `OTEL_RESOURCE_ATTRIBUTES` with `statespace.experiment`, `statespace.arm`,
   and `service.version`.
 - Each request to an arm: the headers `ssp-experiment` and `ssp-arm`.
-- The visitor's browser: the cookie `ssp_arms`, such as
+- The subject's browser: the cookie `ssp_arms`, such as
   `checkout:<commit>`, which JavaScript can read.
 
 `ssp experiment show` prints the keys to search for, under "Find it in your

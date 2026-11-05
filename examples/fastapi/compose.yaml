@@ -17,7 +17,7 @@ services:
     container_name: shop
     env_file: shop.env
     restart: unless-stopped
-    # Visitors reach the shop through ssp. Keep a port of shop only for a
+    # Requests reach the shop through ssp. Keep a port of shop only for a
     # fallback in front of ssp.
 
   ssp:

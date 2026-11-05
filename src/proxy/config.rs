@@ -44,7 +44,7 @@ pub struct ExperimentConfig {
     pub name: String,
     pub version: i64,
     pub state: State,
-    /// The subject rule. `None` is the visitor cookie.
+    /// The subject rule. `None` is the subject cookie.
     #[serde(default)]
     pub subject: Option<String>,
     #[serde(default)]

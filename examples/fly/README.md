@@ -41,7 +41,7 @@ organization. Each arm is a Machine of `shop` without services.
    ```
 
 7. Point the domain of the shop at `shop-statespace`. Then remove the public
-   addresses of `shop`, so that all visitors go through the proxy:
+   addresses of `shop`, so that all requests go through the proxy:
 
    ```shell
    fly ips list -a shop

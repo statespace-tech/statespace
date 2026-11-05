@@ -304,7 +304,7 @@ fn start(api: &Api, app: &str, name: &str, note_text: Option<String>) -> anyhow:
                     return emit(&experiment, String::new);
                 }
                 say(format!(
-                    "{name} runs on {app}, version {}.\nEvidence: ssp experiment show {name}",
+                    "{name} runs on {app}, version {}.\nResults: ssp experiment show {name}",
                     text(&experiment["version"])
                 ));
                 return Ok(());
@@ -459,7 +459,7 @@ fn arms_summary(arms: &Value) -> String {
     }
 }
 
-/// `purchase rate %: c0ffee1 2.8, a1b2c3d 3.4`, in the order of the arms.
+/// `signup (%): c0ffee1 2.08, a1b2c3d 2.61`, in the order of the arms.
 fn headline(experiment: &Value) -> String {
     let headline = &experiment["headline"];
     if headline.is_null() {
@@ -467,7 +467,7 @@ fn headline(experiment: &Value) -> String {
     }
     let values: Vec<String> = commits_of(experiment)
         .iter()
-        .map(|commit| format!("{} {}", short(commit), number(&headline["values"][commit])))
+        .map(|commit| format!("{} {}", short(commit), percent(&headline["values"][commit])))
         .collect();
     format!("{}: {}", text(&headline["label"]), values.join(", "))
 }
@@ -482,19 +482,6 @@ fn commits_of(experiment: &Value) -> Vec<String> {
 }
 
 /// A number to two decimals at most, or `–` without one.
-fn number(value: &Value) -> String {
-    match value.as_f64() {
-        Some(number) => {
-            let rounded = format!("{number:.2}");
-            rounded
-                .trim_end_matches('0')
-                .trim_end_matches('.')
-                .to_owned()
-        }
-        None => "–".into(),
-    }
-}
-
 fn show(experiment: &Value) -> String {
     let definition = &experiment["definition"];
     let mut rows = vec![
@@ -675,6 +662,17 @@ fn show(experiment: &Value) -> String {
 /// The results of one version per arm, as `show` prints them: the arms in
 /// columns, a row for each result, and the split check. An empty string
 /// before the first start.
+///
+/// ```text
+/// Results of version 1 · since 2026-11-04 09:12 UTC
+///                      c0ffee1          a1b2c3d
+///   subjects           1,204            1,188
+///   p50 latency (ms)   41               44
+///   p90 latency (ms)   120              131
+///   error rate (%)     0.20 (±0.10)     0.30 (±0.12)
+///   signup (%)         2.08 (±0.81)     2.61 (±0.91)
+///   split              ok
+/// ```
 fn results(experiment: &Value) -> String {
     let Some(arms) = experiment["results"]
         .as_array()
@@ -685,8 +683,12 @@ fn results(experiment: &Value) -> String {
     let window = &experiment["lookup"]["window"];
     let since = match (window["from"].is_null(), window["to"].is_null()) {
         (true, _) => String::new(),
-        (false, true) => format!(" (since {})", time(&window["from"])),
-        (false, false) => format!(" ({} to {})", time(&window["from"]), time(&window["to"])),
+        (false, true) => format!(" · since {}", time(&window["from"])),
+        (false, false) => format!(
+            " · {} – {}",
+            time(&window["from"]).trim_end_matches(" UTC"),
+            time(&window["to"])
+        ),
     };
     let mut rows: Vec<(String, Vec<String>)> = vec![
         (
@@ -696,30 +698,24 @@ fn results(experiment: &Value) -> String {
                 .collect(),
         ),
         (
-            "visitors".into(),
-            arms.iter().map(|arm| count(&arm["visitors"])).collect(),
+            "subjects".into(),
+            arms.iter().map(|arm| count(&arm["subjects"])).collect(),
         ),
         (
-            "requests/visitor".into(),
-            arms.iter()
-                .map(|arm| decimal(&arm["requests_per_visitor"]))
-                .collect(),
-        ),
-        (
-            "error rate %".into(),
-            arms.iter().map(|arm| rate(&arm["error_rate"])).collect(),
-        ),
-        (
-            "latency p50 ms".into(),
+            "p50 latency (ms)".into(),
             arms.iter()
                 .map(|arm| whole(&arm["latency_p50_ms"]))
                 .collect(),
         ),
         (
-            "latency p90 ms".into(),
+            "p90 latency (ms)".into(),
             arms.iter()
                 .map(|arm| whole(&arm["latency_p90_ms"]))
                 .collect(),
+        ),
+        (
+            "error rate (%)".into(),
+            arms.iter().map(|arm| rate(&arm["error_rate"])).collect(),
         ),
     ];
     // One row for each event, in the order of statespace.toml.
@@ -741,7 +737,7 @@ fn results(experiment: &Value) -> String {
                     .map_or_else(|| "–".into(), |event| rate(&event["rate"]))
             })
             .collect();
-        rows.push((format!("{name} %"), values));
+        rows.push((format!("{name} (%)"), values));
     }
     let split = &experiment["split"];
     let split = match split["ok"].as_bool() {
@@ -755,17 +751,17 @@ fn results(experiment: &Value) -> String {
         .chain(["split".len()])
         .max()
         .unwrap_or(0)
-        .max(19)
+        .max(17)
         + 2;
     let value_width = rows
         .iter()
         .flat_map(|(_, values)| values.iter().map(|value| value.chars().count()))
         .max()
         .unwrap_or(0)
-        .max(13)
+        .max(15)
         + 2;
     let mut out = format!(
-        "\nEvidence of version {}{since}:\n",
+        "\nResults of version {}{since}\n",
         text(&experiment["results_version"])
     );
     let line = |label: &str, values: &[String]| {
@@ -852,11 +848,11 @@ fn count(value: &Value) -> String {
     grouped
 }
 
-/// A number with one decimal, such as `4.1`, or `–`.
-fn decimal(value: &Value) -> String {
+/// A percent with two decimals, such as `2.61`, or `–`.
+fn percent(value: &Value) -> String {
     value
         .as_f64()
-        .map_or_else(|| "–".into(), |number| format!("{number:.1}"))
+        .map_or_else(|| "–".into(), |number| format!("{number:.2}"))
 }
 
 /// A whole number, such as `41`, or `–`.
@@ -866,14 +862,14 @@ fn whole(value: &Value) -> String {
         .map_or_else(|| "–".into(), |number| format!("{number:.0}"))
 }
 
-/// A rate and its 95% margin, such as `2.1 (±0.8)`. Without a value, `–`;
-/// without a margin (fewer than 30 visitors), `2.1 (–)`, as in commit
+/// A rate and its 95% margin, such as `2.61 (±0.91)`. Without a value, `–`;
+/// without a margin (fewer than 30 subjects), `2.61 (–)`, as in commit
 /// statuses.
 fn rate(value: &Value) -> String {
     match (value["value"].as_f64(), value["margin"].as_f64()) {
         (None, _) => "–".into(),
-        (Some(number), None) => format!("{number:.1} (–)"),
-        (Some(number), Some(_)) => format!("{number:.1} (±{})", decimal(&value["margin"])),
+        (Some(number), None) => format!("{number:.2} (–)"),
+        (Some(number), Some(margin)) => format!("{number:.2} (±{margin:.2})"),
     }
 }
 
@@ -940,30 +936,49 @@ mod tests {
 
     #[test]
     fn shows_results_per_arm() {
-        const FIRST: &str = "619f978000000000000000000000000000000000";
-        const ARM: &str = "a494664000000000000000000000000000000000";
+        const FIRST: &str = "c0ffee1000000000000000000000000000000000";
+        const ARM: &str = "a1b2c3d000000000000000000000000000000000";
         let mut detail = experiment(&[(FIRST, 0.05), (ARM, 0.05)]);
         detail["name"] = json!("hero");
         detail["state"] = json!("running");
         detail["arms"][1]["ready"] = json!(false);
         detail["arms"][1]["reason"] = json!("the container exits at start (exit 1)");
-        detail["results_version"] = json!(4);
+        detail["results_version"] = json!(1);
+        let pair = |(value, margin): (f64, f64)| json!({"value": value, "margin": margin});
         let arm = |commit: &str,
-                   visitors: i64,
-                   per: f64,
-                   error: (f64, f64),
+                   subjects: i64,
                    p50: f64,
                    p90: f64,
-                   signup: (f64, f64)| {
-            json!({"commit": commit, "visitors": visitors, "requests_per_visitor": per,
-                   "error_rate": {"value": error.0, "margin": error.1},
-                   "latency_p50_ms": p50, "latency_p90_ms": p90,
-                   "events": [{"name": "signup", "visitors": 25,
-                               "rate": {"value": signup.0, "margin": signup.1}}]})
+                   error: (f64, f64),
+                   signup: (f64, f64),
+                   search: (f64, f64)| {
+            json!({"commit": commit, "subjects": subjects,
+            "latency_p50_ms": p50, "latency_p90_ms": p90,
+            "error_rate": pair(error),
+            "events": [
+                {"name": "signup", "subjects": 25, "total": 31, "rate": pair(signup)},
+                {"name": "search", "subjects": 330, "total": 912, "rate": pair(search)},
+            ]})
         };
         detail["results"] = json!([
-            arm(FIRST, 1204, 4.1, (0.2, 0.1), 41.0, 120.0, (2.1, 0.8)),
-            arm(ARM, 1188, 4.3, (0.3, 0.1), 44.2, 131.0, (2.6, 0.9)),
+            arm(
+                FIRST,
+                1204,
+                41.0,
+                120.0,
+                (0.2, 0.1),
+                (2.08, 0.81),
+                (28.04, 2.54)
+            ),
+            arm(
+                ARM,
+                1188,
+                44.2,
+                131.0,
+                (0.3, 0.12),
+                (2.61, 0.91),
+                (27.53, 2.54)
+            ),
         ]);
         detail["split"] = json!({"ok": true, "p": 0.41});
         detail["lookup"] = json!({
@@ -972,38 +987,41 @@ mod tests {
             "attributes": {"statespace.arm": [FIRST, ARM]},
         });
         detail["drift"] = json!({"live_commit": "f2f2f2f000"});
-        detail["override_urls"] = json!({ARM: "https://shop.example.com/?ssp=hero:a494664"});
+        detail["override_urls"] = json!({ARM: "https://shop.example.com/?ssp=hero:a1b2c3d"});
         detail["versions"] = json!([{"version": 1, "arms": {FIRST: 0.05, ARM: 0.05},
             "started_at": "2026-10-29T10:00:00Z", "started_by": "octo",
             "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "stop_note": "enough data"}]);
         detail["history"] = json!([{"at": "2026-10-29T10:00:00Z", "actor": "octo", "via": "cli",
             "text": "started v1", "note": "one-page hero"}]);
+        assert_eq!(
+            results(&detail),
+            "
+Results of version 1 · since 2026-11-04 09:12 UTC
+                     c0ffee1          a1b2c3d
+  subjects           1,204            1,188
+  p50 latency (ms)   41               44
+  p90 latency (ms)   120              131
+  error rate (%)     0.20 (±0.10)     0.30 (±0.12)
+  signup (%)         2.08 (±0.81)     2.61 (±0.91)
+  search (%)         28.04 (±2.54)    27.53 (±2.54)
+  split              ok
+"
+        );
         let shown = show(&detail);
-        let evidence = "\
-Evidence of version 4 (since 2026-11-04 09:12 UTC):
-                       619f978        a494664
-  visitors             1,204          1,188
-  requests/visitor     4.1            4.3
-  error rate %         0.2 (±0.1)     0.3 (±0.1)
-  latency p50 ms       41             44
-  latency p90 ms       120            131
-  signup %             2.1 (±0.8)     2.6 (±0.9)
-  split                ok
-";
-        assert!(shown.contains(evidence), "{shown}");
+        assert!(shown.contains(&results(&detail)), "{shown}");
         let tools = "\
 Find it in your own tools:
   Window   2026-11-04T09:12:00Z → now
-  Arms     statespace.arm = \"619f978…\" | \"a494664…\"     (no attribute: live)
+  Arms     statespace.arm = \"c0ffee1…\" | \"a1b2c3d…\"     (no attribute: live)
            statespace.experiment = \"hero\"
-  Version  service.version = \"619f978…\" | \"a494664…\"
-  Browser  cookie ssp_arms contains \"hero:619f978…\" | \"hero:a494664…\"
+  Version  service.version = \"c0ffee1…\" | \"a1b2c3d…\"
+  Browser  cookie ssp_arms contains \"hero:c0ffee1…\" | \"hero:a1b2c3d…\"
 ";
         assert!(shown.contains(tools), "{shown}");
         for expected in [
             "Drift:       live is now f2f2f2f",
             "not ready: the container exits at start (exit 1)",
-            "a494664   https://shop.example.com/?ssp=hero:a494664",
+            "a1b2c3d   https://shop.example.com/?ssp=hero:a1b2c3d",
             "2026-10-29 10:00 UTC  started v1 · octo with the CLI · one-page hero",
         ] {
             assert!(shown.contains(expected), "{expected:?} in\n{shown}");
@@ -1012,9 +1030,11 @@ Find it in your own tools:
         let versions = shown.find("Versions:").unwrap();
         assert!(versions > shown.find("Find it in your own tools").unwrap());
         assert!(shown.trim_end().ends_with("enough data"), "{shown}");
-        assert!(!shown.contains("METRIC") && !shown.contains("TOTAL"));
+        for gone in ["METRIC", "TOTAL", "Evidence", "visitor", "requests/"] {
+            assert!(!shown.contains(gone), "{gone:?} in\n{shown}");
+        }
 
-        // Without a margin, a value, or the split check.
+        // Without a margin, a value, or the split check; a stopped version.
         detail["results"][0]["error_rate"] = json!({"value": 0.2, "margin": null});
         detail["results"][1]["error_rate"] = json!({"value": null, "margin": null});
         detail["results"][1]["latency_p50_ms"] = Value::Null;
@@ -1022,23 +1042,27 @@ Find it in your own tools:
         detail["lookup"]["window"]["to"] = json!("2026-11-05T10:00:00Z");
         let shown = show(&detail);
         assert!(
-            shown.contains("error rate %         0.2 (–)        –\n"),
+            shown.contains("\n  error rate (%)     0.20 (–)         –\n"),
             "{shown}"
         );
-        assert!(shown.contains("latency p50 ms       41             –\n"));
-        assert!(shown.contains("split                –\n"));
-        assert!(shown.contains("(2026-11-04 09:12 UTC to 2026-11-05 10:00 UTC):"));
+        assert!(shown.contains("\n  p50 latency (ms)   41               –\n"));
+        assert!(shown.contains("\n  split              –\n"));
+        assert!(
+            shown.contains("\nResults of version 1 · 2026-11-04 09:12 – 2026-11-05 10:00 UTC\n"),
+            "{shown}"
+        );
         assert!(shown.contains("2026-11-04T09:12:00Z → 2026-11-05T10:00:00Z"));
         detail["split"] = json!({"ok": false, "p": 0.0004});
-        assert!(show(&detail).contains("split                off (p=0.0004)\n"));
+        assert!(show(&detail).contains("\n  split              off (p=0.0004)\n"));
 
         assert_eq!(count(&json!(1234567)), "1,234,567");
         assert_eq!(count(&json!(12)), "12");
+        assert_eq!(rate(&json!({"value": 3.0, "margin": 0.5})), "3.00 (±0.50)");
         assert_eq!(probability(&json!(0.00001)), "<0.0001");
         assert_eq!(
             headline(&json!({"arms": [{"commit": FIRST}, {"commit": ARM}],
-                              "headline": {"label": "signup %", "values": {FIRST: 2.1, ARM: null}}})),
-            "signup %: 619f978 2.1, a494664 –"
+                              "headline": {"label": "signup (%)", "values": {FIRST: 2.08, ARM: null}}})),
+            "signup (%): c0ffee1 2.08, a1b2c3d –"
         );
     }
 }

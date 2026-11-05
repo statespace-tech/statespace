@@ -4,7 +4,7 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
-Statespace records counts per visitor, not requests, log lines, or bodies. Your own
+Statespace records counts per subject, not requests, log lines, or bodies. Your own
 tools keep the detail, and each arm carries labels that they can filter by.
 
 ### Changed
@@ -12,13 +12,13 @@ tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** no arm is the reference. `ssp experiment update`, `show`, and `list`
   print no `(reference)`, and commit statuses say `running` on every arm.
 - **Breaking:** `ssp proxy` counts. For each request that an arm serves to an
-  assigned visitor, it adds to that visitor's counters in memory: requests, errors
+  assigned subject, it adds to that subject's counters in memory: requests, errors
   (status 500 to 599), one of 11 latency buckets, and each event that matches. It
   sends the changes every 60 seconds and when it stops, to
-  `POST /v1/runtime/apps/{app}/counts`, in batches of at most 5,000 visitors with a
+  `POST /v1/runtime/apps/{app}/counts`, in batches of at most 5,000 subjects with a
   UUID. It sends a failed batch again with the same UUID. It keeps at most 50,000
-  visitors in memory and drops the oldest above that, and drops the counts of a
-  version that does not run (409). Live and overrides are never counted. A visitor
+  subjects in memory and drops the oldest above that, and drops the counts of a
+  version that does not run (409). Live and overrides are never counted. A subject
   whose arm is not ready gets live and is counted with no requests, as unavailable.
 - **Breaking:** no subject leaves the proxy. It sends
   `hex(HMAC-SHA256(key = app salt, message = subject))`.
@@ -39,17 +39,21 @@ tools keep the detail, and each arm carries labels that they can filter by.
   The proxy evaluates the rules once per arm request, when the response headers
   arrive, and never reads a body. `request.status` and `request.ms` are now
   `response.status` and `response.ms`. Rules over `stdout` and `stderr` are gone.
-- **Breaking:** `[[metric]]` is gone. The results give, for each arm, the visitors,
-  requests per visitor, the error rate, latency p50 and p90, and the share of
-  visitors with each event, with 95% margins.
+- **Breaking:** `[[metric]]` is gone. The results give, for each arm, the subjects,
+  latency p50 and p90, the error rate (100 × responses with status 500 to 599 /
+  requests), and the % of subjects with at least one match of each event, with 95%
+  margins. In the API and `--json`, each arm has `subjects`, `latency_p50_ms`,
+  `latency_p90_ms`, `error_rate {value, margin}`, and `events` with `name`,
+  `subjects`, `total` (all matches), and `rate {value, margin}`. Values are percents.
+  Commit statuses say, for example, `signup 2.61% (±0.91) · 1,188 subjects`.
 - **Breaking:** the proxy sends `ssp-experiment` and `ssp-arm` to an arm, in place of
   `x-statespace-experiment` and `x-statespace-arm`. It removes these headers when a
   client sends them. It sends no `x-statespace-subject`.
 - Each arm carries labels for your own tools. Its environment has `SSP_EXPERIMENT`,
   `SSP_ARM` (the full commit), and `OTEL_RESOURCE_ATTRIBUTES` with live's attributes
   and `statespace.experiment`, `statespace.arm`, and `service.version` of the arm. A
-  visitor that an arm serves gets the cookie `ssp_arms=<experiment>:<commit>`, which
-  JavaScript can read (`Path=/`, `SameSite=Lax`, 90 days). A visitor in no arm loses
+  subject that an arm serves gets the cookie `ssp_arms=<experiment>:<commit>`, which
+  JavaScript can read (`Path=/`, `SameSite=Lax`, 90 days). A subject in no arm loses
   it. This cookie works on `ssp proxy s3` and `ssp proxy gcs` too.
 - **Breaking:** on Docker, the labels of an arm's container are `com.statespace.app`,
   `com.statespace.unit`, `com.statespace.experiment`, `com.statespace.commit`,
@@ -59,8 +63,23 @@ tools keep the detail, and each arm carries labels that they can filter by.
   and `statespace_port`. A proxy of this version does not adopt the arms of an
   earlier version: stop the experiments before you upgrade.
 - **Breaking:** `ssp experiment show` prints the results of a version: a column for
-  each arm, a row for each result, and the split check. Then it prints where to find
-  the version in your own tools, and the versions. `--version N` shows the results of
+  each arm, and the rows `subjects`, `p50 latency (ms)`, `p90 latency (ms)`,
+  `error rate (%)`, one `<name> (%)` row for each event in file order, and `split`.
+  Percents and margins have 2 decimals, such as `2.61 (±0.91)`. Below 30 subjects,
+  the margin is `(–)`. Then it prints where to find the version in your own tools,
+  and the versions.
+
+  ```text
+  Results of version 1 · since 2026-11-04 09:12 UTC
+                       c0ffee1          a1b2c3d
+    subjects           1,204            1,188
+    p50 latency (ms)   41               44
+    p90 latency (ms)   120              131
+    error rate (%)     0.20 (±0.10)     0.30 (±0.12)
+    signup (%)         2.08 (±0.81)     2.61 (±0.91)
+    split              ok
+  ```
+ `--version N` shows the results of
   version N; a stopped version shows the results of its end. `--json` prints the
   document of the API as it is.
 

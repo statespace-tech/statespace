@@ -25,18 +25,18 @@ use super::{
     assign::{
         self, Decision, OVERRIDE, OVERRIDE_HEADER, Reason, Refused, Routing, Run, SUBJECT_COOKIE,
     },
-    counts::{self, Counter, Visitor},
+    counts::{self, Counter, Subject},
     events,
     orchestrator::{FileRequest, Orchestrator, UnitKey},
 };
 
 type ProxyBody = BoxBody<Bytes, hyper::Error>;
 
-/// How long the visitor cookie lasts: 90 days, renewed on every response.
-const VISITOR_SECONDS: u32 = 7_776_000;
+/// How long the subject cookie lasts: 90 days, renewed on every response.
+const SUBJECT_SECONDS: u32 = 7_776_000;
 /// How long an override cookie lasts without a request. Each request renews it.
 const OVERRIDE_SECONDS: u32 = 3600;
-/// The cookie that names the arms of a visitor, for browser analytics.
+/// The cookie that names the arms of a subject, for browser analytics.
 pub const ARMS_COOKIE: &str = "ssp_arms";
 /// The headers that name the arm of a request, for the app.
 pub const EXPERIMENT_HEADER: &str = "ssp-experiment";
@@ -126,11 +126,11 @@ fn attributes(max_age: u32, secure: bool) -> String {
     }
 }
 
-/// The `Set-Cookie` value of the visitor cookie.
-pub fn visitor_cookie(id: &str, secure: bool) -> String {
+/// The `Set-Cookie` value of the subject cookie.
+pub fn subject_cookie(id: &str, secure: bool) -> String {
     format!(
         "{SUBJECT_COOKIE}={id}; {}",
-        attributes(VISITOR_SECONDS, secure)
+        attributes(SUBJECT_SECONDS, secure)
     )
 }
 
@@ -144,14 +144,14 @@ pub fn override_cookie(arm: Option<&str>, secure: bool) -> String {
 }
 
 /// The `Set-Cookie` value of the `ssp_arms` cookie: `<experiment>:<commit>`
-/// of the arm that serves an assigned visitor, readable by JavaScript and
-/// as long-lived as the visitor cookie. A visitor in no arm loses the
+/// of the arm that serves an assigned subject, readable by JavaScript and
+/// as long-lived as the subject cookie. A subject in no arm loses the
 /// cookie, when the request had it.
 pub fn arms_cookie(arm: Option<&UnitKey>, had: bool, secure: bool) -> Option<String> {
     let secure = if secure { "; Secure" } else { "" };
     match arm {
         Some(key) => Some(format!(
-            "{ARMS_COOKIE}={}:{}; Path=/; Max-Age={VISITOR_SECONDS}; SameSite=Lax{secure}",
+            "{ARMS_COOKIE}={}:{}; Path=/; Max-Age={SUBJECT_SECONDS}; SameSite=Lax{secure}",
             key.experiment, key.commit
         )),
         None if had => Some(format!(
@@ -161,15 +161,15 @@ pub fn arms_cookie(arm: Option<&UnitKey>, had: bool, secure: bool) -> Option<Str
     }
 }
 
-/// A visitor ID the proxy may send back: letters, digits, `_`, and `-`.
-fn valid_visitor(id: &str) -> bool {
+/// A subject ID the proxy may send back: letters, digits, `_`, and `-`.
+fn valid_subject(id: &str) -> bool {
     (1..=128).contains(&id.len())
         && id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
-pub fn new_visitor() -> String {
+pub fn new_subject() -> String {
     format!("sid_{:032x}", rand::random::<u128>())
 }
 
@@ -185,25 +185,25 @@ async fn forward<O: Orchestrator>(
     let secure = is_secure(request.headers());
     let had_arms = cookies.contains_key(ARMS_COOKIE);
     // While a running experiment uses the default subject, every response
-    // sets or renews the visitor cookie.
-    let visitor = routing
+    // sets or renews the subject cookie.
+    let subject = routing
         .as_ref()
         .is_some_and(|routing| routing.default_subject)
         .then(|| {
             let id = cookies
                 .get(SUBJECT_COOKIE)
                 .and_then(Value::as_str)
-                .filter(|id| valid_visitor(id))
-                .map_or_else(new_visitor, str::to_owned);
+                .filter(|id| valid_subject(id))
+                .map_or_else(new_subject, str::to_owned);
             cookies.insert(SUBJECT_COOKIE.into(), json!(id));
-            visitor_cookie(&id, secure)
+            subject_cookie(&id, secure)
         });
     let (mut response, arm) = route(
         runtime, peer, request, routing, requested, cookies, secure, started,
     )
     .await;
     let arms = arms_cookie(arm.as_ref(), had_arms, secure);
-    for cookie in [visitor, arms].into_iter().flatten() {
+    for cookie in [subject, arms].into_iter().flatten() {
         if let Ok(value) = HeaderValue::from_str(&cookie) {
             response.headers_mut().append(header::SET_COOKIE, value);
         }
@@ -211,7 +211,7 @@ async fn forward<O: Orchestrator>(
     response
 }
 
-/// Route a request, and count it when an arm serves an assigned visitor.
+/// Route a request, and count it when an arm serves an assigned subject.
 /// Also returns that arm, for the `ssp_arms` cookie.
 #[allow(clippy::too_many_arguments)]
 async fn route<O: Orchestrator>(
@@ -284,16 +284,16 @@ async fn route<O: Orchestrator>(
         None => (None, runtime.orchestrator.live_address()),
     };
     let visit = match (&counter, counted(&decision, over, serve.is_some())) {
-        (Some((routing, counter)), Some((run, served))) => visitor(routing, &run.key, &run.subject)
-            .and_then(|visitor| match served {
+        (Some((routing, counter)), Some((run, served))) => subject(routing, &run.key, &run.subject)
+            .and_then(|subject| match served {
                 true => Some(Visit {
                     counter: counter.clone(),
                     routing: routing.clone(),
                     key: run.key.clone(),
-                    visitor,
+                    subject,
                 }),
                 false => {
-                    counter.unavailable(visitor);
+                    counter.unavailable(subject);
                     None
                 }
             }),
@@ -307,8 +307,8 @@ async fn route<O: Orchestrator>(
     (response, arm)
 }
 
-/// What a request counts for: the run of an assigned visitor, and whether
-/// the arm serves it (`false`: the arm is not ready, and the visitor is
+/// What a request counts for: the run of an assigned subject, and whether
+/// the arm serves it (`false`: the arm is not ready, and the subject is
 /// counted as unavailable). Live and overrides count for nothing. `served`
 /// says whether the unit is still ready when the request is sent.
 fn counted(decision: &Decision, over: bool, served: bool) -> Option<(&Run, bool)> {
@@ -320,10 +320,10 @@ fn counted(decision: &Decision, over: bool, served: bool) -> Option<(&Run, bool)
     }
 }
 
-/// The visitor that a subject of an arm counts as, or `None` when the
+/// The subject that a subject of an arm counts as, or `None` when the
 /// experiment no longer runs.
-fn visitor(routing: &Routing, key: &UnitKey, subject: &str) -> Option<Visitor> {
-    Some(Visitor {
+fn subject(routing: &Routing, key: &UnitKey, subject: &str) -> Option<Subject> {
+    Some(Subject {
         experiment: key.experiment.clone(),
         version: routing.version(key)?,
         arm: key.commit.clone(),
@@ -476,17 +476,17 @@ async fn deliver<O: Orchestrator>(
     Response::from_parts(parts, body.boxed())
 }
 
-/// A request that an arm serves to an assigned visitor, counted when its
+/// A request that an arm serves to an assigned subject, counted when its
 /// response headers arrive. Live and overrides are never counted.
 struct Visit {
     counter: Arc<Counter>,
     routing: Arc<Routing>,
     key: UnitKey,
-    visitor: Visitor,
+    subject: Subject,
 }
 
 impl Visit {
-    /// Count the response the visitor got, and the events it matches. When
+    /// Count the response the subject got, and the events it matches. When
     /// the arm failed, that is the answer of the proxy or of live.
     fn count(&self, request: &Value, response: &Response<ProxyBody>, started: Instant) {
         let ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -499,7 +499,7 @@ impl Visit {
             _ => Vec::new(),
         };
         self.counter
-            .served(self.visitor.clone(), status, ms, &events);
+            .served(self.subject.clone(), status, ms, &events);
     }
 }
 
@@ -947,18 +947,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn visitor_cookies_work_in_iframes_over_https() {
+    fn subject_cookies_work_in_iframes_over_https() {
         assert_eq!(
-            visitor_cookie("sid_1", true),
+            subject_cookie("sid_1", true),
             "ssp_sid=sid_1; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=None; Partitioned"
         );
         assert_eq!(
-            visitor_cookie("sid_1", false),
+            subject_cookie("sid_1", false),
             "ssp_sid=sid_1; Path=/; Max-Age=7776000; HttpOnly; SameSite=Lax"
         );
-        assert!(valid_visitor(&new_visitor()));
-        assert!(!valid_visitor("a;b"));
-        assert!(!valid_visitor(""));
+        assert!(valid_subject(&new_subject()));
+        assert!(!valid_subject("a;b"));
+        assert!(!valid_subject(""));
     }
 
     #[test]
@@ -1047,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn only_assigned_visitors_of_arms_count() {
+    fn only_assigned_subjects_of_arms_count() {
         let key = UnitKey {
             experiment: "hero".into(),
             commit: "a".repeat(40),
@@ -1097,7 +1097,7 @@ mod tests {
         let secure = arms_cookie(Some(&key), true, true).unwrap();
         assert!(secure.ends_with("SameSite=Lax; Secure"), "{secure}");
         assert!(!secure.contains("HttpOnly"));
-        // A visitor in no arm loses the cookie, only when it had one.
+        // A subject in no arm loses the cookie, only when it had one.
         assert_eq!(
             arms_cookie(None, true, false).as_deref(),
             Some("ssp_arms=; Path=/; Max-Age=0; SameSite=Lax")

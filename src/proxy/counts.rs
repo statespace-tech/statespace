@@ -1,15 +1,15 @@
-//! Counts per visitor: what the proxy sends to Statespace. For each request
-//! that an arm serves to an assigned visitor, the proxy adds to that
-//! visitor's counters in memory: the requests, the 5xx errors, a latency
+//! Counts per subject: what the proxy sends to Statespace. For each request
+//! that an arm serves to an assigned subject, the proxy adds to that
+//! subject's counters in memory: the requests, the 5xx errors, a latency
 //! bucket, and each event that matches. Live and overrides are never
-//! counted. A visitor whose arm is not ready is counted with no requests and
+//! counted. A subject whose arm is not ready is counted with no requests and
 //! `unavailable: true`.
 //!
 //! Every 60 seconds and when the proxy stops, the counters that changed are
 //! sent as deltas to `POST /v1/runtime/apps/{app}/counts`, in batches with a
 //! UUID, and then cleared. A batch that fails is sent again with the same
 //! UUID, with backoff. Counting never blocks or slows a request: above
-//! 50,000 visitors in memory, the oldest deltas are dropped.
+//! 50,000 subjects in memory, the oldest deltas are dropped.
 
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
@@ -33,12 +33,12 @@ use super::remote::{CountsError, Remote};
 pub const LATENCY_BOUNDS: [f64; 10] = [
     5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
 ];
-/// How many latency buckets a visitor has.
+/// How many latency buckets a subject has.
 pub const BUCKETS: usize = LATENCY_BOUNDS.len() + 1;
 /// The most entries in one batch.
 const BATCH_ENTRIES: usize = 5_000;
-/// The most visitors whose deltas the proxy keeps in memory.
-const MOST_VISITORS: usize = 50_000;
+/// The most subjects whose deltas the proxy keeps in memory.
+const MOST_SUBJECTS: usize = 50_000;
 /// The longest wait before a failed batch is sent again.
 const MOST_BACK_OFF: Duration = Duration::from_secs(60);
 /// How often a batch is sent while the account's storage is full, before it
@@ -66,9 +66,9 @@ pub fn subject_hash(salt: &str, subject: &str) -> String {
         .collect()
 }
 
-/// One visitor of one arm of one version of an experiment.
+/// One subject of one arm of one version of an experiment.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Visitor {
+pub struct Subject {
     pub experiment: String,
     pub version: i64,
     /// The arm's full commit.
@@ -77,12 +77,12 @@ pub struct Visitor {
     pub subject: String,
 }
 
-/// What changed for a visitor since the last send.
+/// What changed for a subject since the last send.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Delta {
     first_at: DateTime<Utc>,
     last_at: DateTime<Utc>,
-    /// Whether the visitor's arm was not ready, and no arm request counted.
+    /// Whether the subject's arm was not ready, and no arm request counted.
     unavailable: bool,
     requests: u64,
     errors: u64,
@@ -107,13 +107,13 @@ impl Delta {
 /// The deltas in memory, oldest first.
 #[derive(Default)]
 struct Pending {
-    deltas: HashMap<Visitor, (u64, Delta)>,
-    order: BTreeMap<u64, Visitor>,
+    deltas: HashMap<Subject, (u64, Delta)>,
+    order: BTreeMap<u64, Subject>,
     next: u64,
 }
 
-/// The deltas of visitors, in order.
-type Entries = Vec<(Visitor, Delta)>;
+/// The deltas of subjects, in order.
+type Entries = Vec<(Subject, Delta)>;
 
 /// A batch to send: its UUID, and its entries.
 struct Batch {
@@ -127,7 +127,7 @@ pub struct Counter {
     pending: Mutex<Pending>,
     /// The entries in batches that wait to be sent.
     held: AtomicUsize,
-    /// Visitors whose deltas were dropped because memory was full.
+    /// Subjects whose deltas were dropped because memory was full.
     dropped: AtomicU64,
 }
 
@@ -142,10 +142,10 @@ impl Default for Counter {
 }
 
 impl Counter {
-    /// A visitor whose arm is not ready: the request goes to live, and the
-    /// visitor counts for the split check only.
-    pub fn unavailable(&self, visitor: Visitor) {
-        self.add(visitor, |delta, new| {
+    /// A subject whose arm is not ready: the request goes to live, and the
+    /// subject counts for the split check only.
+    pub fn unavailable(&self, subject: Subject) {
+        self.add(subject, |delta, new| {
             if new {
                 delta.unavailable = true;
             }
@@ -154,8 +154,8 @@ impl Counter {
 
     /// A request that an arm served: its status, the time to the response
     /// headers, and the events that matched.
-    pub fn served(&self, visitor: Visitor, status: u16, ms: f64, events: &[&str]) {
-        self.add(visitor, |delta, _| {
+    pub fn served(&self, subject: Subject, status: u16, ms: f64, events: &[&str]) {
+        self.add(subject, |delta, _| {
             delta.unavailable = false;
             delta.requests += 1;
             if (500..600).contains(&status) {
@@ -168,11 +168,11 @@ impl Counter {
         });
     }
 
-    fn add(&self, visitor: Visitor, change: impl FnOnce(&mut Delta, bool)) {
+    fn add(&self, subject: Subject, change: impl FnOnce(&mut Delta, bool)) {
         let now = Utc::now();
         let mut pending = self.pending.lock().expect("counts are never poisoned");
         let pending = &mut *pending;
-        if let Some((_, delta)) = pending.deltas.get_mut(&visitor) {
+        if let Some((_, delta)) = pending.deltas.get_mut(&subject) {
             delta.last_at = now;
             change(delta, false);
             return;
@@ -181,9 +181,9 @@ impl Counter {
         change(&mut delta, true);
         let order = pending.next;
         pending.next += 1;
-        pending.order.insert(order, visitor.clone());
-        pending.deltas.insert(visitor, (order, delta));
-        let room = MOST_VISITORS.saturating_sub(self.held.load(Ordering::Relaxed));
+        pending.order.insert(order, subject.clone());
+        pending.deltas.insert(subject, (order, delta));
+        let room = MOST_SUBJECTS.saturating_sub(self.held.load(Ordering::Relaxed));
         while pending.deltas.len() > room {
             let Some((_, oldest)) = pending.order.pop_first() else {
                 break;
@@ -193,7 +193,7 @@ impl Counter {
         }
     }
 
-    /// How many visitors' deltas were dropped because memory was full.
+    /// How many subjects' deltas were dropped because memory was full.
     pub fn dropped(&self) -> u64 {
         self.dropped.load(Ordering::Relaxed)
     }
@@ -205,9 +205,9 @@ impl Counter {
         let mut deltas = deltas;
         order
             .into_values()
-            .filter_map(|visitor| {
-                let (_, delta) = deltas.remove(&visitor)?;
-                Some((visitor, delta))
+            .filter_map(|subject| {
+                let (_, delta) = deltas.remove(&subject)?;
+                Some((subject, delta))
             })
             .collect()
     }
@@ -275,20 +275,20 @@ impl Counter {
             match remote.send_counts(&body(batch)).await {
                 Ok(()) => {}
                 Err(CountsError::Refused(message)) => eprintln!(
-                    "[ssp] dropped the counts of {} visitors: {message}",
+                    "[ssp] dropped the counts of {} subjects: {message}",
                     batch.entries.len()
                 ),
                 Err(CountsError::NotRunning(message, versions)) => {
                     let (dropped, kept): (Entries, Entries) = std::mem::take(&mut batch.entries)
                         .into_iter()
-                        .partition(|(visitor, _)| {
+                        .partition(|(subject, _)| {
                             versions.is_empty()
                                 || versions.iter().any(|(experiment, version)| {
-                                    visitor.experiment == *experiment && visitor.version == *version
+                                    subject.experiment == *experiment && subject.version == *version
                                 })
                         });
                     eprintln!(
-                        "[ssp] dropped the counts of {} visitors: {message}",
+                        "[ssp] dropped the counts of {} subjects: {message}",
                         dropped.len()
                     );
                     outbox.pop_front();
@@ -307,7 +307,7 @@ impl Counter {
                         return Err(anyhow::anyhow!("{message}"));
                     }
                     eprintln!(
-                        "[ssp] dropped the counts of {} visitors: {message}",
+                        "[ssp] dropped the counts of {} subjects: {message}",
                         batch.entries.len()
                     );
                 }
@@ -323,11 +323,11 @@ impl Counter {
 /// version that stopped (409) drops only its own counts.
 fn batches(entries: Entries) -> Vec<Batch> {
     let mut versions: Vec<((String, i64), Entries)> = Vec::new();
-    for (visitor, delta) in entries {
-        let version = (visitor.experiment.clone(), visitor.version);
+    for (subject, delta) in entries {
+        let version = (subject.experiment.clone(), subject.version);
         match versions.iter_mut().find(|(key, _)| *key == version) {
-            Some((_, list)) => list.push((visitor, delta)),
-            None => versions.push((version, vec![(visitor, delta)])),
+            Some((_, list)) => list.push((subject, delta)),
+            None => versions.push((version, vec![(subject, delta)])),
         }
     }
     let mut batches = Vec::new();
@@ -350,12 +350,12 @@ fn body(batch: &Batch) -> Value {
     let counts: Vec<Value> = batch
         .entries
         .iter()
-        .map(|(visitor, delta)| {
+        .map(|(subject, delta)| {
             json!({
-                "experiment": visitor.experiment,
-                "version": visitor.version,
-                "arm": visitor.arm,
-                "subject": visitor.subject,
+                "experiment": subject.experiment,
+                "version": subject.version,
+                "arm": subject.arm,
+                "subject": subject.subject,
                 "first_at": time(&delta.first_at),
                 "last_at": time(&delta.last_at),
                 "unavailable": delta.unavailable,
@@ -389,8 +389,8 @@ fn uuid() -> String {
 mod tests {
     use super::*;
 
-    fn visitor(experiment: &str, subject: &str) -> Visitor {
-        Visitor {
+    fn subject(experiment: &str, subject: &str) -> Subject {
+        Subject {
             experiment: experiment.into(),
             version: 4,
             arm: "a".repeat(40),
@@ -425,15 +425,15 @@ mod tests {
     }
 
     #[test]
-    fn deltas_add_up_per_visitor() {
+    fn deltas_add_up_per_subject() {
         let counter = Counter::default();
-        counter.served(visitor("hero", "v_1"), 201, 3.0, &["signup"]);
-        counter.served(visitor("hero", "v_1"), 503, 120.0, &[]);
-        counter.served(visitor("hero", "v_1"), 200, 7000.0, &["signup", "view"]);
-        counter.unavailable(visitor("hero", "v_2"));
-        // A visitor that an arm serves later is no longer unavailable.
-        counter.unavailable(visitor("hero", "v_3"));
-        counter.served(visitor("hero", "v_3"), 200, 1.0, &[]);
+        counter.served(subject("hero", "v_1"), 201, 3.0, &["signup"]);
+        counter.served(subject("hero", "v_1"), 503, 120.0, &[]);
+        counter.served(subject("hero", "v_1"), 200, 7000.0, &["signup", "view"]);
+        counter.unavailable(subject("hero", "v_2"));
+        // A subject that an arm serves later is no longer unavailable.
+        counter.unavailable(subject("hero", "v_3"));
+        counter.served(subject("hero", "v_3"), 200, 1.0, &[]);
         let entries = counter.take();
         assert_eq!(entries.len(), 3);
         let batch = Batch {
@@ -489,9 +489,9 @@ mod tests {
     fn batches_hold_one_version_and_at_most_5000_entries() {
         let counter = Counter::default();
         for index in 0..5_001 {
-            counter.served(visitor("hero", &format!("v_{index}")), 200, 1.0, &[]);
+            counter.served(subject("hero", &format!("v_{index}")), 200, 1.0, &[]);
         }
-        counter.served(visitor("pricing", "v_1"), 200, 1.0, &[]);
+        counter.served(subject("pricing", "v_1"), 200, 1.0, &[]);
         let batches = batches(counter.take());
         let sizes: Vec<usize> = batches.iter().map(|batch| batch.entries.len()).collect();
         assert_eq!(sizes, [5_000, 1, 1]);
@@ -503,17 +503,17 @@ mod tests {
     }
 
     #[test]
-    fn a_full_memory_drops_the_oldest_visitors() {
+    fn a_full_memory_drops_the_oldest_subjects() {
         let counter = Counter::default();
-        counter.held.store(MOST_VISITORS - 2, Ordering::Relaxed);
-        for subject in ["v_1", "v_2", "v_3"] {
-            counter.served(visitor("hero", subject), 200, 1.0, &[]);
+        counter.held.store(MOST_SUBJECTS - 2, Ordering::Relaxed);
+        for id in ["v_1", "v_2", "v_3"] {
+            counter.served(subject("hero", id), 200, 1.0, &[]);
         }
         assert_eq!(counter.dropped(), 1);
         let kept: Vec<String> = counter
             .take()
             .into_iter()
-            .map(|(visitor, _)| visitor.subject)
+            .map(|(subject, _)| subject.subject)
             .collect();
         assert_eq!(kept, [subject_hash("s", "v_2"), subject_hash("s", "v_3")]);
     }

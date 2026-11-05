@@ -217,7 +217,7 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
             "subject": if name == "us-landing" { json!("request.headers[\"x-user-id\"]") } else { Value::Null },
             "eligibility": null, "max_traffic": 0.2,
         },
-        "headline": {"label": "purchase rate %", "values": {LIVE: 2.8, ARM: 3.4}},
+        "headline": {"label": "purchase (%)", "values": {LIVE: 2.8, ARM: 3.4}},
         "arms": arms.iter().map(|(commit, share, ready, reason)| json!({
             "commit": commit, "share": share, "image": digest('2'), "ready": ready,
             "reason": reason, "ahead": 1, "behind": 0, "live_contains": false,
@@ -226,7 +226,7 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
 }
 
 impl Statespace {
-    /// The counts that Statespace applied: one entry per visitor per batch.
+    /// The counts that Statespace applied: one entry per subject per batch.
     fn counts(&self) -> Vec<Value> {
         assert!(
             self.rejected.is_empty(),
@@ -237,7 +237,7 @@ impl Statespace {
     }
 
     /// The counts of one arm of an experiment, added up as Statespace adds
-    /// them: visitors (by subject hash), requests, errors, latency, events.
+    /// them: subjects (by subject hash), requests, errors, latency, events.
     fn totals(&self, experiment: &str, arm: &str) -> Totals {
         let mut totals = Totals::default();
         for entry in self.counts() {
@@ -249,7 +249,7 @@ impl Statespace {
                 totals.unavailable.insert(subject);
                 continue;
             }
-            totals.visitors.insert(subject);
+            totals.subjects.insert(subject);
             totals.requests += entry["requests"].as_u64().unwrap();
             totals.errors += entry["errors"].as_u64().unwrap();
             for (bucket, count) in entry["latency"].as_array().unwrap().iter().enumerate() {
@@ -279,9 +279,9 @@ impl Statespace {
 /// The counts of one arm, added up.
 #[derive(Debug, Default)]
 struct Totals {
-    /// The subject hashes of the visitors that the arm served.
-    visitors: HashSet<String>,
-    /// The subject hashes of visitors whose arm was not ready.
+    /// The subject hashes of the subjects that the arm served.
+    subjects: HashSet<String>,
+    /// The subject hashes of subjects whose arm was not ready.
     unavailable: HashSet<String>,
     requests: u64,
     errors: u64,
@@ -520,7 +520,7 @@ fn check_counts(batch: &Value, config: &Value) -> Result<(), (u16, String)> {
             number(count)?;
         }
         if entry["unavailable"] == true && (requests > 0 || !events.is_empty()) {
-            return bad("a visitor whose arm was not ready has counts of 0".into());
+            return bad("a subject whose arm was not ready has counts of 0".into());
         }
         let running = config["experiments"]
             .as_array()
@@ -857,7 +857,7 @@ fn stand_in_refuses_what_statespace_refuses() {
     refused(
         &|entry| entry["unavailable"] = json!(true),
         400,
-        "a visitor whose arm was not ready has counts of 0",
+        "a subject whose arm was not ready has counts of 0",
     );
     refused(
         &|entry| entry["version"] = json!(3),
@@ -1611,7 +1611,7 @@ fn experiments_update_start_and_stop() {
          \x20 9f1ce8a   ready\n\
          \x20 a1b2c3d   ready\n\
          us-landing runs on shop-prod, version 3.\n\
-         Evidence: ssp experiment show us-landing\n"
+         Results: ssp experiment show us-landing\n"
     );
     // checkout runs with another subject, and is first in the file.
     assert!(
@@ -1666,7 +1666,7 @@ fn experiments_update_start_and_stop() {
     let (ok, stdout, _) = run(&["experiment", "list"]);
     assert!(ok);
     assert!(
-        stdout.contains("checkout    running  3        9f1ce8a=0.05 a1b2c3d=0.05  purchase rate %: 9f1ce8a 2.8, a1b2c3d 3.4"),
+        stdout.contains("checkout    running  3        9f1ce8a=0.05 a1b2c3d=0.05  purchase (%): 9f1ce8a 2.80, a1b2c3d 3.40"),
         "{stdout}"
     );
     assert!(!stdout.contains("pricing"));
@@ -2186,7 +2186,7 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
         format!("Bearer id-for-{arm_url}")
     );
     assert_eq!(arm_response["cache-control"], "private, max-age=60");
-    // The browser of an assigned visitor gets the readable ssp_arms cookie.
+    // The browser of an assigned subject gets the readable ssp_arms cookie.
     let cookies_of = |headers: &reqwest::header::HeaderMap| -> Vec<String> {
         headers
             .get_all("set-cookie")
@@ -2213,8 +2213,8 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     assert!(live_body["headers"].get("x-statespace-subject").is_none());
     assert_eq!(live_response["cache-control"], "public, max-age=60");
 
-    // While checkout uses the visitor cookie, every response renews it, and
-    // a new visitor gets one.
+    // While checkout uses the subject cookie, every response renews it, and
+    // a new subject gets one.
     assert_eq!(
         cookies_of(&live_response),
         [format!(
@@ -2222,14 +2222,14 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
         )]
     );
     let fresh = send(test.port, "GET", "/", &[]).unwrap();
-    // The new visitor can be in an arm: then ssp_arms comes after ssp_sid.
+    // The new subject can be in an arm: then ssp_arms comes after ssp_sid.
     let cookie = set_cookies(&fresh).into_iter().next().unwrap();
     assert!(
         cookie.starts_with("ssp_sid=sid_")
             && cookie.ends_with("; Path=/; Max-Age=7776000; HttpOnly; SameSite=Lax"),
         "{cookie}"
     );
-    // A visitor in no arm loses an ssp_arms cookie.
+    // A subject in no arm loses an ssp_arms cookie.
     let stale = format!("ssp_sid={live_subject}; ssp_arms=checkout:{ARM}");
     let response = send(test.port, "GET", "/", &[("cookie", stale.as_str())]).unwrap();
     assert!(
@@ -2238,28 +2238,28 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
         set_cookies(&response)
     );
 
-    // Counts arrive for the arms only: per visitor, with the subject hashed
+    // Counts arrive for the arms only: per subject, with the subject hashed
     // with the app's salt, and the events that matched.
     let hash = |subject: &str| subject_hash("salt-1", subject);
     wait_until(30, "the counts of both arms", || {
         let state = test.statespace.lock().unwrap();
         state.totals("checkout", ARM).events.get("checkout") == Some(&1)
-            && !state.totals("checkout", LIVE).visitors.is_empty()
+            && !state.totals("checkout", LIVE).subjects.is_empty()
     });
     let state = test.statespace.lock().unwrap();
     let arm = state.totals("checkout", ARM);
-    // The new visitor above may be in an arm too.
-    assert!(arm.visitors.contains(&hash(&arm_subject)), "{arm:?}");
-    assert!(arm.visitors.len() <= 2, "{arm:?}");
+    // The new subject above may be in an arm too.
+    assert!(arm.subjects.contains(&hash(&arm_subject)), "{arm:?}");
+    assert!(arm.subjects.len() <= 2, "{arm:?}");
     assert!(arm.requests >= 2, "{arm:?}");
     assert_eq!(arm.latency.iter().sum::<u64>(), arm.requests);
     assert_eq!(arm.errors, 0);
     assert_eq!(arm.events["json"], arm.requests, "{arm:?}");
     let live_arm = state.totals("checkout", LIVE);
-    assert!(live_arm.visitors.contains(&hash(&live_arm_subject)));
+    assert!(live_arm.subjects.contains(&hash(&live_arm_subject)));
     assert!(!live_arm.events.contains_key("checkout"));
     let counts = state.counts();
-    // While the arms started, their visitors got live, as unavailable.
+    // While the arms started, their subjects got live, as unavailable.
     assert!(
         counts
             .iter()
@@ -2326,7 +2326,7 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     assert_eq!(test.google.lock().unwrap().service, before);
     let (body, _) = get(&arm_subject, "/").unwrap();
     assert_eq!(body["name"], "live");
-    // No running experiment uses the visitor cookie now: none is set.
+    // No running experiment uses the subject cookie now: none is set.
     let fresh = send(test.port, "GET", "/", &[]).unwrap();
     assert!(set_cookies(&fresh).is_empty());
 }
@@ -2339,7 +2339,7 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
     });
     let response = send(test.port, "GET", "/", &[]).unwrap();
     assert_eq!(response.json::<Value>().unwrap()["name"], "live");
-    // No instance runs the arm, so its visitors get live, without the
+    // No instance runs the arm, so its subjects get live, without the
     // ssp_arms cookie, and count as unavailable.
     let arm_subject = subject_in(0.4, 0.8);
     let cookie = format!("ssp_sid={arm_subject}");
@@ -2350,7 +2350,7 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
             .all(|cookie| !cookie.starts_with("ssp_arms="))
     );
     assert_eq!(response.json::<Value>().unwrap()["name"], "live");
-    wait_until(30, "an unavailable visitor", || {
+    wait_until(30, "an unavailable subject", || {
         test.statespace
             .lock()
             .unwrap()
@@ -2359,7 +2359,7 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
             .contains(&subject_hash("salt-1", &arm_subject))
     });
     let arm = test.statespace.lock().unwrap().totals("checkout", ARM);
-    assert!(arm.visitors.is_empty() && arm.requests == 0, "{arm:?}");
+    assert!(arm.subjects.is_empty() && arm.requests == 0, "{arm:?}");
     std::thread::sleep(Duration::from_secs(3));
     assert!(test.google.lock().unwrap().changes.is_empty());
     let state = test.statespace.lock().unwrap();
@@ -2458,7 +2458,7 @@ fn overrides_name_an_experiment_and_a_commit() {
             .any(|cookie| cookie.starts_with("ssp=; "))
     );
 
-    // Overrides are never counted. The arm served this visitor several
+    // Overrides are never counted. The arm served this subject several
     // times; after a few sends, Statespace has no count of them.
     std::thread::sleep(Duration::from_secs(3));
     let state = test.statespace.lock().unwrap();
@@ -2733,7 +2733,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
     assert_eq!(report["orchestrator"], "fly");
     assert_eq!(report["live_image"], digest('1'));
 
-    // The arms' visitors are counted with their events; live's are not.
+    // The arms' subjects are counted with their events; live's are not.
     wait_until(30, "the counts of checkout", || {
         let state = state.lock().unwrap();
         state.totals("checkout", ARM).events.contains_key("visit")
@@ -2743,7 +2743,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
         let state = state.lock().unwrap();
         let arm = state.totals("checkout", ARM);
         assert_eq!(
-            arm.visitors,
+            arm.subjects,
             HashSet::from([subject_hash("salt-1", &arm_subject)])
         );
         assert_eq!(arm.events["visit"], arm.requests);
@@ -3091,8 +3091,8 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         assert!(!aliases.contains(&json!("shop")), "{aliases:?}");
     }
 
-    // The visitors of the arms are counted, with the event in the app's
-    // response header; live's visitor is not.
+    // The subjects of the arms are counted, with the event in the app's
+    // response header; live's subject is not.
     wait_until(60, "the counts of both arms", || {
         let state = state.lock().unwrap();
         state.totals("checkout", ARM).events.contains_key("visit")
@@ -3102,7 +3102,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         let state = state.lock().unwrap();
         let arm = state.totals("checkout", ARM);
         assert_eq!(
-            arm.visitors,
+            arm.subjects,
             HashSet::from([subject_hash("salt-1", &arm_subject)])
         );
         assert_eq!(arm.events["visit"], arm.requests);
@@ -4289,8 +4289,8 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         format!("statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")
     );
     assert!(live["labels"]["SSP_ARM"].is_null());
-    // The visitors of both arms are counted, with the event of the app's
-    // response header; live's visitor is not.
+    // The subjects of both arms are counted, with the event of the app's
+    // response header; live's subject is not.
     let counted_both_arms = |state: &Arc<Mutex<Statespace>>| {
         let state = state.lock().unwrap();
         [LIVE, ARM].iter().all(|commit| {
@@ -4308,7 +4308,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     {
         let state = state.lock().unwrap();
         assert_eq!(
-            state.totals("checkout", ARM).visitors,
+            state.totals("checkout", ARM).subjects,
             HashSet::from([subject_hash("salt-1", &arm_subject)])
         );
         let live = subject_hash("salt-1", &live_subject);
@@ -4823,7 +4823,7 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
 }
 
 /// A proxy on Fargate runs each unit as an ECS service from a copy of live's
-/// task definition, sends to the task's address, counts the arms' visitors,
+/// task definition, sends to the task's address, counts the arms' subjects,
 /// and deletes the services and task definitions of an experiment that
 /// stops.
 #[test]
@@ -5005,7 +5005,7 @@ fn fargate_proxies_run_units_as_services() {
     assert!(body["headers"].get("ssp-arm").is_none());
 
     // The report names live's image by the digest its tasks run, and every
-    // unit ready. The arms' visitors are counted with their events.
+    // unit ready. The arms' subjects are counted with their events.
     wait_until(30, "a report with both units ready, and counts", || {
         let state = state.lock().unwrap();
         let ready = state.reports().iter().any(|report| {
@@ -5021,7 +5021,7 @@ fn fargate_proxies_run_units_as_services() {
         let state = state.lock().unwrap();
         let arm = state.totals("checkout", ARM);
         assert_eq!(
-            arm.visitors,
+            arm.subjects,
             HashSet::from([subject_hash("salt-1", &arm_subject)])
         );
         let live = subject_hash("salt-1", &live_subject);
@@ -5666,7 +5666,7 @@ fn aws_sweeper_deletes_old_test_resources() {
 /// The proxy on the CI runner orchestrates a real Fargate service: it reads
 /// live's digest, starts both arms of an experiment as ECS services, sends
 /// each arm its requests with the right headers, keeps the arms through a
-/// redeploy of live, counts the arms' visitors, and deletes them when the
+/// redeploy of live, counts the arms' subjects, and deletes them when the
 /// experiment stops. The tasks have public IP addresses, and a security
 /// group opens the app's port to the runner only.
 #[test]
@@ -6001,8 +6001,8 @@ fn aws_fargate_proxies_run_arms_as_services() {
         })
     });
 
-    // The arm's visitor is counted, with the event of the app's response
-    // header; live's visitor is not.
+    // The arm's subject is counted, with the event of the app's response
+    // header; live's subject is not.
     wait_until(180, "the counts of the arm arrive", || {
         let _ = get(&arm_subject);
         let found = state
@@ -6019,7 +6019,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
     {
         let state = state.lock().unwrap();
         assert_eq!(
-            state.totals("checkout", ARM).visitors,
+            state.totals("checkout", ARM).subjects,
             HashSet::from([subject_hash("salt-1", &arm_subject)])
         );
         let live = subject_hash("salt-1", &live_subject);
@@ -6659,7 +6659,7 @@ primary_region = "{region}"
             "a unit got live traffic"
         );
     }
-    // The arms' visitors are counted; live's are not.
+    // The arms' subjects are counted; live's are not.
     wait_until(120, "the counts of both arms arrive", || {
         let state = state.lock().unwrap();
         [LIVE, ARM].iter().all(|commit| {
@@ -7047,7 +7047,7 @@ fn check_site(
         Some("arm home\n".into())
     );
 
-    // An assigned visitor of the arm gets the arm's page and the readable
+    // An assigned subject of the arm gets the arm's page and the readable
     // ssp_arms cookie, which tags browser analytics on a static site.
     let (status, headers, body) = fetch(port, "GET", "/about", &[("cookie", &arm_cookie)]).unwrap();
     assert_eq!((status, body.as_str()), (200, "arm about\n"));
@@ -7063,9 +7063,9 @@ fn check_site(
         "{cookies:?}"
     );
 
-    // The arm's visitor and its event are counted. The visitor of video,
+    // The arm's subject and its event are counted. The subject of video,
     // whose image build a file runtime does not run, gets live and counts as
-    // unavailable. Live's visitor and the override are never counted.
+    // unavailable. Live's subject and the override are never counted.
     let hash = |subject: &str| subject_hash("salt-1", subject);
     wait_until(wait, "the counts of the arm", || {
         let state = state.lock().unwrap();
@@ -7073,10 +7073,10 @@ fn check_site(
     });
     let state_now = state.lock().unwrap();
     let hero = state_now.totals("hero", ARM);
-    assert_eq!(hero.visitors, HashSet::from([hash(&arm)]));
+    assert_eq!(hero.subjects, HashSet::from([hash(&arm)]));
     assert!(hero.events["about"] >= 1, "{hero:?}");
     assert_eq!(
-        state_now.totals("hero", LIVE).visitors,
+        state_now.totals("hero", LIVE).subjects,
         HashSet::from([hash(&live_arm)])
     );
     assert!(

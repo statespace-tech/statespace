@@ -26,7 +26,7 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png">
-  <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png" alt="Visitors go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
+  <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png" alt="Requests go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
 </picture>
 
 <p align="center">
@@ -69,8 +69,12 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 
    ```toml
    [[event]]
-   name  = "purchase"
-   match = 'request.method == "POST" && request.path == "/checkout"'
+   name  = "signup"
+   match = 'request.method == "POST" && request.path == "/signup"'
+
+   [[event]]
+   name  = "search"
+   match = 'request.path == "/search"'
 
    [experiment.checkout]
    subject     = 'request.headers["x-user-id"]'
@@ -101,15 +105,15 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 
    ```text
    $ ssp experiment show checkout
-   Evidence of version 1 (since 2026-11-04 09:12 UTC):
-                          c0ffee1        a1b2c3d
-     visitors             1,204          1,188
-     requests/visitor     4.1            4.3
-     error rate %         0.2 (±0.1)     0.3 (±0.1)
-     latency p50 ms       41             44
-     latency p90 ms       120            131
-     purchase %           2.1 (±0.8)     2.6 (±0.9)
-     split                ok
+   Results of version 1 · since 2026-11-04 09:12 UTC
+                        c0ffee1          a1b2c3d
+     subjects           1,204            1,188
+     p50 latency (ms)   41               44
+     p90 latency (ms)   120              131
+     error rate (%)     0.20 (±0.10)     0.30 (±0.12)
+     signup (%)         2.08 (±0.81)     2.61 (±0.91)
+     search (%)         28.04 (±2.54)    27.53 (±2.54)
+     split              ok
    ```
 
 ## Community

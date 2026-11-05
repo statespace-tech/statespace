@@ -3,7 +3,7 @@
 //! to one arm of a running experiment. Only the instance that holds the
 //! app's lease orchestrates: it starts and stops the units of starting and
 //! running experiments. Every instance counts the requests that arms serve
-//! to assigned visitors, and sends the counts to Statespace.
+//! to assigned subjects, and sends the counts to Statespace.
 //!
 //! The proxy starts in two phases. First it builds the orchestrator from
 //! the flags alone, listens, and sends every request to live. Then, in the
@@ -466,7 +466,7 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>
         let now_dropped = session.counter.dropped();
         if now_dropped > dropped {
             eprintln!(
-                "[ssp] dropped the counts of {} visitors because memory was full",
+                "[ssp] dropped the counts of {} subjects because memory was full",
                 now_dropped - dropped
             );
             dropped = now_dropped;

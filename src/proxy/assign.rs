@@ -13,7 +13,7 @@ use super::{
     orchestrator::{Build, Unit, UnitKey},
 };
 
-/// The visitor cookie the proxy sets with the default subject.
+/// The subject cookie the proxy sets with the default subject.
 pub const SUBJECT_COOKIE: &str = "ssp_sid";
 /// The default subject rule.
 pub const DEFAULT_SUBJECT: &str = "request.cookies.ssp_sid";
@@ -28,7 +28,7 @@ pub struct Experiment {
     pub version: i64,
     pub state: State,
     subject: Option<Program>,
-    /// Whether the subject is the visitor cookie, which the proxy then sets.
+    /// Whether the subject is the subject cookie, which the proxy then sets.
     pub default_subject: bool,
     eligibility: Option<Program>,
     /// The events of its units: the shared events and its own.
@@ -121,7 +121,7 @@ pub struct Routing {
     /// The `starting` and `running` experiments, in the order of
     /// `statespace.toml`. Without a live commit, there are none.
     pub experiments: Vec<Experiment>,
-    /// Whether a running experiment uses the visitor cookie, which the proxy
+    /// Whether a running experiment uses the subject cookie, which the proxy
     /// then sets.
     pub default_subject: bool,
 }
@@ -518,7 +518,7 @@ mod tests {
     const LANDING: &str = "b2c3d4e000000000000000000000000000000000";
 
     /// `checkout` splits users by `x-user-id`: LIVE in `live_arm`, ARM in
-    /// `arm`. `us-landing` uses the visitor cookie, eligible in the US only.
+    /// `arm`. `us-landing` uses the subject cookie, eligible in the US only.
     fn config(live_arm: [f64; 2], arm: [f64; 2], landing: [f64; 2]) -> RuntimeConfig {
         serde_json::from_value(json!({
             "app": "shop-prod",
@@ -551,15 +551,15 @@ mod tests {
         routing
     }
 
-    fn request(user: Option<&str>, visitor: Option<&str>, country: &str) -> Value {
+    fn request(user: Option<&str>, subject: Option<&str>, country: &str) -> Value {
         let mut headers = http::HeaderMap::new();
         if let Some(user) = user {
             headers.insert("x-user-id", user.parse().unwrap());
         }
         headers.insert("cf-ipcountry", country.parse().unwrap());
         let mut cookies = Map::new();
-        if let Some(visitor) = visitor {
-            cookies.insert(SUBJECT_COOKIE.into(), json!(visitor));
+        if let Some(subject) = subject {
+            cookies.insert(SUBJECT_COOKIE.into(), json!(subject));
         }
         request_value("GET", None, "/", Some("a=1&b=x%20y"), &headers, &cookies)
     }
@@ -612,9 +612,9 @@ mod tests {
         assert_eq!(both.serve.unwrap().experiment, "checkout");
         assert_eq!(both.run.unwrap().subject, "u_1");
         // Without the user ID, checkout skips the request; us-landing takes it.
-        let visitor = decide(&routing, &request(None, Some("sid_1"), "US"), |_| true);
-        assert_eq!(visitor.serve, Some(key("us-landing", LANDING)));
-        assert_eq!(visitor.run.unwrap().subject, "sid_1");
+        let subject = decide(&routing, &request(None, Some("sid_1"), "US"), |_| true);
+        assert_eq!(subject.serve, Some(key("us-landing", LANDING)));
+        assert_eq!(subject.run.unwrap().subject, "sid_1");
         // Outside the US, us-landing skips it too: live, without a run.
         let elsewhere = decide(&routing, &request(None, Some("sid_1"), "FR"), |_| true);
         assert_eq!(elsewhere, Decision::live());
@@ -668,7 +668,7 @@ mod tests {
         );
         let decision = decide(&routing, &request(Some("u_1"), None, "US"), |_| true);
         assert_eq!(decision.serve, None);
-        // Only us-landing runs, and it uses the visitor cookie.
+        // Only us-landing runs, and it uses the subject cookie.
         assert!(routing.default_subject);
         config.experiments.remove(1);
         assert!(!super::tests::routing(&config).default_subject);

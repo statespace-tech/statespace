@@ -1,5 +1,5 @@
 //! The proxy's connection to Statespace: the runtime configuration, the
-//! report that holds the lease, and the counts of arm visitors.
+//! report that holds the lease, and the counts of arm subjects.
 
 use std::time::Duration;
 
