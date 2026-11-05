@@ -4,7 +4,6 @@
 use std::collections::BTreeMap;
 
 use cel_interpreter::{Context, Program, Value as Cel};
-use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -92,7 +91,7 @@ impl Experiment {
 
     /// The subject its rule yields, or `None` when it yields nothing usable.
     pub fn subject(&self, request: &Value) -> Option<String> {
-        let subject = match evaluate(self.subject.as_ref()?, "request", request).ok()? {
+        let subject = match evaluate(self.subject.as_ref()?, &[("request", request)]).ok()? {
             Cel::String(value) => value.to_string(),
             Cel::Int(value) => value.to_string(),
             Cel::UInt(value) => value.to_string(),
@@ -105,7 +104,7 @@ impl Experiment {
         match &self.eligibility {
             None => Ok(true),
             Some(program) => {
-                evaluate(program, "request", request).map(|value| value == Cel::Bool(true))
+                evaluate(program, &[("request", request)]).map(|value| value == Cel::Bool(true))
             }
         }
     }
@@ -119,7 +118,6 @@ impl Experiment {
 pub struct Routing {
     pub salt: String,
     pub settings_hash: Option<String>,
-    pub redact: Vec<Regex>,
     /// The `starting` and `running` experiments, in the order of
     /// `statespace.toml`. Without a live commit, there are none.
     pub experiments: Vec<Experiment>,
@@ -130,20 +128,10 @@ pub struct Routing {
 
 impl Routing {
     /// Compile a configuration. An experiment whose subject or eligibility
-    /// rule does not compile takes no request. Event rules and redact
-    /// patterns that do not compile are left out. Each problem is returned
-    /// as a warning.
+    /// rule does not compile takes no request. Event rules that do not
+    /// compile are left out. Each problem is returned as a warning.
     pub fn compile(config: &RuntimeConfig) -> (Self, Vec<String>) {
         let mut warnings = Vec::new();
-        let mut redact = Vec::new();
-        for pattern in &config.settings.redact {
-            match Regex::new(pattern) {
-                Ok(pattern) => redact.push(pattern),
-                Err(error) => {
-                    warnings.push(format!("redact {pattern:?} does not compile: {error}"))
-                }
-            }
-        }
         let experiments: Vec<Experiment> = match &config.live {
             // Without a live commit, nothing runs beside live.
             None => Vec::new(),
@@ -160,7 +148,6 @@ impl Routing {
             Self {
                 salt: config.salt.clone(),
                 settings_hash: config.settings_hash.clone(),
-                redact,
                 experiments,
                 default_subject,
             },
@@ -227,15 +214,6 @@ impl Routing {
         self.experiment(&key.experiment)
             .map(|experiment| &experiment.events)
     }
-
-    /// The subject for the `x-statespace-subject` header of a request that
-    /// no experiment took: the first subject a running experiment yields.
-    pub fn any_subject(&self, request: &Value) -> Option<String> {
-        self.experiments
-            .iter()
-            .filter(|experiment| experiment.routes())
-            .find_map(|experiment| experiment.subject(request))
-    }
 }
 
 /// The share of the hash space that `ranges` hold.
@@ -255,12 +233,14 @@ pub fn compile(expression: &str) -> anyhow::Result<Program> {
     }
 }
 
-/// Run a program with one variable.
-pub fn evaluate(program: &Program, name: &str, value: &Value) -> anyhow::Result<Cel> {
+/// Run a program with its variables, such as `request`.
+pub fn evaluate(program: &Program, variables: &[(&str, &Value)]) -> anyhow::Result<Cel> {
     let mut context = Context::default();
-    context
-        .add_variable(name, value)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    for (name, value) in variables {
+        context
+            .add_variable(*name, *value)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+    }
     let program = std::panic::AssertUnwindSafe(program);
     let context = std::panic::AssertUnwindSafe(&context);
     match std::panic::catch_unwind(|| program.execute(&context)) {
@@ -277,27 +257,12 @@ pub enum Reason {
     ArmUnavailable,
     /// The request named its arm with `?ssp=` or the `ssp` header.
     Override,
-    /// The eligibility rule failed, so the experiment skipped the request.
-    EligibilityError,
 }
 
-impl Reason {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Assigned => "assigned",
-            Self::ArmUnavailable => "arm-unavailable",
-            Self::Override => "override",
-            Self::EligibilityError => "eligibility-error",
-        }
-    }
-}
-
-/// A run to record: the experiment, the arm whose range holds the subject
-/// (none for an eligibility error), and why.
+/// The arm of the experiment that took a request, the subject, and why.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Run {
-    pub experiment: String,
-    pub arm: Option<String>,
+    pub key: UnitKey,
     pub subject: String,
     pub reason: Reason,
 }
@@ -307,19 +272,15 @@ pub struct Run {
 pub struct Decision {
     /// The unit that serves the request, or `None` for live.
     pub serve: Option<UnitKey>,
-    /// The subject for the `x-statespace-subject` header and the rows.
-    pub subject: Option<String>,
-    /// The runs to record: eligibility errors, then the run of the
-    /// experiment that took the request.
-    pub runs: Vec<Run>,
+    /// The run of the experiment that took the request, if one did.
+    pub run: Option<Run>,
 }
 
 impl Decision {
-    pub fn live(subject: Option<String>) -> Self {
+    pub fn live() -> Self {
         Self {
             serve: None,
-            subject,
-            runs: Vec::new(),
+            run: None,
         }
     }
 }
@@ -331,7 +292,6 @@ impl Decision {
 /// serves it. `ready` says whether a unit can take traffic; a subject whose
 /// unit cannot gets live.
 pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&UnitKey) -> bool) -> Decision {
-    let mut runs = Vec::new();
     for experiment in routing.experiments.iter().filter(|e| e.routes()) {
         let Some(subject) = experiment.subject(request) else {
             continue;
@@ -344,18 +304,9 @@ pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&UnitKey) -> bo
         else {
             continue;
         };
-        match experiment.eligible(request) {
-            Ok(true) => {}
-            Ok(false) => continue,
-            Err(_) => {
-                runs.push(Run {
-                    experiment: experiment.name.clone(),
-                    arm: None,
-                    subject,
-                    reason: Reason::EligibilityError,
-                });
-                continue;
-            }
+        // An eligibility rule that fails is not eligible.
+        if !matches!(experiment.eligible(request), Ok(true)) {
+            continue;
         }
         let key = UnitKey {
             experiment: experiment.name.clone(),
@@ -366,23 +317,16 @@ pub fn decide(routing: &Routing, request: &Value, ready: impl Fn(&UnitKey) -> bo
         } else {
             Reason::ArmUnavailable
         };
-        runs.push(Run {
-            experiment: experiment.name.clone(),
-            arm: Some(arm.commit.clone()),
-            subject: subject.clone(),
-            reason,
-        });
         return Decision {
-            serve: (reason == Reason::Assigned).then_some(key),
-            subject: Some(subject),
-            runs,
+            serve: (reason == Reason::Assigned).then(|| key.clone()),
+            run: Some(Run {
+                key,
+                subject,
+                reason,
+            }),
         };
     }
-    Decision {
-        serve: None,
-        subject: routing.any_subject(request),
-        runs,
-    }
+    Decision::live()
 }
 
 /// Why the arm a request names cannot serve it.
@@ -427,19 +371,13 @@ pub fn override_arm(
     if !ready(&key) {
         return Err(Refused::NotReady);
     }
-    let subject = experiment.subject(request);
     Ok(Decision {
-        runs: subject
-            .iter()
-            .map(|subject| Run {
-                experiment: experiment.name.clone(),
-                arm: Some(arm.commit.clone()),
-                subject: subject.clone(),
-                reason: Reason::Override,
-            })
-            .collect(),
+        run: experiment.subject(request).map(|subject| Run {
+            key: key.clone(),
+            subject,
+            reason: Reason::Override,
+        }),
         serve: Some(key),
-        subject,
     })
 }
 
@@ -478,10 +416,13 @@ fn contains(ranges: &[[f64; 2]], point: f64) -> bool {
         .any(|[start, end]| *start <= point && point < *end)
 }
 
-/// The request as CEL rules see it: `method`, `path`, `query`, `headers`,
-/// and `cookies`.
+/// The request as CEL rules see it: `method`, `host`, `path`, `query`,
+/// `headers`, and `cookies`. `host` is the host of the request's URI, as
+/// HTTP/2 sends it, else of its `Host` header; without the port, in
+/// lowercase.
 pub fn request_value(
     method: &str,
+    host: Option<&str>,
     path: &str,
     query: Option<&str>,
     headers: &http::HeaderMap,
@@ -509,13 +450,27 @@ pub fn request_value(
             (decode(key), json!(decode(value)))
         })
         .collect();
-    json!({
+    let host = host
+        .map(str::to_owned)
+        .or_else(|| {
+            let header = header_values.get("host")?;
+            let authority: http::uri::Authority = header.parse().ok()?;
+            Some(authority.host().to_owned())
+        })
+        .map(|host| host.to_ascii_lowercase());
+    let mut value = json!({
         "method": method,
         "path": path,
         "query": query,
         "headers": header_values,
         "cookies": cookies,
-    })
+    });
+    // A request without a host has no `host`, so a rule over it does not
+    // match.
+    if let Some(host) = host {
+        value["host"] = json!(host);
+    }
+    value
 }
 
 /// The cookies of a request.
@@ -569,7 +524,6 @@ mod tests {
             "app": "shop-prod",
             "salt": "app-salt",
             "settings_hash": "h1",
-            "settings": {"redact": []},
             "live": {"commit": LIVE, "image": "shop@sha256:1"},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
@@ -607,7 +561,7 @@ mod tests {
         if let Some(visitor) = visitor {
             cookies.insert(SUBJECT_COOKIE.into(), json!(visitor));
         }
-        request_value("GET", "/", Some("a=1&b=x%20y"), &headers, &cookies)
+        request_value("GET", None, "/", Some("a=1&b=x%20y"), &headers, &cookies)
     }
 
     fn key(experiment: &str, commit: &str) -> UnitKey {
@@ -634,18 +588,15 @@ mod tests {
                 decision,
                 decide(&routing, &request(Some(&user), None, "US"), |_| true)
             );
-            let [run] = decision.runs.as_slice() else {
-                panic!("{decision:?}")
-            };
+            let run = decision.run.clone().expect("a run");
             assert_eq!(run.reason, Reason::Assigned);
-            assert_eq!(
-                decision.serve,
-                Some(key("checkout", run.arm.as_ref().unwrap()))
-            );
+            assert_eq!(run.subject, user);
+            assert_eq!(decision.serve, Some(run.key.clone()));
+            assert_eq!(run.key.experiment, "checkout");
             // The ranges decide the arm.
             let point = bucket("app-salt", &user);
-            assert_eq!(run.arm.as_deref() == Some(ARM), point >= 0.5);
-            *served.entry(run.arm.clone().unwrap()).or_insert(0) += 1;
+            assert_eq!(run.key.commit == ARM, point >= 0.5);
+            *served.entry(run.key.commit).or_insert(0) += 1;
         }
         assert!((150..250).contains(&served[LIVE]), "{served:?}");
         assert!((150..250).contains(&served[ARM]));
@@ -659,14 +610,14 @@ mod tests {
             true
         });
         assert_eq!(both.serve.unwrap().experiment, "checkout");
-        assert_eq!(both.subject.as_deref(), Some("u_1"));
+        assert_eq!(both.run.unwrap().subject, "u_1");
         // Without the user ID, checkout skips the request; us-landing takes it.
         let visitor = decide(&routing, &request(None, Some("sid_1"), "US"), |_| true);
         assert_eq!(visitor.serve, Some(key("us-landing", LANDING)));
-        assert_eq!(visitor.subject.as_deref(), Some("sid_1"));
+        assert_eq!(visitor.run.unwrap().subject, "sid_1");
         // Outside the US, us-landing skips it too: live, without a run.
         let elsewhere = decide(&routing, &request(None, Some("sid_1"), "FR"), |_| true);
-        assert_eq!(elsewhere, Decision::live(Some("sid_1".into())));
+        assert_eq!(elsewhere, Decision::live());
         assert!(routing.default_subject);
     }
 
@@ -674,10 +625,10 @@ mod tests {
     fn subjects_outside_every_range_get_live_without_a_run() {
         let routing = routing(&config([0.0, 0.0], [0.0, 0.0], [0.0, 0.0]));
         let decision = decide(&routing, &request(Some("u_1"), None, "US"), |_| true);
-        assert_eq!(decision, Decision::live(Some("u_1".into())));
+        assert_eq!(decision, Decision::live());
         assert_eq!(
             decide(&routing, &request(None, None, "US"), |_| true),
-            Decision::live(None)
+            Decision::live()
         );
     }
 
@@ -686,9 +637,9 @@ mod tests {
         let routing = routing(&config([0.0, 0.0], [0.0, 1.0], [0.0, 0.0]));
         let down = decide(&routing, &request(Some("u_1"), None, "US"), |_| false);
         assert_eq!(down.serve, None);
-        assert_eq!(down.runs[0].reason, Reason::ArmUnavailable);
-        assert_eq!(down.runs[0].arm.as_deref(), Some(ARM));
-        assert_eq!(Reason::ArmUnavailable.as_str(), "arm-unavailable");
+        let run = down.run.unwrap();
+        assert_eq!(run.reason, Reason::ArmUnavailable);
+        assert_eq!(run.key, key("checkout", ARM));
 
         let mut broken = config([0.0, 0.0], [0.0, 1.0], [0.0, 1.0]);
         broken.experiments[0].eligibility = Some("request.headers[\"x-user-id\"] + 1 == 2".into());
@@ -696,11 +647,9 @@ mod tests {
         let error = decide(&routing, &request(Some("u_1"), Some("sid_1"), "US"), |_| {
             true
         });
-        // checkout counts an eligibility error, and us-landing takes the request.
-        assert_eq!(error.runs.len(), 2);
-        assert_eq!(error.runs[0].reason, Reason::EligibilityError);
-        assert_eq!(error.runs[0].arm, None);
+        // checkout skips the request, and us-landing takes it.
         assert_eq!(error.serve, Some(key("us-landing", LANDING)));
+        assert_eq!(error.run.unwrap().reason, Reason::Assigned);
     }
 
     #[test]
@@ -747,7 +696,7 @@ mod tests {
         let routing = routing(&config);
         assert!(routing.units().is_empty());
         let decision = decide(&routing, &request(Some("u_1"), None, "US"), |_| true);
-        assert_eq!(decision, Decision::live(None));
+        assert_eq!(decision, Decision::live());
     }
 
     #[test]
@@ -757,8 +706,9 @@ mod tests {
         let request = request(Some("u_1"), None, "FR");
         let decision = override_arm(&routing_one, &request, "checkout:A1B2C3D", |_| true).unwrap();
         assert_eq!(decision.serve, Some(key("checkout", ARM)));
-        assert_eq!(decision.runs[0].reason, Reason::Override);
-        assert_eq!(decision.runs[0].subject, "u_1");
+        let run = decision.run.unwrap();
+        assert_eq!(run.reason, Reason::Override);
+        assert_eq!(run.subject, "u_1");
         for value in [
             "a1b2c3d",
             "checkout:a1b2c3",
@@ -797,13 +747,13 @@ mod tests {
             override_arm(&routing(&config), &request, "checkout:a1b2c3d4", |_| true),
             Err(Refused::NotRunning)
         );
-        // Without a subject, the arm still serves, and no run is recorded.
-        let anonymous = request_value("GET", "/", None, &http::HeaderMap::new(), &Map::new());
+        // Without a subject, the arm still serves, without a run.
+        let anonymous = request_value("GET", None, "/", None, &http::HeaderMap::new(), &Map::new());
         let decision = override_arm(&routing_one, &anonymous, &format!("checkout:{ARM}"), |_| {
             true
         })
         .unwrap();
-        assert!(decision.runs.is_empty());
+        assert!(decision.run.is_none());
     }
 
     #[test]
@@ -827,6 +777,20 @@ mod tests {
         assert_eq!(value["query"]["b"], "x y");
         assert_eq!(decode("%E2%9C%93+%zz%"), "\u{2713} %zz%");
         assert_eq!(value["headers"]["x-user-id"], "u_1");
+        assert!(value.get("host").is_none());
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::HOST, "Shop.Acme.com:8443".parse().unwrap());
+        let value = request_value("GET", None, "/", None, &headers, &Map::new());
+        assert_eq!(value["host"], "shop.acme.com");
+        let value = request_value(
+            "GET",
+            Some("api.acme.com"),
+            "/",
+            None,
+            &headers,
+            &Map::new(),
+        );
+        assert_eq!(value["host"], "api.acme.com");
         let mut headers = http::HeaderMap::new();
         headers.insert(http::header::COOKIE, "a=1; ssp_sid=abc".parse().unwrap());
         assert_eq!(cookies(&headers)[SUBJECT_COOKIE], "abc");

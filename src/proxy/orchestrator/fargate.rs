@@ -9,8 +9,10 @@
 //! `statespace.com/commit`. The desired count follows the share.
 //!
 //! The proxy sends to the IP address of a task of the unit (its private
-//! address, or its public one with `--unit-ip public`), and reads output
-//! from CloudWatch Logs. Credentials come from the AWS default chain.
+//! address, or its public one with `--unit-ip public`). Readiness and the
+//! reason a unit is not ready come from ECS: the tasks' health, and the stop
+//! reason of the last task that stopped. Credentials come from the AWS
+//! default chain.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -23,12 +25,10 @@ use std::{
 
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
 
 use super::{
-    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
+    Address, App, Build, Live, Orchestrator, RESOURCE_ATTRIBUTES, Running, Unit, UnitKey,
     aws::{Aws, Endpoints, Service, xml_value},
-    channel,
     kubernetes::replicas,
 };
 use crate::{
@@ -61,7 +61,7 @@ const OUTPUT_ONLY: [&str; 9] = [
 /// not ready.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The ECS calls that the orchestrator and the output readers share.
+/// The ECS calls of the orchestrator.
 #[derive(Clone)]
 struct Ecs {
     aws: Arc<Aws>,
@@ -207,7 +207,6 @@ impl Fargate {
             Endpoints {
                 ecs: arguments.ecs_api.clone(),
                 ec2: arguments.ec2_api.clone(),
-                logs: arguments.logs_api.clone(),
                 s3: None,
             },
         )
@@ -568,137 +567,6 @@ impl Orchestrator for Fargate {
         }
         Ok(running)
     }
-
-    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
-        let (sender, stream) = channel();
-        let reader = Reader {
-            ecs: self.ecs.clone(),
-            name: self.unit_name(&unit.key()),
-            container: self.container.clone(),
-        };
-        tokio::spawn(reader.read(sender));
-        stream
-    }
-}
-
-/// Reads a unit's lines from CloudWatch Logs, where the `awslogs` driver of
-/// live's task definition sends them.
-struct Reader {
-    ecs: Ecs,
-    name: String,
-    container: Option<String>,
-}
-
-impl Reader {
-    async fn read(self, sender: mpsc::Sender<Line>) {
-        let mut since = chrono::Utc::now().timestamp_millis();
-        let mut seen: HashSet<String> = HashSet::new();
-        let mut failed: Option<String> = None;
-        while !sender.is_closed() {
-            match self.poll(&sender, &mut since, &mut seen).await {
-                Ok(()) => failed = None,
-                Err(error) => {
-                    let message = format!("{error:#}");
-                    if failed.as_ref() != Some(&message) {
-                        eprintln!(
-                            "[ssp] could not read the output of {}: {message}",
-                            self.name
-                        );
-                        failed = Some(message);
-                    }
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-    }
-
-    async fn poll(
-        &self,
-        sender: &mpsc::Sender<Line>,
-        since: &mut i64,
-        seen: &mut HashSet<String>,
-    ) -> anyhow::Result<()> {
-        let Some(service) = self.ecs.service(&self.name).await? else {
-            return Ok(());
-        };
-        let Some(arn) = service["taskDefinition"].as_str() else {
-            return Ok(());
-        };
-        let definition = self.ecs.task_definition(arn).await?;
-        let containers = &definition["taskDefinition"]["containerDefinitions"];
-        let container = &containers[app_container(containers, self.container.as_deref())?];
-        let (group, prefix) = log_target(container)?;
-        let container_name = container["name"].as_str().unwrap_or_default();
-        // Tasks that stopped are read too, for the lines before a crash.
-        let mut streams = Vec::new();
-        for desired in ["RUNNING", "STOPPED"] {
-            for task in self.ecs.tasks(&self.name, desired).await? {
-                if let Some(id) = task["taskArn"]
-                    .as_str()
-                    .and_then(|arn| arn.rsplit('/').next())
-                {
-                    streams.push(format!("{prefix}/{container_name}/{id}"));
-                }
-            }
-        }
-        streams.sort();
-        streams.dedup();
-        // Lines can arrive late: read the last 30 seconds again.
-        let start = *since - 30_000;
-        for chunk in streams.chunks(100) {
-            let mut token: Option<String> = None;
-            loop {
-                let mut body = json!({
-                    "logGroupName": group, "logStreamNames": chunk, "startTime": start,
-                });
-                if let Some(token) = &token {
-                    body["nextToken"] = json!(token);
-                }
-                let answer = match self
-                    .ecs
-                    .aws
-                    .json(Service::Logs, "FilterLogEvents", &body)
-                    .await
-                {
-                    // A task that has printed nothing has no stream yet.
-                    Err(error) if format!("{error:#}").contains("ResourceNotFoundException") => {
-                        break;
-                    }
-                    answer => answer?,
-                };
-                for event in answer["events"].as_array().into_iter().flatten() {
-                    let id = event["eventId"].as_str().unwrap_or_default().to_owned();
-                    if !seen.insert(id) {
-                        continue;
-                    }
-                    let time = event["timestamp"].as_i64().unwrap_or(0);
-                    *since = (*since).max(time);
-                    let text = event["message"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .trim_end_matches(['\r', '\n'])
-                        .to_owned();
-                    // The awslogs driver merges standard output and standard
-                    // error, so every line is recorded as stdout.
-                    let line = Line {
-                        stream: Stream::Stdout,
-                        text,
-                    };
-                    if sender.send(line).await.is_err() {
-                        return Ok(());
-                    }
-                }
-                token = answer["nextToken"].as_str().map(str::to_owned);
-                if token.is_none() {
-                    break;
-                }
-            }
-        }
-        if seen.len() > 50_000 {
-            seen.clear();
-        }
-        Ok(())
-    }
 }
 
 /// `<service>-ssp-<experiment>-<commit 12>`, cut with a short hash past 255
@@ -776,8 +644,9 @@ fn unit_tags(live: &Value, app: &str, unit: &Unit) -> Value {
 }
 
 /// The registration of a unit's task definition: live's, with the unit's
-/// family, image, and tags. Every other setting stays. No `STATESPACE_*`
-/// variable or secret reaches a unit.
+/// family, image, and tags, and the variables that label the arm in the
+/// container of the unit's image. Every other setting stays. No
+/// `STATESPACE_*` variable or secret reaches a unit.
 pub fn unit_task_definition(
     live: &Value,
     index: usize,
@@ -797,9 +666,11 @@ pub fn unit_task_definition(
     let containers = definition["containerDefinitions"]
         .as_array_mut()
         .context("the task definition has no container")?;
-    containers
+    let container = containers
         .get_mut(index)
-        .context("the task definition has no such container")?["image"] = json!(unit.image());
+        .context("the task definition has no such container")?;
+    container["image"] = json!(unit.image());
+    label_environment(container, &unit.key());
     for container in containers {
         for list in ["environment", "secrets"] {
             if let Some(entries) = container[list].as_array_mut() {
@@ -813,6 +684,36 @@ pub fn unit_task_definition(
         }
     }
     Ok(definition)
+}
+
+/// Give a container the variables that label the arm. Live's literal
+/// `OTEL_RESOURCE_ATTRIBUTES` keeps its other attributes; one from a secret
+/// is replaced.
+fn label_environment(container: &mut Value, key: &UnitKey) {
+    let named = |entry: &Value, name: &str| entry["name"] == name;
+    let live_attributes = container["environment"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| named(entry, RESOURCE_ATTRIBUTES))
+        .and_then(|entry| entry["value"].as_str())
+        .map(str::to_owned);
+    let labels = key.environment(live_attributes.as_deref());
+    for list in ["environment", "secrets"] {
+        if let Some(entries) = container[list].as_array_mut() {
+            entries.retain(|entry| !labels.iter().any(|(name, _)| named(entry, name)));
+        }
+    }
+    let mut environment = container["environment"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    environment.extend(
+        labels
+            .into_iter()
+            .map(|(name, value)| json!({"name": name, "value": value})),
+    );
+    container["environment"] = json!(environment);
 }
 
 /// The creation of a unit's service: live's network, launch, placement, and
@@ -964,25 +865,6 @@ fn family_of(arn: &str) -> Option<&str> {
     Some(rest.rsplit_once(':').map_or(rest, |(family, _)| family))
 }
 
-/// The log group and stream prefix of a container that logs with `awslogs`.
-fn log_target(container: &Value) -> anyhow::Result<(String, String)> {
-    let configuration = &container["logConfiguration"];
-    if configuration["logDriver"] != "awslogs" {
-        bail!(
-            "the container logs with {}, not awslogs; its output is not recorded",
-            configuration["logDriver"].as_str().unwrap_or("no driver")
-        );
-    }
-    let options = &configuration["options"];
-    let group = options["awslogs-group"]
-        .as_str()
-        .context("the awslogs driver has no awslogs-group")?;
-    let prefix = options["awslogs-stream-prefix"]
-        .as_str()
-        .context("the awslogs driver has no awslogs-stream-prefix")?;
-    Ok((group.to_owned(), prefix.to_owned()))
-}
-
 /// Whether a TCP connection to `address` succeeds.
 async fn connects(address: &str) -> bool {
     let host = address.trim_start_matches("http://");
@@ -1097,8 +979,16 @@ mod tests {
         assert_eq!(containers[0]["image"], "otel/collector");
         assert_eq!(
             containers[1]["environment"],
-            json!([{"name": "MODE", "value": "prod"}])
+            json!([
+                {"name": "MODE", "value": "prod"},
+                {"name": "SSP_EXPERIMENT", "value": "checkout"},
+                {"name": "SSP_ARM", "value": arm(0.05).commit},
+                {"name": "OTEL_RESOURCE_ATTRIBUTES",
+                 "value": format!("statespace.experiment=checkout,statespace.arm={0},\
+                                   service.version={0}", arm(0.05).commit)},
+            ])
         );
+        assert!(containers[0]["environment"].is_null());
         assert_eq!(containers[1]["secrets"][0]["name"], "DB");
         assert_eq!(
             containers[1]["logConfiguration"]["options"]["awslogs-group"],
@@ -1252,11 +1142,5 @@ mod tests {
             Some("Task failed to start (CannotPullContainerError: not found)")
         );
         assert_eq!(stopped_reason(&[]), None);
-        let container = &live_definition()["taskDefinition"]["containerDefinitions"][1];
-        assert_eq!(
-            log_target(container).unwrap(),
-            ("/ecs/shop".to_owned(), "ecs".to_owned())
-        );
-        assert!(log_target(&json!({"logConfiguration": {"logDriver": "awsfirelens"}})).is_err());
     }
 }

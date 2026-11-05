@@ -5,30 +5,27 @@
 //! another image. The unit's service has live's ingress and the labels
 //! `statespace-app`, `statespace-experiment`, and `statespace-commit`. Only
 //! the proxy's own service account may call it. The proxy sends to the
-//! unit's URL with a Google ID token for that URL, and reads output from
-//! Cloud Logging. Stop deletes the unit's service.
+//! unit's URL with a Google ID token for that URL. Readiness and the reason
+//! a unit is not ready come from the service's conditions. Stop deletes the
+//! unit's service.
 //!
 //! The proxy uses the Cloud Run Admin API v2 with the credentials of the
 //! metadata server (see `google`): the service account of the proxy's own
 //! service.
 
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::HashMap,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, bail};
 use http::{HeaderName, HeaderValue};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
 
 use super::{
-    Address, App, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit,
-    UnitKey, channel, google::Google,
+    Address, App, Build, Image, Live, Orchestrator, RESOURCE_ATTRIBUTES, Running, Unit, UnitKey,
+    google::Google,
 };
 use crate::{cli::CloudRunArgs, image};
 
@@ -51,7 +48,6 @@ const INVOKER_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct CloudRun {
     client: reqwest::Client,
     run_api: String,
-    logging_api: String,
     metadata: String,
     project: String,
     region: String,
@@ -65,14 +61,7 @@ pub struct CloudRun {
     account: tokio::sync::OnceCell<String>,
     /// ID tokens, by audience.
     tokens: Mutex<HashMap<String, (String, Instant)>>,
-    /// Where the lines of each unit go, by the name of its service.
-    listeners: Listeners,
-    /// Whether the reader of the units' lines runs.
-    reading: AtomicBool,
 }
-
-/// Where the lines of each unit go, by the name of the unit's service.
-type Listeners = Arc<Mutex<HashMap<String, mpsc::Sender<Line>>>>;
 
 impl CloudRun {
     /// Find live's service from the flags. The proxy reaches live with this
@@ -91,7 +80,6 @@ impl CloudRun {
                 .timeout(Duration::from_secs(30))
                 .build()?,
             run_api: arguments.run_api.trim_end_matches('/').to_owned(),
-            logging_api: arguments.logging_api.trim_end_matches('/').to_owned(),
             metadata,
             project: String::new(),
             region: arguments.region.clone(),
@@ -101,8 +89,6 @@ impl CloudRun {
             google,
             account: tokio::sync::OnceCell::new(),
             tokens: Mutex::default(),
-            listeners: Listeners::default(),
-            reading: AtomicBool::new(false),
         };
         cloudrun.project = match arguments.project {
             Some(project) => project,
@@ -426,27 +412,6 @@ impl Orchestrator for CloudRun {
         Ok(running)
     }
 
-    /// The lines of a unit. One reader reads the lines of every unit with
-    /// one query per poll, and gives each unit its own.
-    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
-        let (sender, stream) = channel();
-        self.listeners
-            .lock()
-            .expect("never poisoned")
-            .insert(unit_name(&self.service, &unit.key()), sender);
-        if !self.reading.swap(true, Ordering::SeqCst) {
-            let reader = Reader {
-                client: self.client.clone(),
-                logging_api: self.logging_api.clone(),
-                project: self.project.clone(),
-                google: self.google.clone(),
-                listeners: self.listeners.clone(),
-            };
-            tokio::spawn(reader.run());
-        }
-        stream
-    }
-
     /// An ID token for the service at `address`: live's URL, or a unit's.
     async fn credential(&self, address: &str) -> Option<(HeaderName, HeaderValue)> {
         match self.id_token(address).await {
@@ -460,206 +425,6 @@ impl Orchestrator for CloudRun {
             }
         }
     }
-}
-
-/// How often the reader asks Cloud Logging for new lines.
-const POLL: Duration = Duration::from_secs(5);
-/// The longest wait after Cloud Logging asks the reader to slow down.
-const MOST_BACK_OFF: Duration = Duration::from_secs(300);
-
-/// Why a poll of Cloud Logging read nothing.
-enum PollError {
-    /// Cloud Logging answered 429. It may say how long to wait.
-    Throttled(Option<Duration>),
-    Failed(anyhow::Error),
-}
-
-impl From<anyhow::Error> for PollError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Failed(error)
-    }
-}
-
-impl From<reqwest::Error> for PollError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Failed(error.into())
-    }
-}
-
-/// Where the reader is in the log: the time of the newest line it gave,
-/// and the lines at or after that time that it gave already.
-struct Cursor {
-    since: String,
-    seen: HashSet<String>,
-}
-
-impl Cursor {
-    fn new() -> Self {
-        Self {
-            since: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
-            seen: HashSet::new(),
-        }
-    }
-
-    /// Whether `entry` is new. Each line is given once, also when a poll
-    /// starts again from `since` after a failure.
-    fn take(&mut self, entry: &Value) -> bool {
-        let id = entry["insertId"].as_str().unwrap_or_default();
-        let time = entry["timestamp"].as_str().unwrap_or_default();
-        if !self.seen.insert(format!("{time}/{id}")) {
-            return false;
-        }
-        if time > self.since.as_str() {
-            self.since = time.to_owned();
-        }
-        if self.seen.len() > 50_000 {
-            let cut = self.since.clone();
-            self.seen.retain(|key| key.as_str() >= cut.as_str());
-        }
-        true
-    }
-}
-
-/// Reads the lines of every unit from Cloud Logging, with one query per
-/// poll, and sends each line to its unit.
-struct Reader {
-    client: reqwest::Client,
-    logging_api: String,
-    project: String,
-    google: Arc<Google>,
-    listeners: Listeners,
-}
-
-impl Reader {
-    async fn run(self) {
-        let mut cursor = Cursor::new();
-        let mut back_off = POLL;
-        loop {
-            let listeners: HashMap<String, mpsc::Sender<Line>> = {
-                let mut listeners = self.listeners.lock().expect("never poisoned");
-                listeners.retain(|_, sender| !sender.is_closed());
-                listeners.clone()
-            };
-            let wait = if listeners.is_empty() {
-                POLL
-            } else {
-                match self.poll(&listeners, &mut cursor).await {
-                    Ok(()) => {
-                        back_off = POLL;
-                        POLL
-                    }
-                    // Wait as Cloud Logging asks, or longer each time. The
-                    // cursor stays, so the next poll loses no line.
-                    Err(PollError::Throttled(asked)) => {
-                        back_off = (back_off * 2).min(MOST_BACK_OFF);
-                        let wait = asked.unwrap_or(back_off).min(MOST_BACK_OFF);
-                        eprintln!(
-                            "[ssp] Cloud Logging asks the proxy to slow down; reading output again in {}s",
-                            wait.as_secs()
-                        );
-                        wait
-                    }
-                    Err(PollError::Failed(error)) => {
-                        eprintln!("[ssp] could not read the output of the units: {error:#}");
-                        POLL
-                    }
-                }
-            };
-            tokio::time::sleep(wait).await;
-        }
-    }
-
-    async fn poll(
-        &self,
-        listeners: &HashMap<String, mpsc::Sender<Line>>,
-        cursor: &mut Cursor,
-    ) -> Result<(), PollError> {
-        let token = self.google.token().await?;
-        let mut services: Vec<&str> = listeners.keys().map(String::as_str).collect();
-        services.sort_unstable();
-        let filter = log_filter(&self.project, &services, &cursor.since);
-        let mut page: Option<String> = None;
-        loop {
-            let mut body = json!({
-                "resourceNames": [format!("projects/{}", self.project)],
-                "filter": filter,
-                "orderBy": "timestamp asc",
-                "pageSize": 1000,
-            });
-            if let Some(page) = &page {
-                body["pageToken"] = json!(page);
-            }
-            let response = self
-                .client
-                .post(format!("{}/v2/entries:list", self.logging_api))
-                .bearer_auth(&token)
-                .json(&body)
-                .send()
-                .await?;
-            let status = response.status();
-            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                let asked = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.trim().parse::<u64>().ok())
-                    .map(Duration::from_secs);
-                return Err(PollError::Throttled(asked));
-            }
-            if !status.is_success() {
-                return Err(anyhow::anyhow!("Cloud Logging answered {status}").into());
-            }
-            let listed: Value = response.json().await?;
-            for entry in listed["entries"].as_array().into_iter().flatten() {
-                if !cursor.take(entry) {
-                    continue;
-                }
-                let service = entry["resource"]["labels"]["service_name"]
-                    .as_str()
-                    .unwrap_or_default();
-                if let (Some(sender), Some(line)) = (listeners.get(service), entry_line(entry)) {
-                    // A unit that stopped reading drops its lines.
-                    let _ = sender.send(line).await;
-                }
-            }
-            page = listed["nextPageToken"].as_str().map(str::to_owned);
-            if page.is_none() {
-                return Ok(());
-            }
-        }
-    }
-}
-
-/// The Cloud Logging filter for the standard output and error of the
-/// services `services`, from `since` on.
-fn log_filter(project: &str, services: &[&str], since: &str) -> String {
-    let log = |stream: &str| format!("projects/{project}/logs/run.googleapis.com%2F{stream}");
-    let services = services
-        .iter()
-        .map(|service| format!("resource.labels.service_name=\"{service}\""))
-        .collect::<Vec<_>>()
-        .join(" OR ");
-    format!(
-        "resource.type=\"cloud_run_revision\" AND ({services}) \
-         AND (logName=\"{}\" OR logName=\"{}\") AND timestamp>=\"{since}\"",
-        log("stdout"),
-        log("stderr"),
-    )
-}
-
-/// The line of a log entry: its text, or its JSON payload as one line.
-fn entry_line(entry: &Value) -> Option<Line> {
-    let stream = if entry["logName"].as_str()?.ends_with("%2Fstderr") {
-        Stream::Stderr
-    } else {
-        Stream::Stdout
-    };
-    let text = match (&entry["textPayload"], &entry["jsonPayload"]) {
-        (Value::String(text), _) => text.clone(),
-        (_, payload @ Value::Object(_)) => payload.to_string(),
-        _ => return None,
-    };
-    Some(Line { stream, text })
 }
 
 /// `<service>-ssp-<experiment>-<commit 12>`, cut with a short hash past 49
@@ -751,6 +516,7 @@ pub fn unit_service(live: &Value, app: &str, unit: &Unit) -> anyhow::Result<Valu
         .filter(|containers| !containers.is_empty())
         .context("the service's template has no container")?;
     containers[index]["image"] = json!(unit.image());
+    label_environment(&mut containers[index], &unit.key());
     for container in containers {
         if let Some(variables) = container["env"].as_array_mut() {
             variables.retain(|variable| {
@@ -779,6 +545,27 @@ pub fn unit_service(live: &Value, app: &str, unit: &Unit) -> anyhow::Result<Valu
         }
     }
     Ok(service)
+}
+
+/// Give the container that runs the unit's image the variables that label
+/// the arm. Live's literal `OTEL_RESOURCE_ATTRIBUTES` keeps its other
+/// attributes; a value from a secret is replaced.
+fn label_environment(container: &mut Value, key: &UnitKey) {
+    let mut variables = container["env"].as_array().cloned().unwrap_or_default();
+    let named = |variable: &Value, name: &str| variable["name"] == name;
+    let live_attributes = variables
+        .iter()
+        .find(|variable| named(variable, RESOURCE_ATTRIBUTES))
+        .and_then(|variable| variable["value"].as_str())
+        .map(str::to_owned);
+    let labels = key.environment(live_attributes.as_deref());
+    variables.retain(|variable| !labels.iter().any(|(name, _)| named(variable, name)));
+    variables.extend(
+        labels
+            .into_iter()
+            .map(|(name, value)| json!({"name": name, "value": value})),
+    );
+    container["env"] = json!(variables);
 }
 
 fn encode(value: &str) -> String {
@@ -811,6 +598,7 @@ mod tests {
                     {"name": "sidecar", "image": "otel/collector"},
                     {"name": "shop", "image": "ghcr.io/acme/shop:main", "ports": [{"containerPort": 8080}],
                      "env": [{"name": "MODE", "value": "prod"},
+                             {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": "service.name=shop,service.version=7"},
                              {"name": "STATESPACE_TOKEN", "value": "never"}],
                      "resources": {"limits": {"cpu": "1", "memory": "512Mi"}}},
                 ],
@@ -838,8 +626,16 @@ mod tests {
         assert_eq!(template["containers"][0]["image"], "otel/collector");
         assert_eq!(
             template["containers"][1]["env"],
-            json!([{"name": "MODE", "value": "prod"}])
+            json!([
+                {"name": "MODE", "value": "prod"},
+                {"name": "SSP_EXPERIMENT", "value": "checkout"},
+                {"name": "SSP_ARM", "value": arm().commit},
+                {"name": "OTEL_RESOURCE_ATTRIBUTES",
+                 "value": format!("service.name=shop,statespace.experiment=checkout,\
+                                   statespace.arm={0},service.version={0}", arm().commit)},
+            ])
         );
+        assert!(template["containers"][0]["env"].is_null());
         for field in [
             "serviceAccount",
             "vpcAccess",
@@ -935,54 +731,6 @@ mod tests {
         assert_eq!(
             not_ready(&failed),
             "the service is not ready: The container exited (exit 1)"
-        );
-    }
-
-    #[test]
-    fn reads_every_unit_with_one_filter_and_gives_each_line_once() {
-        let filter = log_filter(
-            "acme",
-            &["shop-ssp-a", "shop-ssp-b"],
-            "2026-10-30T00:00:00Z",
-        );
-        assert!(
-            filter.contains(
-                "AND (resource.labels.service_name=\"shop-ssp-a\" \
-                 OR resource.labels.service_name=\"shop-ssp-b\") AND"
-            ),
-            "{filter}"
-        );
-        assert!(filter.ends_with("timestamp>=\"2026-10-30T00:00:00Z\""));
-        let mut cursor = Cursor {
-            since: "2026-10-30T00:00:00Z".into(),
-            seen: HashSet::new(),
-        };
-        let first = json!({"insertId": "a", "timestamp": "2026-10-30T00:00:01Z"});
-        let second = json!({"insertId": "b", "timestamp": "2026-10-30T00:00:01Z"});
-        assert!(cursor.take(&first));
-        assert!(cursor.take(&second), "two lines at one time");
-        // A poll again from the cursor, as after a 429, gives nothing twice.
-        assert!(!cursor.take(&first));
-        assert_eq!(cursor.since, "2026-10-30T00:00:01Z");
-    }
-
-    #[test]
-    fn reads_log_entries() {
-        let stdout = json!({"logName": "projects/acme/logs/run.googleapis.com%2Fstdout", "textPayload": "hello"});
-        assert_eq!(
-            entry_line(&stdout),
-            Some(Line {
-                stream: Stream::Stdout,
-                text: "hello".into()
-            })
-        );
-        let stderr = json!({"logName": "projects/acme/logs/run.googleapis.com%2Fstderr", "jsonPayload": {"event": "x"}});
-        assert_eq!(
-            entry_line(&stderr),
-            Some(Line {
-                stream: Stream::Stderr,
-                text: r#"{"event":"x"}"#.into()
-            })
         );
     }
 }

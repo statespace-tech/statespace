@@ -19,7 +19,6 @@ use std::future::Future;
 use http::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tokio::sync::mpsc;
 
 pub use self::files::{FileRequest, Served};
 use super::remote::Remote;
@@ -53,14 +52,6 @@ pub struct Files {
 pub enum Build {
     Image(Image),
     Files(Files),
-}
-
-impl Build {
-    /// The build as the fields of a JSON object: `{"image": …}` or
-    /// `{"files": {…}}`.
-    pub fn fields(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap_or_default()
-    }
 }
 
 impl std::fmt::Display for Build {
@@ -144,6 +135,51 @@ impl UnitKey {
     }
 }
 
+/// The environment variable that holds OpenTelemetry resource attributes.
+pub const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
+/// The resource attributes that `ssp` sets on a unit. Each value of live
+/// for these keys is replaced.
+const ARM_ATTRIBUTES: [&str; 3] = ["statespace.experiment", "statespace.arm", "service.version"];
+
+impl UnitKey {
+    /// The variables that label a unit for the customer's own tools:
+    /// `SSP_EXPERIMENT`, `SSP_ARM` (the full commit), and
+    /// `OTEL_RESOURCE_ATTRIBUTES`. `live_attributes` is live's value of
+    /// `OTEL_RESOURCE_ATTRIBUTES`, if it has one: the unit keeps its other
+    /// attributes.
+    pub fn environment(&self, live_attributes: Option<&str>) -> [(&'static str, String); 3] {
+        [
+            ("SSP_EXPERIMENT", self.experiment.clone()),
+            ("SSP_ARM", self.commit.clone()),
+            (
+                RESOURCE_ATTRIBUTES,
+                self.resource_attributes(live_attributes),
+            ),
+        ]
+    }
+
+    /// Live's resource attributes without the keys of [`ARM_ATTRIBUTES`],
+    /// then `statespace.experiment`, `statespace.arm`, and
+    /// `service.version` of this unit.
+    pub fn resource_attributes(&self, live: Option<&str>) -> String {
+        let mut attributes: Vec<String> = live
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+            .filter(|pair| {
+                let key = pair.split_once('=').map_or(*pair, |(key, _)| key).trim();
+                !ARM_ATTRIBUTES.contains(&key)
+            })
+            .map(str::to_owned)
+            .collect();
+        attributes.push(format!("statespace.experiment={}", self.experiment));
+        attributes.push(format!("statespace.arm={}", self.commit));
+        attributes.push(format!("service.version={}", self.commit));
+        attributes.join(",")
+    }
+}
+
 /// A unit that runs, where it takes traffic, and whether it is ready.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Running {
@@ -153,31 +189,6 @@ pub struct Running {
     /// Why the unit is not ready, when the orchestrator knows.
     pub reason: Option<String>,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stream {
-    Stdout,
-    Stderr,
-}
-
-impl Stream {
-    pub fn table(self) -> &'static str {
-        match self {
-            Self::Stdout => "stdout",
-            Self::Stderr => "stderr",
-        }
-    }
-}
-
-/// One line a unit printed.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Line {
-    pub stream: Stream,
-    pub text: String,
-}
-
-/// The lines of a unit, as they come. Dropping it stops the reading.
-pub type OutputStream = mpsc::Receiver<Line>;
 
 /// An orchestrator is built from the flags of its subcommand alone, so the
 /// proxy can send requests to live before it knows the app. The calls that
@@ -207,8 +218,6 @@ pub trait Orchestrator: Send + Sync + 'static {
     /// What runs now: each unit of the app, its address, and whether it is
     /// ready.
     fn running(&self, app: &App) -> impl Future<Output = anyhow::Result<Vec<Running>>> + Send;
-    /// Output lines of a unit, as they come.
-    fn output(&self, app: &App, unit: &Unit) -> OutputStream;
     /// A header that a request to `address` needs, such as a credential.
     fn credential(
         &self,
@@ -235,11 +244,6 @@ pub trait Orchestrator: Send + Sync + 'static {
     }
 }
 
-/// The channel an orchestrator feeds a unit's lines into.
-pub fn channel() -> (mpsc::Sender<Line>, OutputStream) {
-    mpsc::channel(10_000)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +266,32 @@ mod tests {
         };
         assert_ne!(key.name("shop-ssp-", 20), other.name("shop-ssp-", 20));
         assert_eq!(key.name("x", 20), key.name("x", 20));
+    }
+
+    #[test]
+    fn units_keep_live_resource_attributes_and_replace_the_arm_keys() {
+        let key = UnitKey {
+            experiment: "hero".into(),
+            commit: "a4946646bc0106a632833f54d3aaab42d83d4830".into(),
+        };
+        let arm = "statespace.experiment=hero,\
+                   statespace.arm=a4946646bc0106a632833f54d3aaab42d83d4830,\
+                   service.version=a4946646bc0106a632833f54d3aaab42d83d4830";
+        assert_eq!(key.resource_attributes(None), arm);
+        assert_eq!(key.resource_attributes(Some("")), arm);
+        assert_eq!(
+            key.resource_attributes(Some(
+                "service.name=shop, deployment.environment=prod,service.version=1.4.2,\
+                 statespace.arm=old,statespace.experiment = old,"
+            )),
+            format!("service.name=shop,deployment.environment=prod,{arm}")
+        );
+        let environment = key.environment(Some("service.name=shop"));
+        assert_eq!(environment[0], ("SSP_EXPERIMENT", "hero".to_owned()));
+        assert_eq!(environment[1], ("SSP_ARM", key.commit.clone()));
+        assert_eq!(
+            environment[2],
+            (RESOURCE_ATTRIBUTES, format!("service.name=shop,{arm}"))
+        );
     }
 }

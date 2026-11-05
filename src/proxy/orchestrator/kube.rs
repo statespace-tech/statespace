@@ -133,36 +133,4 @@ impl Kube {
             .json(&serde_json::json!({"propagationPolicy": "Background"}));
         self.send(request).await.map(drop)
     }
-
-    /// Follow a container's log from `since`, with a timestamp on each line.
-    pub async fn follow(
-        &self,
-        pod: &str,
-        container: &str,
-        since: Option<&str>,
-    ) -> anyhow::Result<reqwest::Response> {
-        let mut query = vec![
-            ("container", container.to_owned()),
-            ("follow", "true".to_owned()),
-            ("timestamps", "true".to_owned()),
-        ];
-        if let Some(since) = since {
-            query.push(("sinceTime", since.to_owned()));
-        }
-        let response = self
-            .request(
-                Method::GET,
-                &format!("{}/{pod}/log", self.path("v1", "pods")),
-            )?
-            .query(&query)
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            bail!(
-                "Kubernetes answered {} for the log of {pod}",
-                response.status()
-            );
-        }
-        Ok(response)
-    }
 }

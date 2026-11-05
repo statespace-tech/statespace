@@ -1,60 +1,47 @@
 //! `ssp proxy fly`: live is the Machines of a Fly.io app in one process
 //! group, which Statespace did not create. Each unit runs as one Machine of
 //! the same app, `ssp-<experiment>-<commit 12>`, from a copy of a live
-//! Machine's config with another image, and metadata
-//! `statespace.com/app`, `statespace.com/experiment`, and
-//! `statespace.com/commit`.
+//! Machine's config with another image, the variables that label the arm,
+//! and metadata `statespace_app`, `statespace_experiment`, and
+//! `statespace_commit`.
 //!
 //! A unit has no services, so Fly's proxy never sends it public or Flycast
 //! traffic, and no `fly_*` metadata, so `fly deploy` and `fly scale` leave it
 //! alone. The proxy runs on Fly.io in the same organization and reaches a
-//! unit at its private (6PN) address. It reads output from Fly's logs API.
+//! unit at its private (6PN) address. Readiness and the reason a unit is not
+//! ready come from the Machine's state, checks, and exit events.
 //!
 //! The proxy uses the Machines API with `FLY_API_TOKEN`, such as a deploy
 //! token of the app.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::HashSet, time::Duration};
 
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
 
-use super::{
-    Address, App, Build, Image, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit,
-    UnitKey, channel,
-};
+use super::{Address, App, Build, Image, Live, Orchestrator, RESOURCE_ATTRIBUTES, Running, Unit};
 use crate::{cli::FlyArgs, image};
 
 /// The metadata of a unit's Machine, with the full experiment and commit.
-pub const APP_METADATA: &str = "statespace.com/app";
-pub const EXPERIMENT_METADATA: &str = "statespace.com/experiment";
-pub const COMMIT_METADATA: &str = "statespace.com/commit";
-const IMAGE_METADATA: &str = "statespace.com/image";
-const PORT_METADATA: &str = "statespace.com/port";
+pub const APP_METADATA: &str = "statespace_app";
+pub const EXPERIMENT_METADATA: &str = "statespace_experiment";
+pub const COMMIT_METADATA: &str = "statespace_commit";
+const IMAGE_METADATA: &str = "statespace_image";
+const PORT_METADATA: &str = "statespace_port";
 /// The metadata that puts a Machine in a process group of `fly deploy`.
 const PROCESS_GROUP: &str = "fly_process_group";
 /// How long the proxy waits for a unit to accept a connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The Machines of each unit, as `running()` last saw them, for the
-/// output readers.
-type Instances = Arc<Mutex<HashMap<UnitKey, HashSet<String>>>>;
-
 pub struct Fly {
     client: reqwest::Client,
     machines_api: String,
-    logs_api: String,
     authorization: String,
     fly_app: String,
     region: Option<String>,
     process_group: String,
     port: Option<u16>,
     live_address: String,
-    instances: Instances,
 }
 
 impl Fly {
@@ -65,7 +52,6 @@ impl Fly {
                 .timeout(Duration::from_secs(30))
                 .build()?,
             machines_api: arguments.machines_api.trim_end_matches('/').to_owned(),
-            logs_api: arguments.logs_api.trim_end_matches('/').to_owned(),
             authorization: authorization(&arguments.fly_token),
             live_address: arguments.live_url.as_deref().map_or_else(
                 || format!("http://{}.flycast", arguments.fly_app),
@@ -75,7 +61,6 @@ impl Fly {
             region: arguments.region,
             process_group: arguments.process_group,
             port: arguments.port,
-            instances: Arc::default(),
         };
         fly.call(
             reqwest::Method::GET,
@@ -256,17 +241,10 @@ impl Orchestrator for Fly {
     async fn running(&self, app: &App) -> anyhow::Result<Vec<Running>> {
         let machines = self.machines().await?;
         let mut running = Vec::new();
-        let mut instances: HashMap<UnitKey, HashSet<String>> = HashMap::new();
         for machine in &machines {
             let Some((unit, port)) = unit_of(machine, &app.name) else {
                 continue;
             };
-            if let Some(id) = machine["id"].as_str() {
-                instances
-                    .entry(unit.key())
-                    .or_default()
-                    .insert(id.to_owned());
-            }
             let address = address(machine, port).unwrap_or_default();
             let reason = match not_ready(machine, &unit) {
                 Some(reason) => Some(reason),
@@ -280,22 +258,7 @@ impl Orchestrator for Fly {
                 reason,
             });
         }
-        *self.instances.lock().expect("never poisoned") = instances;
         Ok(running)
-    }
-
-    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
-        let (sender, stream) = channel();
-        let reader = Reader {
-            client: self.client.clone(),
-            logs_api: self.logs_api.clone(),
-            authorization: self.authorization.clone(),
-            fly_app: self.fly_app.clone(),
-            key: unit.key(),
-            instances: self.instances.clone(),
-        };
-        tokio::spawn(reader.read(sender));
-        stream
     }
 }
 
@@ -314,124 +277,6 @@ async fn accepts(address: &str) -> Result<(), String> {
              to be reached over Fly.io's private network"
         )),
     }
-}
-
-/// Reads a unit's lines from Fly's logs API.
-struct Reader {
-    client: reqwest::Client,
-    logs_api: String,
-    authorization: String,
-    fly_app: String,
-    key: UnitKey,
-    instances: Instances,
-}
-
-impl Reader {
-    async fn read(self, sender: mpsc::Sender<Line>) {
-        // The API pages by a time in nanoseconds; start from now.
-        let mut token = chrono::Utc::now()
-            .timestamp_nanos_opt()
-            .unwrap_or_default()
-            .to_string();
-        let mut failing = false;
-        while !sender.is_closed() {
-            match self.poll(&mut token, &sender).await {
-                Ok(()) => failing = false,
-                Err(error) if !failing => {
-                    eprintln!("[ssp] could not read the output of {}: {error:#}", self.key);
-                    failing = true;
-                }
-                Err(_) => {}
-            }
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-    }
-
-    async fn poll(&self, token: &mut String, sender: &mpsc::Sender<Line>) -> anyhow::Result<()> {
-        let instances = self
-            .instances
-            .lock()
-            .expect("never poisoned")
-            .get(&self.key)
-            .cloned()
-            .unwrap_or_default();
-        if instances.is_empty() {
-            return Ok(());
-        }
-        // The `instance` filter takes one Machine; read the app's lines and
-        // keep the unit's.
-        for _ in 0..10 {
-            let response = self
-                .client
-                .get(format!(
-                    "{}/api/v1/apps/{}/logs",
-                    self.logs_api,
-                    segment(&self.fly_app)
-                ))
-                .query(&[("next_token", token.as_str())])
-                .header(reqwest::header::AUTHORIZATION, &self.authorization)
-                .send()
-                .await?;
-            if !response.status().is_success() {
-                bail!("Fly.io's logs API answered {}", response.status());
-            }
-            let page: Value = response.json().await?;
-            let entries = page["data"].as_array().cloned().unwrap_or_default();
-            for entry in &entries {
-                if let Some(line) = log_line(&entry["attributes"], &instances)
-                    && sender.send(line).await.is_err()
-                {
-                    return Ok(());
-                }
-            }
-            match page["meta"]["next_token"].as_str() {
-                Some(next) if !next.is_empty() && next != token.as_str() => {
-                    *token = next.to_owned();
-                }
-                _ => return Ok(()),
-            }
-            if entries.is_empty() {
-                return Ok(());
-            }
-        }
-        Ok(())
-    }
-}
-
-/// The line of a log entry of one of `instances`. Fly.io merges standard
-/// output and standard error, so every line is recorded as stdout. Lines of
-/// Fly's own components, such as the runner, are not the app's.
-fn log_line(attributes: &Value, instances: &HashSet<String>) -> Option<Line> {
-    let field = |name: &str| {
-        attributes
-            .get(name)
-            .or_else(|| attributes.get(capitalized(name).as_str()))
-    };
-    let instance = field("instance")?.as_str()?;
-    if !instances.contains(instance) {
-        return None;
-    }
-    let meta = field("meta").cloned().unwrap_or(Value::Null);
-    let provider = meta
-        .get("event")
-        .or_else(|| meta.get("Event"))
-        .and_then(|event| event.get("provider").or_else(|| event.get("Provider")))
-        .and_then(Value::as_str);
-    if provider.is_some_and(|provider| provider != "app") {
-        return None;
-    }
-    Some(Line {
-        stream: Stream::Stdout,
-        text: field("message")?.as_str()?.to_owned(),
-    })
-}
-
-fn capitalized(name: &str) -> String {
-    let mut characters = name.chars();
-    characters
-        .next()
-        .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())
-        .unwrap_or_default()
 }
 
 /// The value of the `Authorization` header for a Fly.io token. `fly tokens
@@ -634,7 +479,8 @@ fn last_exit(machine: &Value) -> Option<String> {
 ///   live's own.
 /// - Its metadata has no `fly_*` keys, so `fly deploy` and `fly scale`
 ///   leave it alone, and has the unit's own keys.
-/// - It never gets a `STATESPACE_*` variable.
+/// - It never gets a `STATESPACE_*` variable, and gets the variables that
+///   label the arm, with live's other resource attributes.
 pub fn unit_config(live: &Value, app: &str, unit: &Unit, port: u16) -> anyhow::Result<Value> {
     let mut config = live.clone();
     let object = config
@@ -687,9 +533,20 @@ pub fn unit_config(live: &Value, app: &str, unit: &Unit, port: u16) -> anyhow::R
     ] {
         object.remove(field);
     }
-    if let Some(Value::Object(environment)) = object.get_mut("env") {
-        environment.retain(|name, _| !name.starts_with("STATESPACE_"));
+    let mut environment = object
+        .get("env")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    environment.retain(|name, _| !name.starts_with("STATESPACE_"));
+    let live_attributes = environment
+        .get(RESOURCE_ATTRIBUTES)
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    for (name, value) in unit.key().environment(live_attributes.as_deref()) {
+        environment.insert(name.into(), json!(value));
     }
+    object.insert("env".into(), Value::Object(environment));
     let mut metadata = object
         .get("metadata")
         .and_then(Value::as_object)
@@ -779,7 +636,18 @@ mod tests {
         assert_eq!(config["guest"], live["config"]["guest"]);
         assert_eq!(config["init"], live["config"]["init"]);
         assert_eq!(config["restart"], live["config"]["restart"]);
-        assert_eq!(config["env"], json!({"MODE": "prod"}));
+        assert_eq!(
+            config["env"],
+            json!({
+                "MODE": "prod",
+                "SSP_EXPERIMENT": "checkout",
+                "SSP_ARM": arm().commit,
+                "OTEL_RESOURCE_ATTRIBUTES": format!(
+                    "statespace.experiment=checkout,statespace.arm={0},service.version={0}",
+                    arm().commit
+                ),
+            })
+        );
         for field in ["services", "mounts", "statics"] {
             assert!(config.get(field).is_none(), "{field}");
         }
@@ -922,27 +790,5 @@ mod tests {
         assert_eq!(authorization("fm2_abc"), "FlyV1 fm2_abc");
         assert_eq!(authorization(" Bearer FlyV1 fm1r_abc\n"), "FlyV1 fm1r_abc");
         assert_eq!(authorization("oauth-token"), "Bearer oauth-token");
-    }
-
-    #[test]
-    fn reads_the_lines_of_a_unit() {
-        let instances = HashSet::from(["m7".to_owned()]);
-        let line = |instance: &str, provider: &str, message: &str| {
-            json!({"timestamp": "2026-10-29T10:00:00Z", "message": message, "level": "info",
-                   "instance": instance, "region": "iad",
-                   "meta": {"instance": instance, "event": {"provider": provider}}})
-        };
-        assert_eq!(
-            log_line(&line("m7", "app", "hello"), &instances),
-            Some(Line {
-                stream: Stream::Stdout,
-                text: "hello".into()
-            })
-        );
-        assert_eq!(log_line(&line("m8", "app", "other"), &instances), None);
-        assert_eq!(log_line(&line("m7", "runner", "Pulling"), &instances), None);
-        let capitals =
-            json!({"Message": "hi", "Instance": "m7", "Meta": {"Event": {"Provider": "app"}}});
-        assert_eq!(log_line(&capitals, &instances).unwrap().text, "hi");
     }
 }

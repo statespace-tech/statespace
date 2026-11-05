@@ -4,23 +4,18 @@
 //! `<deployment>-ssp-<experiment>-<commit 12>` (cut with a short hash past
 //! 63 characters), with a Service, labeled `statespace.com/app`,
 //! `statespace.com/experiment`, and `statespace.com/commit`. Replicas follow
-//! the share.
+//! the share. Readiness and the reason a unit is not ready come from the
+//! Deployment's status and its pods' container states, such as `OOMKilled`
+//! or `ImagePullBackOff`.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::collections::HashSet;
 
 use anyhow::{Context, bail};
-use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::{sync::mpsc, task::JoinHandle};
 
 use super::{
-    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, channel,
-    kube::Kube,
+    Address, App, Build, Live, Orchestrator, RESOURCE_ATTRIBUTES, Running, Unit, kube::Kube,
 };
 use crate::{cli::KubernetesArgs, image};
 
@@ -210,149 +205,52 @@ impl Orchestrator for Kubernetes {
             .kube
             .list(&self.deployments(), &format!("{APP_LABEL}={}", app.name))
             .await?;
-        Ok(deployments
-            .iter()
-            .filter_map(|deployment| {
-                let labels = &deployment["metadata"]["labels"];
-                let annotations = &deployment["metadata"]["annotations"];
-                let name = deployment["metadata"]["name"].as_str()?;
-                let port: u64 = annotations[PORT_ANNOTATION].as_str()?.parse().ok()?;
-                let ready = rolled_out(deployment);
-                Some(Running {
-                    unit: Unit {
-                        experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
-                        commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
-                        build: Build::Image(annotations[IMAGE_ANNOTATION].as_str()?.to_owned()),
-                        share: 0.0,
-                    },
-                    address: self.address(name, port),
-                    ready,
-                    reason: (!ready).then(|| not_rolled_out(deployment)),
+        let mut running = Vec::new();
+        for deployment in &deployments {
+            let labels = &deployment["metadata"]["labels"];
+            let annotations = &deployment["metadata"]["annotations"];
+            let unit = || {
+                Some(Unit {
+                    experiment: labels[EXPERIMENT_LABEL].as_str()?.to_owned(),
+                    commit: labels[COMMIT_LABEL].as_str()?.to_owned(),
+                    build: Build::Image(annotations[IMAGE_ANNOTATION].as_str()?.to_owned()),
+                    share: 0.0,
                 })
-            })
-            .collect())
-    }
-
-    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
-        let (sender, stream) = channel();
-        let kube = self.kube.clone();
-        let name = unit_name(&self.deployment, unit);
-        let container = self.container.clone();
-        tokio::spawn(follow_pods(kube, name, container, sender));
-        stream
-    }
-}
-
-/// Follow the log of each running pod of a unit until the stream is
-/// dropped. Pods that ran before are read from now on; new pods from their start.
-async fn follow_pods(
-    kube: Kube,
-    name: String,
-    container: Option<String>,
-    sender: mpsc::Sender<Line>,
-) {
-    let started = Utc::now();
-    let mut followers: HashMap<String, JoinHandle<()>> = HashMap::new();
-    let sender = Arc::new(sender);
-    while !sender.is_closed() {
-        if let Ok(pods) = kube
-            .list(&kube.path("v1", "pods"), &format!("{UNIT_LABEL}={name}"))
-            .await
-        {
-            let mut seen = HashSet::new();
-            for pod in &pods {
-                let Some(pod_name) = pod["metadata"]["name"].as_str() else {
-                    continue;
-                };
-                if pod["status"]["phase"] != "Running" {
-                    continue;
-                }
-                seen.insert(pod_name.to_owned());
-                if followers
-                    .get(pod_name)
-                    .is_some_and(|task| !task.is_finished())
-                {
-                    continue;
-                }
-                let created = pod["metadata"]["creationTimestamp"]
+            };
+            let (Some(unit), Some(name), Some(port)) = (
+                unit(),
+                deployment["metadata"]["name"].as_str(),
+                annotations[PORT_ANNOTATION]
                     .as_str()
-                    .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
-                    .map(|time| time.with_timezone(&Utc));
-                let since = match (followers.contains_key(pod_name), created) {
-                    // A stream that ended starts again from now.
-                    (true, _) => Some(Utc::now()),
-                    (false, Some(created)) if created >= started => None,
-                    _ => Some(started),
-                };
-                let container_name = match &container {
-                    Some(container) => container.clone(),
-                    None => pod["spec"]["containers"][0]["name"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_owned(),
-                };
-                followers.insert(
-                    pod_name.to_owned(),
-                    tokio::spawn(follow_pod(
-                        kube.clone(),
-                        pod_name.to_owned(),
-                        container_name,
-                        since,
-                        sender.clone(),
-                    )),
-                );
-            }
-            followers.retain(|pod, task| {
-                let keep = seen.contains(pod);
-                if !keep {
-                    task.abort();
+                    .and_then(|port| port.parse::<u64>().ok()),
+            ) else {
+                continue;
+            };
+            let ready = rolled_out(deployment);
+            let reason = match ready {
+                true => None,
+                // The pods tell why they do not start, such as OOMKilled.
+                false => {
+                    let pods = self
+                        .kube
+                        .list(
+                            &self.kube.path("v1", "pods"),
+                            &format!("{UNIT_LABEL}={name}"),
+                        )
+                        .await
+                        .unwrap_or_default();
+                    Some(pod_problem(&pods).unwrap_or_else(|| not_rolled_out(deployment)))
                 }
-                keep
+            };
+            running.push(Running {
+                unit,
+                address: self.address(name, port),
+                ready,
+                reason,
             });
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        Ok(running)
     }
-    for task in followers.values() {
-        task.abort();
-    }
-}
-
-/// Kubernetes merges a container's standard output and standard error, so
-/// every line is recorded as stdout.
-async fn follow_pod(
-    kube: Kube,
-    pod: String,
-    container: String,
-    since: Option<DateTime<Utc>>,
-    sender: Arc<mpsc::Sender<Line>>,
-) {
-    let since = since.map(|time| time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let Ok(mut response) = kube.follow(&pod, &container, since.as_deref()).await else {
-        return;
-    };
-    let mut pending = Vec::new();
-    while let Ok(Some(chunk)) = response.chunk().await {
-        pending.extend_from_slice(&chunk);
-        while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
-            let line: Vec<u8> = pending.drain(..=end).collect();
-            let line = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
-            let text = timestamped(&line).map_or(line.as_str(), |(_, text)| text);
-            let line = Line {
-                stream: Stream::Stdout,
-                text: text.to_owned(),
-            };
-            if sender.send(line).await.is_err() {
-                return;
-            }
-        }
-    }
-}
-
-/// Split a line that `timestamps=true` prefixed with its time.
-fn timestamped(line: &str) -> Option<(DateTime<Utc>, &str)> {
-    let (time, text) = line.split_once(' ').unwrap_or((line, ""));
-    let time = DateTime::parse_from_rfc3339(time).ok()?.with_timezone(&Utc);
-    Some((time, text))
 }
 
 /// `<deployment>-ssp-<experiment>-<commit 12>`, at most 63 characters, the
@@ -418,6 +316,36 @@ fn not_rolled_out(deployment: &Value) -> String {
     }
 }
 
+/// Why the pods of a unit do not run, from their container states: a
+/// container that waits (`ImagePullBackOff`, `CrashLoopBackOff`), with the
+/// reason it ended last (`OOMKilled`, or an exit code).
+fn pod_problem(pods: &[Value]) -> Option<String> {
+    pods.iter()
+        .flat_map(|pod| {
+            pod["status"]["containerStatuses"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .find_map(|status| {
+            let waiting = status["state"]["waiting"]["reason"]
+                .as_str()
+                .filter(|reason| *reason != "ContainerCreating")?;
+            let ended = &status["lastState"]["terminated"];
+            let last = ended["reason"]
+                .as_str()
+                .filter(|reason| *reason != "Completed")
+                .map(|reason| match ended["exitCode"].as_i64() {
+                    Some(code) => format!("{reason}, exit {code}"),
+                    None => reason.to_owned(),
+                });
+            Some(match last {
+                Some(last) => format!("a pod is {waiting} (last: {last})"),
+                None => format!("a pod is {waiting}"),
+            })
+        })
+}
+
 /// Whether a unit's Deployment rolled out and has a ready pod.
 fn rolled_out(deployment: &Value) -> bool {
     let status = &deployment["status"];
@@ -451,6 +379,7 @@ pub fn unit_deployment(
     let index = app_container(&pod, container)?;
     let app_container = &mut pod["containers"][index];
     app_container["image"] = json!(unit.image());
+    label_environment(app_container, unit);
     let port = app_container["ports"]
         .as_array()
         .into_iter()
@@ -500,6 +429,27 @@ pub fn unit_deployment(
         deployment["spec"]["strategy"] = strategy.clone();
     }
     Ok((hashed(deployment), port))
+}
+
+/// Give the app's container the variables that label the arm. Live's
+/// literal `OTEL_RESOURCE_ATTRIBUTES` keeps its other attributes; one from
+/// a reference (`valueFrom`) is replaced.
+fn label_environment(container: &mut Value, unit: &Unit) {
+    let mut variables = container["env"].as_array().cloned().unwrap_or_default();
+    let named = |variable: &Value, name: &str| variable["name"] == name;
+    let live_attributes = variables
+        .iter()
+        .find(|variable| named(variable, RESOURCE_ATTRIBUTES))
+        .and_then(|variable| variable["value"].as_str())
+        .map(str::to_owned);
+    let labels = unit.key().environment(live_attributes.as_deref());
+    variables.retain(|variable| !labels.iter().any(|(name, _)| named(variable, name)));
+    variables.extend(
+        labels
+            .into_iter()
+            .map(|(name, value)| json!({"name": name, "value": value})),
+    );
+    container["env"] = json!(variables);
 }
 
 /// The Service that reaches a unit's pods.
@@ -558,6 +508,7 @@ mod tests {
                             "ports": [{"containerPort": 8000}],
                             "env": [
                                 {"name": "DATABASE_URL", "valueFrom": {"secretKeyRef": {"name": "db", "key": "url"}}},
+                                {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": "k8s.pod.name=$(POD_NAME),service.version=main"},
                             ],
                         }],
                     },
@@ -611,6 +562,19 @@ mod tests {
             spec["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]["name"],
             "db"
         );
+        // The variables that label the arm come last; live's attributes stay.
+        let commit = &unit.commit;
+        assert_eq!(
+            spec["containers"][0]["env"],
+            json!([
+                {"name": "DATABASE_URL", "valueFrom": {"secretKeyRef": {"name": "db", "key": "url"}}},
+                {"name": "SSP_EXPERIMENT", "value": "checkout"},
+                {"name": "SSP_ARM", "value": commit},
+                {"name": "OTEL_RESOURCE_ATTRIBUTES",
+                 "value": format!("k8s.pod.name=$(POD_NAME),statespace.experiment=checkout,\
+                                   statespace.arm={commit},service.version={commit}")},
+            ])
+        );
         // Live's Service selects app=shop; unit pods do not carry it.
         let labels = &deployment["spec"]["template"]["metadata"]["labels"];
         assert_eq!(labels["app"], Value::Null);
@@ -643,6 +607,33 @@ mod tests {
             service["spec"]["selector"][UNIT_LABEL],
             "shop-ssp-checkout-a1b2c3d4e5f6"
         );
+    }
+
+    #[test]
+    fn pods_say_why_a_unit_does_not_run() {
+        let pod = |state: Value, last: Value| json!({"status": {"containerStatuses": [{"state": state, "lastState": last}]}});
+        let crashed = pod(
+            json!({"waiting": {"reason": "CrashLoopBackOff"}}),
+            json!({"terminated": {"reason": "OOMKilled", "exitCode": 137}}),
+        );
+        assert_eq!(
+            pod_problem(&[crashed]).as_deref(),
+            Some("a pod is CrashLoopBackOff (last: OOMKilled, exit 137)")
+        );
+        let pulling = pod(
+            json!({"waiting": {"reason": "ImagePullBackOff"}}),
+            json!({}),
+        );
+        assert_eq!(
+            pod_problem(&[pulling]).as_deref(),
+            Some("a pod is ImagePullBackOff")
+        );
+        let creating = pod(
+            json!({"waiting": {"reason": "ContainerCreating"}}),
+            json!({}),
+        );
+        assert_eq!(pod_problem(&[creating]), None);
+        assert_eq!(pod_problem(&[]), None);
     }
 
     #[test]
@@ -679,13 +670,5 @@ mod tests {
             not_rolled_out(&failed),
             "the rollout failed: ReplicaSet has timed out progressing."
         );
-    }
-
-    #[test]
-    fn splits_timestamps_from_lines() {
-        let (time, text) = timestamped("2026-10-15T12:00:00.123456789Z {\"a\": 1}").unwrap();
-        assert_eq!(text, "{\"a\": 1}");
-        assert_eq!(time.timestamp_subsec_nanos(), 123_456_789);
-        assert!(timestamped("not a timestamp").is_none());
     }
 }

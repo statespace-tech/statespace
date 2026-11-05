@@ -6,7 +6,7 @@
 //! keeps live's environment, networks, mounts, and limits, but none of its
 //! labels, names, aliases, or published ports, so Compose never counts it
 //! as its own. Units restart with backoff when they exit, and get traffic
-//! only while they are ready. They are labeled `statespace.com/*`, and a
+//! only while they are ready. They are labeled `com.statespace.*`, and a
 //! proxy that restarts after a crash adopts the ones that still run.
 //!
 //! Where the proxy reaches a container: when the proxy runs in a container,
@@ -27,17 +27,16 @@ use std::{
 use anyhow::{Context, bail};
 use http::Method;
 use serde_json::{Map, Value, json};
-use tokio::{
-    sync::{mpsc, watch},
-    task::JoinHandle,
-};
+use tokio::{sync::watch, task::JoinHandle};
 
 use super::{
-    Address, App, Build, Line, Live, Orchestrator, OutputStream, Running, Stream, Unit, UnitKey,
-    channel, engine::Engine,
+    Address, App, Build, Live, Orchestrator, RESOURCE_ATTRIBUTES, Running, Unit, UnitKey,
+    engine::Engine,
 };
 use crate::{cli::DockerArgs, image};
 
+/// The variables that label a unit, which live's values never fill.
+const LABEL_VARIABLES: [&str; 3] = ["SSP_EXPERIMENT", "SSP_ARM", RESOURCE_ATTRIBUTES];
 /// How long a container may take to become ready.
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a stopping container may take before it is killed.
@@ -53,17 +52,17 @@ const STRAYS_AFTER: Duration = Duration::from_secs(60);
 /// How often the proxy checks the live container again.
 const LIVE_EVERY: Duration = Duration::from_secs(2);
 /// The label every container of this proxy's app carries.
-pub const APP_LABEL: &str = "statespace.com/app";
+pub const APP_LABEL: &str = "com.statespace.app";
 /// The label that names a container's unit: `<experiment>:<commit>`.
-const UNIT_LABEL: &str = "statespace.com/unit";
+const UNIT_LABEL: &str = "com.statespace.unit";
 /// The label that names a container's image.
-const IMAGE_LABEL: &str = "statespace.com/image";
+const IMAGE_LABEL: &str = "com.statespace.image";
 /// The labels with the experiment and the commit of a unit.
-const EXPERIMENT_LABEL: &str = "statespace.com/experiment";
-const COMMIT_LABEL: &str = "statespace.com/commit";
+const EXPERIMENT_LABEL: &str = "com.statespace.experiment";
+const COMMIT_LABEL: &str = "com.statespace.commit";
 /// The label that names the proxy, by the address it listens on, so two
 /// proxies of one app on a machine keep to their own containers.
-const PROXY_LABEL: &str = "statespace.com/proxy";
+const PROXY_LABEL: &str = "com.statespace.proxy";
 /// Settings of live's container that a unit's container copies. Published
 /// ports and the restart policy are not copied: the proxy reaches units
 /// itself and restarts them itself.
@@ -140,7 +139,6 @@ struct Slot {
     state: State,
     /// The address of the serving container.
     address: Option<String>,
-    container: Option<(String, bool)>,
     /// The image the serving container runs.
     running: Option<String>,
     /// Why the unit does not serve, after a failure.
@@ -158,7 +156,6 @@ struct Found {
 struct Instance {
     id: String,
     address: String,
-    tty: bool,
 }
 
 /// Where the proxy runs.
@@ -377,7 +374,6 @@ impl Docker {
                 unit: unit.clone(),
                 state: State::Starting,
                 address: None,
-                container: None,
                 running: None,
                 error: None,
             },
@@ -484,7 +480,6 @@ impl Docker {
             self.update(&key, |slot| {
                 slot.state = State::Ready;
                 slot.address = Some(instance.address.clone());
-                slot.container = Some((instance.id.clone(), instance.tty));
                 slot.running = Some(image.clone());
                 slot.error = None;
             });
@@ -511,11 +506,14 @@ impl Docker {
                 Ended::Stopped => break,
                 Ended::Exited(code) => {
                     serving.take();
-                    let exit = code.map_or_else(|| "no code".into(), |code| format!("exit {code}"));
+                    let state = match self.engine.container(&id).await {
+                        Ok(Some(container)) => container["State"].clone(),
+                        _ => Value::Null,
+                    };
+                    let exit = exit(code, &state);
                     self.update(&key, |slot| {
                         slot.state = State::Starting;
                         slot.address = None;
-                        slot.container = None;
                         slot.error = Some(format!("the container exited ({exit}); it restarts"));
                     });
                     if started.elapsed() > STABLE_AFTER {
@@ -582,6 +580,7 @@ impl Docker {
             (COMMIT_LABEL, key.commit.clone()),
         ]);
         let (body, networks) = unit_container(
+            key,
             &live.container,
             &live.image,
             &unit_image,
@@ -647,7 +646,6 @@ impl Docker {
         Ok(Instance {
             id: id.to_owned(),
             address,
-            tty: container["Config"]["Tty"] == true,
         })
     }
 
@@ -664,8 +662,8 @@ impl Docker {
                 )
             {
                 bail!(
-                    "the container exits at start (exit {})",
-                    container["State"]["ExitCode"]
+                    "the container exits at start ({})",
+                    exit(container["State"]["ExitCode"].as_i64(), &container["State"])
                 );
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -793,50 +791,6 @@ impl Orchestrator for Docker {
         Ok(running)
     }
 
-    fn output(&self, _app: &App, unit: &Unit) -> OutputStream {
-        let (sender, stream) = channel();
-        let docker = self.clone();
-        let key = unit.key();
-        let prefix = format!("[{key}] ");
-        tokio::spawn(async move {
-            // Follow each container the unit runs, one after another; lines
-            // from before are left out.
-            let mut since = Some(chrono::Utc::now().timestamp());
-            let mut followed: Option<String> = None;
-            loop {
-                if sender.is_closed() {
-                    return;
-                }
-                let container = docker
-                    .slots
-                    .lock()
-                    .expect("slots are never poisoned")
-                    .get(&key)
-                    .and_then(|slot| slot.container.clone());
-                let Some((container, tty)) =
-                    container.filter(|(id, _)| Some(id) != followed.as_ref())
-                else {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    continue;
-                };
-                followed = Some(container.clone());
-                let (lines, mut received) = mpsc::channel(1000);
-                let engine = docker.engine.clone();
-                let start = since.take();
-                let follow =
-                    tokio::spawn(async move { engine.follow(&container, start, tty, lines).await });
-                while let Some(line) = received.recv().await {
-                    print(&line, &prefix);
-                    if sender.send(line).await.is_err() {
-                        follow.abort();
-                        return;
-                    }
-                }
-            }
-        });
-        stream
-    }
-
     async fn shutdown(&self) {
         self.stopping.store(true, Ordering::SeqCst);
         for slot in self
@@ -859,10 +813,14 @@ fn label(key: &UnitKey) -> String {
     format!("{}:{}", key.experiment, key.commit)
 }
 
-fn print(line: &Line, prefix: &str) {
-    match line.stream {
-        Stream::Stdout => println!("{prefix}{}", line.text),
-        Stream::Stderr => eprintln!("{prefix}{}", line.text),
+/// How a container ended, from Docker's state of it: `exit 1`, or
+/// `exit 137, out of memory`.
+fn exit(code: Option<i64>, state: &Value) -> String {
+    let code = code.map_or_else(|| "no code".into(), |code| format!("exit {code}"));
+    if state["OOMKilled"] == true {
+        format!("{code}, out of memory")
+    } else {
+        code
     }
 }
 
@@ -1002,8 +960,12 @@ fn digest(container: &Value, image: &Value) -> anyhow::Result<String> {
 /// environment (not what live's image sets), command and entrypoint when
 /// live sets them, mounts, limits, and networks. It takes no label, name,
 /// alias, published port, or restart policy of live, and no `STATESPACE_*`
-/// variable. On the host, it publishes `port` on 127.0.0.1.
+/// variable. It gets the variables that label the arm (`SSP_EXPERIMENT`,
+/// `SSP_ARM`, and `OTEL_RESOURCE_ATTRIBUTES` with live's attributes kept).
+/// On the host, it publishes `port` on 127.0.0.1.
+#[allow(clippy::too_many_arguments)]
 pub fn unit_container(
+    key: &UnitKey,
     live: &Value,
     live_image: &Value,
     unit_image: &Value,
@@ -1014,7 +976,7 @@ pub fn unit_container(
 ) -> anyhow::Result<(Value, Vec<String>)> {
     let own = &live["Config"];
     let baked = &live_image["Config"];
-    let environment: Vec<&Value> = own["Env"]
+    let mut environment: Vec<String> = own["Env"]
         .as_array()
         .into_iter()
         .flatten()
@@ -1023,9 +985,22 @@ pub fn unit_container(
             let set_by_image = baked["Env"]
                 .as_array()
                 .is_some_and(|variables| variables.contains(variable));
-            !set_by_image && !text.starts_with("STATESPACE_")
+            let name = text.split_once('=').map_or(text, |(name, _)| name);
+            !set_by_image && !text.starts_with("STATESPACE_") && !LABEL_VARIABLES.contains(&name)
         })
+        .map(|variable| variable.as_str().unwrap_or_default().to_owned())
         .collect();
+    let live_attributes = own["Env"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .find_map(|variable| variable.strip_prefix(&format!("{RESOURCE_ATTRIBUTES}=")));
+    environment.extend(
+        key.environment(live_attributes)
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
     let mut config = Map::new();
     config.insert("Image".into(), json!(image));
     config.insert("Env".into(), json!(environment));
@@ -1091,7 +1066,8 @@ mod tests {
             "Config": {
                 "Image": "ghcr.io/acme/shop:main",
                 "Env": ["PATH=/usr/local/bin:/usr/bin", "GREETING=hello", "DATABASE_URL=postgres://db",
-                        "STATESPACE_TOKEN=never"],
+                        "STATESPACE_TOKEN=never", "OTEL_RESOURCE_ATTRIBUTES=service.name=shop,service.version=1.4.2",
+                        "SSP_ARM=spoofed"],
                 "Cmd": ["python3", "/app/app.py"],
                 "Entrypoint": null,
                 "WorkingDir": "/srv",
@@ -1136,7 +1112,12 @@ mod tests {
         let labels = BTreeMap::from([(APP_LABEL, "shop-prod".to_owned())]);
         let unit_image = json!({"Config": {"ExposedPorts": {"9000/tcp": {}}}});
         let image = format!("ghcr.io/acme/shop@sha256:{}", "a".repeat(64));
+        let key = UnitKey {
+            experiment: "hero".into(),
+            commit: "a".repeat(40),
+        };
         let (body, networks) = unit_container(
+            &key,
             &live(),
             &live_image(),
             &unit_image,
@@ -1148,7 +1129,20 @@ mod tests {
         .unwrap();
         assert_eq!(body["Image"], image.as_str());
         // Only what live sets itself: the image of a unit brings the rest.
-        assert_eq!(body["Env"], json!(["DATABASE_URL=postgres://db"]));
+        // Then the variables that label the arm, with live's attributes kept.
+        let arm = "a".repeat(40);
+        assert_eq!(
+            body["Env"],
+            json!([
+                "DATABASE_URL=postgres://db",
+                "SSP_EXPERIMENT=hero",
+                format!("SSP_ARM={arm}"),
+                format!(
+                    "OTEL_RESOURCE_ATTRIBUTES=service.name=shop,statespace.experiment=hero,\
+                     statespace.arm={arm},service.version={arm}"
+                ),
+            ])
+        );
         assert!(
             body.get("Cmd").is_none(),
             "the unit's image gives its command"
@@ -1175,8 +1169,10 @@ mod tests {
         );
         let text = body.to_string();
         assert!(!text.contains("com.docker.compose") && !text.contains("STATESPACE_"));
+        assert!(!text.contains("spoofed") && !text.contains("1.4.2"));
         // On the host, a unit publishes its port on 127.0.0.1.
         let (on_host, _) = unit_container(
+            &key,
             &live(),
             &live_image(),
             &unit_image,
@@ -1194,6 +1190,7 @@ mod tests {
         let mut own = live();
         own["Config"]["Cmd"] = json!(["python3", "/app/app.py", "--workers", "4"]);
         let (body, _) = unit_container(
+            &key,
             &own,
             &live_image(),
             &unit_image,

@@ -1,12 +1,12 @@
 //! The proxy's connection to Statespace: the runtime configuration, the
-//! report that holds the lease, and events.
+//! report that holds the lease, and the counts of arm visitors.
 
 use std::time::Duration;
 
 use anyhow::{Context, bail};
 use reqwest::StatusCode;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{config::RuntimeConfig, orchestrator::Build};
 use crate::api::segment;
@@ -44,6 +44,19 @@ struct Builds {
 pub enum ConfigError {
     /// The app does not exist, or the token is not for it.
     Refused(String),
+    Other(anyhow::Error),
+}
+
+/// Why a batch of counts was not applied.
+#[derive(Debug)]
+pub enum CountsError {
+    /// Statespace refused the batch (400): sending it again does not help.
+    Refused(String),
+    /// The batch counts versions that do not run (409): the experiment and
+    /// version of each. The other entries can go in a new batch.
+    NotRunning(String, Vec<(String, i64)>),
+    /// The account's storage is full (507).
+    Full(String),
     Other(anyhow::Error),
 }
 
@@ -196,11 +209,43 @@ impl Remote {
         Ok(response.json::<Builds>().await?.builds)
     }
 
-    /// Send a batch of rows of this app.
-    pub async fn send_events(&self, mut batch: Value) -> anyhow::Result<()> {
-        batch["app"] = json!(self.app);
-        self.post(format!("{}/v1/events", self.endpoint), &batch)
+    /// Send a batch of counts. Statespace applies a batch once, so a batch
+    /// sent again with the same UUID changes nothing.
+    pub async fn send_counts(&self, batch: &Value) -> Result<(), CountsError> {
+        let response = self
+            .client
+            .post(self.url("/counts"))
+            .bearer_auth(&self.token)
+            .timeout(Duration::from_secs(20))
+            .json(batch)
+            .send()
             .await
-            .map(drop)
+            .map_err(|error| CountsError::Other(error.into()))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        if status == StatusCode::CONFLICT {
+            let body: Value = response.json().await.unwrap_or_default();
+            let versions = body["not_running"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|version| {
+                    Some((
+                        version["experiment"].as_str()?.to_owned(),
+                        version["version"].as_i64()?,
+                    ))
+                })
+                .collect();
+            let error = body["error"].as_str().unwrap_or("conflict").to_owned();
+            return Err(CountsError::NotRunning(error, versions));
+        }
+        let message = Self::message(response).await;
+        match status {
+            StatusCode::BAD_REQUEST => Err(CountsError::Refused(message)),
+            StatusCode::INSUFFICIENT_STORAGE => Err(CountsError::Full(message)),
+            _ => Err(CountsError::Other(anyhow::anyhow!("{message}"))),
+        }
     }
 }

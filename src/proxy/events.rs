@@ -1,21 +1,22 @@
-//! `[[event]]` rules: CEL over one source. A request rule sees `request`
-//! with `method`, `path`, `query`, `headers`, `cookies`, `status`, and
-//! `ms`. An output rule sees `stdout` or `stderr` with `text` and `json`
-//! (`{}` when the line is not a JSON object). A missing field, or any
-//! other error, is no match.
+//! `[[event]]` rules: CEL over one request and its response. A rule sees
+//! `request` with `method`, `host`, `path`, `query`, `headers`, and
+//! `cookies`, and `response` with `status`, `headers`, and `ms` (the time
+//! to the response headers). The proxy evaluates the rules once per arm
+//! request, when the response headers arrive, and never reads a body. A
+//! missing field, or any other error, is no match.
+
+use std::collections::BTreeMap;
 
 use cel_interpreter::{Program, Value as Cel};
 use serde_json::{Value, json};
 
 use super::{
     assign::{compile, evaluate},
-    config::{EventConfig, Source},
-    orchestrator::Stream,
+    config::EventConfig,
 };
 
 struct Rule {
     name: String,
-    source: Source,
     program: Program,
 }
 
@@ -34,7 +35,6 @@ impl Events {
             match compile(&config.rule) {
                 Ok(program) => rules.push(Rule {
                     name: config.name.clone(),
-                    source: config.source,
                     program,
                 }),
                 Err(error) => {
@@ -45,48 +45,46 @@ impl Events {
         (Self { rules }, errors)
     }
 
-    /// The names of the request events that match a finished request.
-    /// `request` is the request as assignment saw it; `status` and `ms`
-    /// are added here.
-    pub fn request(&self, request: &Value, status: u16, ms: f64) -> Vec<&str> {
-        if !self.rules.iter().any(|rule| rule.source == Source::Request) {
-            return Vec::new();
-        }
-        let mut value = request.clone();
-        value["status"] = json!(status);
-        value["ms"] = json!(ms);
-        self.matching(Source::Request, "request", &value)
+    pub fn is_empty(&self) -> bool {
+        self.rules.is_empty()
     }
 
-    /// The names of the output events that match one line.
-    pub fn output(&self, stream: Stream, text: &str) -> Vec<&str> {
-        let source = match stream {
-            Stream::Stdout => Source::Stdout,
-            Stream::Stderr => Source::Stderr,
-        };
-        if !self.rules.iter().any(|rule| rule.source == source) {
-            return Vec::new();
-        }
-        let parsed = match serde_json::from_str::<Value>(text) {
-            Ok(Value::Object(object)) => Value::Object(object),
-            _ => json!({}),
-        };
-        let value = json!({ "text": text, "json": parsed });
-        let name = match stream {
-            Stream::Stdout => "stdout",
-            Stream::Stderr => "stderr",
-        };
-        self.matching(source, name, &value)
-    }
-
-    fn matching(&self, source: Source, name: &str, value: &Value) -> Vec<&str> {
+    /// The names of the events that match a request and its response.
+    /// `request` is the request as assignment saw it.
+    pub fn matching(&self, request: &Value, response: &Value) -> Vec<&str> {
         self.rules
             .iter()
-            .filter(|rule| rule.source == source)
-            .filter(|rule| matches!(evaluate(&rule.program, name, value), Ok(Cel::Bool(true))))
+            .filter(|rule| {
+                matches!(
+                    evaluate(
+                        &rule.program,
+                        &[("request", request), ("response", response)]
+                    ),
+                    Ok(Cel::Bool(true))
+                )
+            })
             .map(|rule| rule.name.as_str())
             .collect()
     }
+}
+
+/// The response as event rules see it: `status`, `headers` (lowercase
+/// names; a repeated header is joined with `, `), and `ms`.
+pub fn response_value(status: u16, headers: &http::HeaderMap, ms: f64) -> Value {
+    let mut values: BTreeMap<String, String> = BTreeMap::new();
+    for (name, value) in headers {
+        let Ok(value) = value.to_str() else {
+            continue;
+        };
+        values
+            .entry(name.as_str().to_owned())
+            .and_modify(|joined| {
+                joined.push_str(", ");
+                joined.push_str(value);
+            })
+            .or_insert_with(|| value.to_owned());
+    }
+    json!({ "status": status, "headers": values, "ms": ms })
 }
 
 #[cfg(test)]
@@ -96,12 +94,11 @@ mod tests {
     use super::*;
     use crate::proxy::assign::request_value;
 
-    fn events(rules: &[(&str, &str, &str)]) -> Events {
+    fn events(rules: &[(&str, &str)]) -> Events {
         let configs: Vec<EventConfig> = rules
             .iter()
-            .map(|(name, source, rule)| {
-                serde_json::from_value(json!({"name": name, "source": source, "match": rule}))
-                    .unwrap()
+            .map(|(name, rule)| {
+                serde_json::from_value(json!({"name": name, "match": rule})).unwrap()
             })
             .collect();
         let (events, errors) = Events::compile(&configs);
@@ -112,81 +109,65 @@ mod tests {
     fn post(path: &str) -> Value {
         let mut headers = http::HeaderMap::new();
         headers.insert("cf-ipcountry", "US".parse().unwrap());
+        headers.insert("host", "shop.acme.com".parse().unwrap());
         let mut cookies = Map::new();
         cookies.insert("plan".into(), json!("pro"));
-        request_value("POST", path, Some("ref=ad"), &headers, &cookies)
+        request_value("POST", None, path, Some("ref=ad"), &headers, &cookies)
+    }
+
+    fn response(status: u16, ms: f64, event: Option<&str>) -> Value {
+        let mut headers = http::HeaderMap::new();
+        if let Some(event) = event {
+            headers.insert("x-statespace-event", event.parse().unwrap());
+        }
+        response_value(status, &headers, ms)
     }
 
     #[test]
-    fn matches_request_events_after_the_response() {
+    fn matches_a_request_and_its_response() {
         let events = events(&[
             (
-                "lead",
-                "request",
-                r#"request.method == "POST" && request.path == "/api/leads" && request.status < 300"#,
+                "signup",
+                r#"request.method == "POST" && request.path == "/signup" && response.status == 201"#,
             ),
-            ("slow", "request", "request.ms > 1000.0"),
+            ("slow", "response.ms > 1000.0"),
             (
                 "us",
-                "request",
-                r#"request.headers["cf-ipcountry"] == "US" && request.cookies.plan == "pro" && request.query.ref == "ad""#,
+                r#"request.headers["cf-ipcountry"] == "US" && request.cookies.plan == "pro" && request.query.ref == "ad" && request.host == "shop.acme.com""#,
             ),
             (
-                "missing",
-                "request",
-                r#"request.headers["x-missing"] == "1""#,
+                "account",
+                r#"response.headers["x-statespace-event"] == "account_created""#,
             ),
+            ("missing", r#"request.headers["x-missing"] == "1""#),
+            // Removed in 0.5.0: these fields are missing, so no match.
+            ("old", "request.status == 201 || request.ms > 0.0"),
         ]);
         assert_eq!(
-            events.request(&post("/api/leads"), 201, 12.0),
-            ["lead", "us"]
+            events.matching(&post("/signup"), &response(201, 12.0, None)),
+            ["signup", "us"]
         );
         assert_eq!(
-            events.request(&post("/api/leads"), 500, 1500.0),
+            events.matching(&post("/signup"), &response(500, 1500.0, None)),
             ["slow", "us"]
         );
-        assert_eq!(events.request(&post("/other"), 200, 1.0), ["us"]);
-    }
-
-    #[test]
-    fn matches_output_lines_of_one_source() {
-        let events = events(&[
-            ("fatal", "stderr", r#"stderr.text.contains("FATAL")"#),
-            ("signup", "stdout", r#"stdout.json.event == "signup""#),
-            ("big", "stdout", "stdout.json.amount > 100"),
-        ]);
         assert_eq!(
-            events.output(Stream::Stderr, "FATAL: out of memory"),
-            ["fatal"]
+            events.matching(
+                &post("/other"),
+                &response(200, 1.0, Some("account_created"))
+            ),
+            ["us", "account"]
         );
-        // The rule names stderr, so a stdout line never matches it.
-        assert!(
-            events
-                .output(Stream::Stdout, "FATAL: out of memory")
-                .is_empty()
-        );
-        assert_eq!(
-            events.output(Stream::Stdout, r#"{"event": "signup", "amount": 120}"#),
-            ["signup", "big"]
-        );
-        // A missing field is no match, not an error.
-        assert!(events.output(Stream::Stdout, r#"{"amount": 5}"#).is_empty());
-        // A line that is not a JSON object has `json` = {}.
-        assert!(events.output(Stream::Stdout, "signup").is_empty());
-        assert!(events.output(Stream::Stdout, "[1, 2]").is_empty());
-        assert!(events.output(Stream::Stdout, "").is_empty());
     }
 
     #[test]
     fn rules_that_do_not_compile_are_reported() {
         let configs: Vec<EventConfig> = vec![
-            serde_json::from_value(
-                json!({"name": "bad", "source": "stdout", "match": "stdout.text.contains("}),
-            )
-            .unwrap(),
+            serde_json::from_value(json!({"name": "bad", "match": "request.path.contains("}))
+                .unwrap(),
         ];
         let (events, errors) = Events::compile(&configs);
         assert_eq!(errors.len(), 1);
-        assert!(events.output(Stream::Stdout, "x").is_empty());
+        assert!(events.is_empty());
     }
 }

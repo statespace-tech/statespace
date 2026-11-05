@@ -29,7 +29,6 @@ use serde_json::Value;
 pub enum Service {
     Ecs,
     Ec2,
-    Logs,
     S3,
 }
 
@@ -39,7 +38,6 @@ impl Service {
         match self {
             Self::Ecs => "ecs",
             Self::Ec2 => "ec2",
-            Self::Logs => "logs",
             Self::S3 => "s3",
         }
     }
@@ -48,7 +46,6 @@ impl Service {
     fn target(self) -> &'static str {
         match self {
             Self::Ecs => "AmazonEC2ContainerServiceV20141113",
-            Self::Logs => "Logs_20140328",
             Self::Ec2 | Self::S3 => "",
         }
     }
@@ -60,7 +57,6 @@ impl Service {
 pub struct Endpoints {
     pub ecs: Option<String>,
     pub ec2: Option<String>,
-    pub logs: Option<String>,
     /// S3, with the bucket as the first segment of the path.
     pub s3: Option<String>,
 }
@@ -176,7 +172,6 @@ impl Aws {
         let configured = match service {
             Service::Ecs => &self.endpoints.ecs,
             Service::Ec2 => &self.endpoints.ec2,
-            Service::Logs => &self.endpoints.logs,
             Service::S3 => &self.endpoints.s3,
         };
         match configured {
@@ -273,7 +268,7 @@ impl Aws {
         Ok((reply.status, reply.text()))
     }
 
-    /// Call an action of a JSON API (ECS, CloudWatch Logs).
+    /// Call an action of a JSON API (ECS).
     pub async fn json(
         &self,
         service: Service,

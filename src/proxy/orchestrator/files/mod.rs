@@ -25,9 +25,7 @@ use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use sha2::{Digest, Sha256};
 
-use super::{
-    Address, App, Build, Live, Orchestrator, OutputStream, Running, Unit, UnitKey, channel,
-};
+use super::{Address, App, Build, Live, Orchestrator, Running, Unit, UnitKey};
 use crate::{cli::FileArgs, proxy::remote::Remote};
 
 /// How long the cache keeps a file of live.
@@ -827,11 +825,6 @@ impl<S: Storage> Orchestrator for FileRuntime<S> {
                 },
             })
             .collect())
-    }
-
-    /// A unit of a file runtime prints nothing.
-    fn output(&self, _app: &App, _unit: &Unit) -> OutputStream {
-        channel().1
     }
 
     fn follow(&self, _app: &App, units: &[Unit]) {

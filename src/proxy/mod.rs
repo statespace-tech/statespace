@@ -2,7 +2,8 @@
 //! service. Every instance assigns each request and forwards it to live or
 //! to one arm of a running experiment. Only the instance that holds the
 //! app's lease orchestrates: it starts and stops the units of starting and
-//! running experiments and records their output.
+//! running experiments. Every instance counts the requests that arms serve
+//! to assigned visitors, and sends the counts to Statespace.
 //!
 //! The proxy starts in two phases. First it builds the orchestrator from
 //! the flags alone, listens, and sends every request to live. Then, in the
@@ -12,11 +13,10 @@
 
 pub mod assign;
 pub mod config;
+pub mod counts;
 pub mod events;
 mod lease;
 pub mod orchestrator;
-pub mod recorder;
-pub mod redact;
 pub mod remote;
 mod server;
 
@@ -28,10 +28,11 @@ use std::{
 
 use anyhow::{Context, bail};
 use serde_json::{Value, json};
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::sync::{mpsc, watch};
 
 use self::{
     assign::Routing,
+    counts::Counter,
     lease::Lease,
     orchestrator::{
         App, Build, Live, Orchestrator, Running, Unit, UnitKey,
@@ -42,7 +43,6 @@ use self::{
         fly::Fly,
         kubernetes::Kubernetes,
     },
-    recorder::{Origin, Recorder, Source},
     remote::{ConfigError, Remote},
 };
 use crate::cli::{ProxyArgs, ProxyCommand};
@@ -58,6 +58,8 @@ const STALE_AFTER: Duration = Duration::from_secs(300);
 const RETRY_AFTER: Duration = Duration::from_secs(60);
 /// How long a unit that failed a request gets no traffic.
 const SUSPECT_FOR: Duration = Duration::from_secs(10);
+/// How long the last counts may take to leave when the proxy stops.
+const LAST_COUNTS_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
@@ -133,10 +135,10 @@ struct Current {
 }
 
 /// What the proxy has once Statespace named its app: the app, and the
-/// recorder that sends its rows.
+/// counter that sends its counts.
 pub struct Session {
     pub app: App,
-    pub recorder: Arc<Recorder>,
+    pub counter: Arc<Counter>,
 }
 
 /// What every task of a proxy shares.
@@ -152,15 +154,10 @@ pub struct Runtime<O> {
     suspects: Mutex<HashMap<UnitKey, Instant>>,
     pub lease: Lease,
     pub in_flight: std::sync::atomic::AtomicUsize,
-    /// The lease holder's work: when it last started or stopped each unit,
-    /// and the readers of each unit's output.
+    /// The lease holder's work: when it last started or stopped each unit.
     attempts: Mutex<HashMap<(UnitKey, Build, bool), Instant>>,
     /// Why the last start of a unit failed, for the report.
     failures: Mutex<HashMap<UnitKey, String>>,
-    /// The version that each unit started for, so that its stop is recorded
-    /// with that version after the experiment no longer runs.
-    versions: Mutex<HashMap<UnitKey, i64>>,
-    readers: Mutex<HashMap<UnitKey, (Build, JoinHandle<()>)>>,
     /// Problems already printed, so each is printed once.
     noted: Mutex<HashSet<String>>,
 }
@@ -177,7 +174,7 @@ impl<O: Orchestrator> Runtime<O> {
         }
     }
 
-    /// The app and its recorder, once Statespace named the app.
+    /// The app and its counter, once Statespace named the app.
     pub fn session(&self) -> Option<&Arc<Session>> {
         self.session.get()
     }
@@ -218,15 +215,6 @@ impl<O: Orchestrator> Runtime<O> {
             .lock()
             .expect("suspects are never poisoned")
             .insert(key.clone(), Instant::now());
-    }
-
-    /// The experiment, arm, and version of a unit's rows.
-    pub fn origin(routing: &Routing, key: &UnitKey) -> Origin {
-        Origin {
-            experiment: key.experiment.clone(),
-            arm: Some(key.commit.clone()),
-            version: routing.version(key),
-        }
     }
 
     /// Keep the configuration and what runs current, and orchestrate while
@@ -270,8 +258,6 @@ impl<O: Orchestrator> Runtime<O> {
             self.observe(&session).await;
             if self.lease.held(Instant::now()) {
                 self.reconcile(&session).await;
-            } else {
-                self.stop_readers();
             }
             tokio::time::sleep(interval).await;
         }
@@ -281,36 +267,19 @@ impl<O: Orchestrator> Runtime<O> {
     async fn observe(&self, session: &Session) {
         match self.orchestrator.running(&session.app).await {
             Ok(running) => {
-                let holder = self.lease.held(Instant::now());
-                let routing = self.routing();
                 let mut units = self.units.write().expect("units are never poisoned");
-                let previous = std::mem::take(&mut *units);
-                for entry in running {
-                    let key = entry.unit.key();
-                    let was_ready = previous
-                        .get(&key)
-                        .is_some_and(|old| old.ready && old.unit.build == entry.unit.build);
-                    if holder
-                        && entry.ready
-                        && !was_ready
-                        && let Some(routing) = &routing
-                    {
-                        session.recorder.lifecycle(
-                            &Self::origin(routing, &key),
-                            "ready",
-                            with_build(&entry.unit.build, json!({ "address": entry.address })),
-                        );
-                    }
-                    units.insert(key, entry);
-                }
+                *units = running
+                    .into_iter()
+                    .map(|entry| (entry.unit.key(), entry))
+                    .collect();
             }
             Err(error) => self.note(format!("could not read what runs: {error:#}")),
         }
     }
 
-    /// Make the units match the configuration: start what is missing, stop
-    /// what no longer runs, and read the output of each.
-    async fn reconcile(self: &Arc<Self>, session: &Arc<Session>) {
+    /// Make the units match the configuration: start what is missing, and
+    /// stop what no longer runs.
+    async fn reconcile(&self, session: &Session) {
         let Some(routing) = self.routing() else {
             return;
         };
@@ -329,13 +298,6 @@ impl<O: Orchestrator> Runtime<O> {
             if present || !self.attempt(&unit.key(), &unit.build, true) {
                 continue;
             }
-            let origin = Self::origin(&routing, &unit.key());
-            if let Some(version) = origin.version {
-                self.versions
-                    .lock()
-                    .expect("versions are never poisoned")
-                    .insert(unit.key(), version);
-            }
             match self.orchestrator.start(&session.app, unit).await {
                 Ok(_) => {
                     eprintln!("[ssp] starting {} from {}", unit.key(), unit.build);
@@ -343,11 +305,6 @@ impl<O: Orchestrator> Runtime<O> {
                         .lock()
                         .expect("failures are never poisoned")
                         .remove(&unit.key());
-                    session.recorder.lifecycle(
-                        &origin,
-                        "started",
-                        with_build(&unit.build, json!({})),
-                    );
                 }
                 Err(error) => {
                     eprintln!("[ssp] could not start {}: {error:#}", unit.key());
@@ -355,11 +312,6 @@ impl<O: Orchestrator> Runtime<O> {
                         .lock()
                         .expect("failures are never poisoned")
                         .insert(unit.key(), format!("could not start: {error:#}"));
-                    session.recorder.lifecycle(
-                        &origin,
-                        "failed",
-                        with_build(&unit.build, json!({ "error": format!("{error:#}") })),
-                    );
                 }
             }
         }
@@ -373,26 +325,11 @@ impl<O: Orchestrator> Runtime<O> {
             if wanted.contains(&key) || !self.attempt(&key, &entry.unit.build, false) {
                 continue;
             }
-            let mut origin = Self::origin(&routing, &key);
-            let started = self
-                .versions
-                .lock()
-                .expect("versions are never poisoned")
-                .remove(&key);
-            origin.version = origin.version.or(started);
             match self.orchestrator.stop(&session.app, &entry.unit).await {
-                Ok(()) => {
-                    eprintln!("[ssp] stopped {key}");
-                    session.recorder.lifecycle(
-                        &origin,
-                        "stopped",
-                        with_build(&entry.unit.build, json!({})),
-                    );
-                }
+                Ok(()) => eprintln!("[ssp] stopped {key}"),
                 Err(error) => eprintln!("[ssp] could not stop {key}: {error:#}"),
             }
         }
-        self.read_output(session, &desired);
     }
 
     /// The units for the report: each unit that should run, ready or with
@@ -483,54 +420,6 @@ impl<O: Orchestrator> Runtime<O> {
         attempts.insert(entry, now);
         true
     }
-
-    /// Read each desired unit's lines, and stop reading the others.
-    fn read_output(self: &Arc<Self>, session: &Arc<Session>, desired: &[Unit]) {
-        let mut readers = self.readers.lock().expect("readers are never poisoned");
-        readers.retain(|key, (build, task)| {
-            let keep = desired
-                .iter()
-                .any(|unit| &unit.key() == key && &unit.build == build)
-                && !task.is_finished();
-            if !keep {
-                task.abort();
-            }
-            keep
-        });
-        for unit in desired {
-            if readers.contains_key(&unit.key()) {
-                continue;
-            }
-            let stream = self.orchestrator.output(&session.app, unit);
-            let task = tokio::spawn(record_output(
-                self.clone(),
-                session.clone(),
-                unit.key(),
-                stream,
-            ));
-            readers.insert(unit.key(), (unit.build.clone(), task));
-        }
-    }
-
-    fn stop_readers(&self) {
-        for (_, (_, task)) in self
-            .readers
-            .lock()
-            .expect("readers are never poisoned")
-            .drain()
-        {
-            task.abort();
-        }
-    }
-}
-
-/// The fields of a lifecycle row: `extra` and the build, `{"image": …}` or
-/// `{"files": {…}}`.
-fn with_build(build: &Build, mut extra: Value) -> Value {
-    if let (Some(object), Value::Object(fields)) = (extra.as_object_mut(), build.fields()) {
-        object.extend(fields);
-    }
-    extra
 }
 
 /// How many bytes a unit's reason may have in a report.
@@ -567,33 +456,6 @@ fn describe(build: &Build) -> String {
     }
 }
 
-/// Record a unit's lines, redacted, and the output events they match.
-async fn record_output<O: Orchestrator>(
-    runtime: Arc<Runtime<O>>,
-    session: Arc<Session>,
-    key: UnitKey,
-    mut stream: orchestrator::OutputStream,
-) {
-    while let Some(line) = stream.recv().await {
-        let Some(routing) = runtime.routing() else {
-            continue;
-        };
-        let origin = Runtime::<O>::origin(&routing, &key);
-        let text = redact::redact(&line.text, &routing.redact);
-        let log_id = session.recorder.output(&origin, line.stream.table(), &text);
-        // A unit's experiment decides which events apply.
-        for name in routing
-            .events(&key)
-            .map(|events| events.output(line.stream, &text))
-            .unwrap_or_default()
-        {
-            session
-                .recorder
-                .event(&origin, name, None, Source::Log(&log_id));
-        }
-    }
-}
-
 /// Report this instance every 10 seconds. The answer grants or renews the
 /// lease; the holder also reports what runs.
 async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>) {
@@ -601,10 +463,10 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>
     let mut dropped = 0;
     loop {
         let sent = Instant::now();
-        let now_dropped = session.recorder.dropped();
+        let now_dropped = session.counter.dropped();
         if now_dropped > dropped {
             eprintln!(
-                "[ssp] dropped {} rows because the buffer was full",
+                "[ssp] dropped the counts of {} visitors because memory was full",
                 now_dropped - dropped
             );
             dropped = now_dropped;
@@ -669,8 +531,6 @@ async fn serve<O: Orchestrator>(
         in_flight: std::sync::atomic::AtomicUsize::new(0),
         attempts: Mutex::default(),
         failures: Mutex::default(),
-        versions: Mutex::default(),
-        readers: Mutex::default(),
         noted: Mutex::default(),
     });
     let listener = tokio::net::TcpListener::bind(&common.listen)
@@ -686,11 +546,14 @@ async fn serve<O: Orchestrator>(
     let (stop, stopped) = tokio::sync::watch::channel(false);
     let server = tokio::spawn(server::serve(listener, runtime.clone(), stopped));
     let (fail, mut failed) = mpsc::channel(1);
-    tokio::spawn(begin(
+    let (last_counts, counting) = watch::channel(false);
+    let begun = tokio::spawn(begin(
         runtime.clone(),
         endpoint.to_owned(),
         common.token.clone(),
+        Duration::from_secs(common.counts_every.max(1)),
         fail,
+        counting,
     ));
     let outcome = tokio::select! {
         result = signal() => result,
@@ -703,27 +566,37 @@ async fn serve<O: Orchestrator>(
     while runtime.in_flight.load(Ordering::SeqCst) > 0 && draining.elapsed() < DRAIN_TIMEOUT {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    runtime.stop_readers();
+    // Send the last counts, for a short time at most.
+    let _ = last_counts.send(true);
+    if let Ok(Some(delivery)) = tokio::time::timeout(Duration::from_millis(100), begun)
+        .await
+        .map(Result::ok)
+        .map(Option::flatten)
+    {
+        let _ = tokio::time::timeout(LAST_COUNTS_TIMEOUT, delivery).await;
+    }
     orchestrator.shutdown().await;
-    // Give the last rows a moment to leave.
-    tokio::time::sleep(Duration::from_millis(1500)).await;
     outcome
 }
 
 /// The second phase: learn the app of the runtime token, then report, read
-/// the configuration, and orchestrate. Until then, every request goes to
-/// live. A refused token or app goes to `fail`, which stops the proxy.
+/// the configuration, orchestrate, and count. Until then, every request
+/// goes to live. A refused token or app goes to `fail`, which stops the
+/// proxy. Returns the task that sends the counts, which sends the last ones
+/// and ends when `stop` turns true.
 async fn begin<O: Orchestrator>(
     runtime: Arc<Runtime<O>>,
     endpoint: String,
     token: String,
+    counts_every: Duration,
     fail: mpsc::Sender<anyhow::Error>,
-) {
+    stop: watch::Receiver<bool>,
+) -> Option<tokio::task::JoinHandle<()>> {
     let remote = match connect(&endpoint, &token).await {
         Ok(remote) => remote,
         Err(error) => {
             let _ = fail.send(error).await;
-            return;
+            return None;
         }
     };
     let session = Arc::new(Session {
@@ -731,17 +604,19 @@ async fn begin<O: Orchestrator>(
             name: remote.app().to_owned(),
             remote: remote.clone(),
         },
-        recorder: Arc::new(Recorder::start(remote)),
+        counter: Arc::default(),
     });
     if runtime.session.set(session.clone()).is_err() {
-        return;
+        return None;
     }
     eprintln!(
         "[ssp] proxy {} serves the app {}",
         runtime.instance, session.app.name
     );
+    let delivery = tokio::spawn(session.counter.clone().deliver(remote, counts_every, stop));
     tokio::spawn(runtime.clone().poll(session.clone()));
     tokio::spawn(report(runtime, session));
+    Some(delivery)
 }
 
 #[cfg(unix)]

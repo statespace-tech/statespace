@@ -14,9 +14,7 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper_util::rt::TokioIo;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
 
-use super::{Line, Stream};
 use crate::image;
 
 /// Where the daemon listens.
@@ -229,120 +227,6 @@ impl Engine {
             )
             .await;
     }
-
-    /// Send each line of a container to `sender`, from `since` (Unix
-    /// seconds) or from its start, until the container stops.
-    pub async fn follow(
-        &self,
-        id: &str,
-        since: Option<i64>,
-        tty: bool,
-        sender: mpsc::Sender<Line>,
-    ) {
-        let mut path = format!(
-            "/containers/{}/logs?follow=1&stdout=1&stderr=1",
-            segment(id)
-        );
-        if let Some(since) = since {
-            path.push_str(&format!("&since={since}"));
-        }
-        let mut body = match self.send(Method::GET, &path, None, &[]).await {
-            Ok(response) if response.status().is_success() => response.into_body(),
-            _ => {
-                eprintln!("[ssp] could not follow the output of container {id}");
-                return;
-            }
-        };
-        let mut lines = Lines::new(tty);
-        while let Some(Ok(frame)) = body.frame().await {
-            let Ok(data) = frame.into_data() else {
-                continue;
-            };
-            for line in lines.push(&data) {
-                if sender.send(line).await.is_err() {
-                    return;
-                }
-            }
-        }
-        for line in lines.finish() {
-            let _ = sender.send(line).await;
-        }
-    }
-}
-
-/// Splits the log stream of a container into lines. Without a TTY, Docker
-/// sends frames: one byte for the stream, three zero bytes, the size as four
-/// bytes, then the data. With a TTY, it sends the output as it is.
-pub struct Lines {
-    tty: bool,
-    buffer: Vec<u8>,
-    partial: [Vec<u8>; 2],
-}
-
-impl Lines {
-    pub fn new(tty: bool) -> Self {
-        Self {
-            tty,
-            buffer: Vec::new(),
-            partial: [Vec::new(), Vec::new()],
-        }
-    }
-
-    pub fn push(&mut self, data: &[u8]) -> Vec<Line> {
-        let mut lines = Vec::new();
-        if self.tty {
-            self.split(0, data, &mut lines);
-            return lines;
-        }
-        self.buffer.extend_from_slice(data);
-        while self.buffer.len() >= 8 {
-            let size = u32::from_be_bytes([
-                self.buffer[4],
-                self.buffer[5],
-                self.buffer[6],
-                self.buffer[7],
-            ]) as usize;
-            if self.buffer.len() < 8 + size {
-                break;
-            }
-            let index = usize::from(self.buffer[0] == 2);
-            let payload: Vec<u8> = self.buffer.drain(..8 + size).skip(8).collect();
-            self.split(index, &payload, &mut lines);
-        }
-        lines
-    }
-
-    fn split(&mut self, index: usize, data: &[u8], lines: &mut Vec<Line>) {
-        let stream = if index == 1 {
-            Stream::Stderr
-        } else {
-            Stream::Stdout
-        };
-        for byte in data {
-            if *byte == b'\n' {
-                let text = String::from_utf8_lossy(&self.partial[index])
-                    .trim_end_matches('\r')
-                    .to_owned();
-                self.partial[index].clear();
-                lines.push(Line { stream, text });
-            } else {
-                self.partial[index].push(*byte);
-            }
-        }
-    }
-
-    /// The last lines, which ended without a newline.
-    pub fn finish(&mut self) -> Vec<Line> {
-        let mut lines = Vec::new();
-        for (index, stream) in [(0, Stream::Stdout), (1, Stream::Stderr)] {
-            if !self.partial[index].is_empty() {
-                let text = String::from_utf8_lossy(&self.partial[index]).into_owned();
-                self.partial[index].clear();
-                lines.push(Line { stream, text });
-            }
-        }
-        lines
-    }
 }
 
 /// An image name in a path: Docker takes its slashes as they are.
@@ -397,43 +281,6 @@ fn registry_of(repository: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splits_frames_into_lines_of_each_stream() {
-        let frame = |stream: u8, text: &str| {
-            let mut bytes = vec![stream, 0, 0, 0];
-            bytes.extend_from_slice(&(text.len() as u32).to_be_bytes());
-            bytes.extend_from_slice(text.as_bytes());
-            bytes
-        };
-        let mut data = frame(1, "hello\nwor");
-        data.extend(frame(2, "oops\r\n"));
-        data.extend(frame(1, "ld\n"));
-        let mut lines = Lines::new(false);
-        // A frame may arrive in pieces.
-        let mut got = lines.push(&data[..5]);
-        got.extend(lines.push(&data[5..]));
-        assert_eq!(
-            got,
-            [
-                Line {
-                    stream: Stream::Stdout,
-                    text: "hello".into()
-                },
-                Line {
-                    stream: Stream::Stderr,
-                    text: "oops".into()
-                },
-                Line {
-                    stream: Stream::Stdout,
-                    text: "world".into()
-                },
-            ]
-        );
-        let mut raw = Lines::new(true);
-        assert_eq!(raw.push(b"one\ntw").len(), 1);
-        assert_eq!(raw.finish()[0].text, "tw");
-    }
 
     #[test]
     fn finds_the_registry_of_a_repository() {

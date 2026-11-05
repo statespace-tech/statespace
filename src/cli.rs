@@ -334,6 +334,14 @@ pub struct ProxyArgs {
     /// Statespace which app the token is for.
     #[arg(long, env = "STATESPACE_TOKEN", hide_env_values = true)]
     pub token: String,
+    /// How often the proxy sends counts, in seconds. For tests.
+    #[arg(
+        long,
+        env = "STATESPACE_COUNTS_EVERY",
+        hide = true,
+        default_value_t = 60
+    )]
+    pub counts_every: u64,
 }
 
 #[derive(Subcommand)]
@@ -496,14 +504,6 @@ pub struct CloudRunArgs {
         default_value = "https://run.googleapis.com"
     )]
     pub run_api: String,
-    /// The Cloud Logging API. For tests.
-    #[arg(
-        long,
-        env = "STATESPACE_LOGGING_API",
-        hide = true,
-        default_value = "https://logging.googleapis.com"
-    )]
-    pub logging_api: String,
     /// The metadata server that gives credentials. For tests.
     #[arg(
         long,
@@ -560,9 +560,6 @@ pub struct FargateArgs {
     /// The EC2 API. For tests.
     #[arg(long, env = "AWS_ENDPOINT_URL_EC2", hide = true)]
     pub ec2_api: Option<String>,
-    /// The CloudWatch Logs API. For tests.
-    #[arg(long, env = "AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", hide = true)]
-    pub logs_api: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -603,14 +600,6 @@ pub struct FlyArgs {
         default_value = "https://api.machines.dev"
     )]
     pub machines_api: String,
-    /// The Fly.io API that serves logs. For tests.
-    #[arg(
-        long,
-        env = "STATESPACE_FLY_LOGS_API",
-        hide = true,
-        default_value = "https://api.fly.io"
-    )]
-    pub logs_api: String,
 }
 
 #[cfg(test)]

@@ -199,9 +199,14 @@ struct Statespace {
     polls: HashMap<String, usize>,
     /// The app's recent builds, for the file runtimes.
     builds: Vec<Value>,
-    /// What Statespace refused: reports that fail its checks, and builds
-    /// that it could never hold. `reports()` fails the test on any.
+    /// What Statespace refused: reports and counts that fail its checks,
+    /// and builds that it could never hold. `reports()` and `counts()` fail
+    /// the test on any.
     rejected: Vec<String>,
+    /// The UUIDs of the batches of counts that Statespace applied.
+    batches: HashSet<String>,
+    /// The entries of the applied batches, in order.
+    applied: Vec<Value>,
 }
 
 /// An experiment of `shop-prod`, as the API returns it.
@@ -222,12 +227,40 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
 }
 
 impl Statespace {
-    fn rows(&self, table: &str) -> Vec<Value> {
-        self.received
-            .iter()
-            .filter(|received| received.path == "/v1/events")
-            .flat_map(|batch| batch.body[table].as_array().cloned().unwrap_or_default())
-            .collect()
+    /// The counts that Statespace applied: one entry per visitor per batch.
+    fn counts(&self) -> Vec<Value> {
+        assert!(
+            self.rejected.is_empty(),
+            "Statespace refused: {:?}",
+            self.rejected
+        );
+        self.applied.clone()
+    }
+
+    /// The counts of one arm of an experiment, added up as Statespace adds
+    /// them: visitors (by subject hash), requests, errors, latency, events.
+    fn totals(&self, experiment: &str, arm: &str) -> Totals {
+        let mut totals = Totals::default();
+        for entry in self.counts() {
+            if entry["experiment"] != experiment || entry["arm"] != arm {
+                continue;
+            }
+            let subject = entry["subject"].as_str().unwrap().to_owned();
+            if entry["unavailable"] == true {
+                totals.unavailable.insert(subject);
+                continue;
+            }
+            totals.visitors.insert(subject);
+            totals.requests += entry["requests"].as_u64().unwrap();
+            totals.errors += entry["errors"].as_u64().unwrap();
+            for (bucket, count) in entry["latency"].as_array().unwrap().iter().enumerate() {
+                totals.latency[bucket] += count.as_u64().unwrap();
+            }
+            for (name, count) in entry["events"].as_object().unwrap() {
+                *totals.events.entry(name.clone()).or_default() += count.as_u64().unwrap();
+            }
+        }
+        totals
     }
 
     fn reports(&self) -> Vec<Value> {
@@ -242,6 +275,30 @@ impl Statespace {
             .map(|received| received.body.clone())
             .collect()
     }
+}
+
+/// The counts of one arm, added up.
+#[derive(Debug, Default)]
+struct Totals {
+    /// The subject hashes of the visitors that the arm served.
+    visitors: HashSet<String>,
+    /// The subject hashes of visitors whose arm was not ready.
+    unavailable: HashSet<String>,
+    requests: u64,
+    errors: u64,
+    latency: [u64; 11],
+    events: BTreeMap<String, u64>,
+}
+
+/// `hex(HMAC-SHA256(key = salt, message = subject))`, as the proxy sends a
+/// subject.
+fn subject_hash(salt: &str, subject: &str) -> String {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, salt.as_bytes());
+    ring::hmac::sign(&key, subject.as_bytes())
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 // The checks of Statespace, as the backend makes them, with its messages.
@@ -357,6 +414,193 @@ fn check_report(report: &Value) -> Result<(), (u16, String)> {
         }
     }
     Ok(())
+}
+
+/// `POST /v1/runtime/apps/{app}/counts`: the status and the error of a
+/// batch that Statespace refuses. `config` is the runtime config: a batch
+/// that counts a version that is not running gets 409, and one with an arm
+/// or an event that the version does not have gets 400.
+fn check_counts(batch: &Value, config: &Value) -> Result<(), (u16, String)> {
+    let shape = |error: String| {
+        (
+            422,
+            format!("Failed to deserialize the JSON body into the target type: {error}"),
+        )
+    };
+    let bad = |error: String| Err((400, error));
+    let Some(fields) = batch.as_object() else {
+        return Err(shape("a batch is an object".into()));
+    };
+    if let Some(key) = fields
+        .keys()
+        .find(|key| !["batch", "counts"].contains(&key.as_str()))
+    {
+        return Err(shape(format!("unknown field `{key}`")));
+    }
+    if !batch["batch"].as_str().is_some_and(is_uuid) {
+        return bad("batch must be a UUID".into());
+    }
+    let counts = batch["counts"]
+        .as_array()
+        .ok_or_else(|| shape("missing field `counts`".into()))?;
+    if counts.is_empty() || counts.len() > 5000 {
+        return bad("a batch must have 1 to 5000 counts".into());
+    }
+    let keys = [
+        "experiment",
+        "version",
+        "arm",
+        "subject",
+        "first_at",
+        "last_at",
+        "unavailable",
+        "requests",
+        "errors",
+        "latency",
+        "events",
+    ];
+    let mut not_running = Vec::new();
+    for entry in counts {
+        let Some(fields) = entry.as_object() else {
+            return Err(shape("a count is an object".into()));
+        };
+        if let Some(key) = fields.keys().find(|key| !keys.contains(&key.as_str())) {
+            return Err(shape(format!("unknown field `{key}`")));
+        }
+        let experiment = entry["experiment"].as_str().unwrap_or_default();
+        if !is_experiment_name(experiment) {
+            return bad("a count names its experiment".into());
+        }
+        let Some(version) = entry["version"].as_u64().filter(|version| *version > 0) else {
+            return bad("version must be 1 to 2147483647".into());
+        };
+        let arm = entry["arm"].as_str().unwrap_or_default();
+        if !is_commit(arm) {
+            return bad("arm must be a full commit".into());
+        }
+        if !entry["subject"]
+            .as_str()
+            .is_some_and(|subject| is_lower_hex(subject, 64))
+        {
+            return bad(
+                "subject must be 64 lowercase hexadecimal digits: the HMAC of the subject".into(),
+            );
+        }
+        let time = |key: &str| {
+            entry[key]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
+                .ok_or((400, format!("{key} must be RFC 3339")))
+        };
+        if time("first_at")? > time("last_at")? {
+            return bad("first_at must not be after last_at".into());
+        }
+        let number = |value: &Value| value.as_u64().ok_or_else(|| shape("invalid type".into()));
+        let requests = number(&entry["requests"])?;
+        let errors = number(&entry["errors"])?;
+        let latency = entry["latency"]
+            .as_array()
+            .ok_or_else(|| shape("missing field `latency`".into()))?;
+        if latency.len() != 11 {
+            return bad("latency must have 11 buckets".into());
+        }
+        let mut sum = 0;
+        for bucket in latency {
+            sum += number(bucket)?;
+        }
+        if errors > requests {
+            return bad("errors must be at most requests".into());
+        }
+        if sum != requests {
+            return bad("the latency buckets must add up to requests".into());
+        }
+        let events = entry["events"]
+            .as_object()
+            .ok_or_else(|| shape("events: invalid type".into()))?;
+        for count in events.values() {
+            number(count)?;
+        }
+        if entry["unavailable"] == true && (requests > 0 || !events.is_empty()) {
+            return bad("a visitor whose arm was not ready has counts of 0".into());
+        }
+        let running = config["experiments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|running| {
+                running["name"] == experiment
+                    && running["version"] == version
+                    && running["state"] == "running"
+            });
+        let Some(running) = running else {
+            not_running.push(format!("{experiment} v{version}"));
+            continue;
+        };
+        if !running["arms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|known| known["commit"] == arm)
+        {
+            return bad(format!(
+                "{} is not an arm of {experiment} v{version}",
+                &arm[..7]
+            ));
+        }
+        let names: Vec<&str> = running["events"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|event| event["name"].as_str())
+            .collect();
+        if let Some(name) = events.keys().find(|name| !names.contains(&name.as_str())) {
+            return bad(format!("{experiment} v{version} has no event {name}"));
+        }
+    }
+    if !not_running.is_empty() {
+        not_running.sort();
+        not_running.dedup();
+        return Err((
+            409,
+            format!(
+                "the batch counts versions that are not running: {}. Drop their counts",
+                not_running.join(", ")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The versions of a batch that do not run, as a 409 names them.
+fn not_running(batch: &Value, config: &Value) -> Vec<Value> {
+    let mut versions: Vec<Value> = batch["counts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            !config["experiments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|running| {
+                    running["name"] == entry["experiment"]
+                        && running["version"] == entry["version"]
+                        && running["state"] == "running"
+                })
+        })
+        .map(|entry| json!({"experiment": entry["experiment"], "version": entry["version"]}))
+        .collect();
+    versions.dedup();
+    versions
+}
+
+/// A UUID: 8-4-4-4-12 hexadecimal digits.
+fn is_uuid(text: &str) -> bool {
+    let parts: Vec<&str> = text.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(part, length)| {
+            part.len() == length && part.bytes().all(|b| b.is_ascii_hexdigit())
+        })
 }
 
 /// Why Statespace could never hold `build`, a commit with its image or
@@ -558,6 +802,85 @@ fn stand_in_refuses_what_statespace_refuses() {
         check_report(&json!({"instance": "i", "extra": 1})).map_err(|(status, _)| status),
         Err(422)
     );
+    // Counts: a batch of one running version, its arms, and its events.
+    let config = json!({"experiments": [
+        {"name": "hero", "version": 4, "state": "running",
+         "events": [{"name": "signup", "source": "request", "match": "true"}],
+         "arms": [{"commit": LIVE}, {"commit": ARM}]},
+        {"name": "pricing", "version": 2, "state": "starting", "events": [], "arms": []},
+    ]});
+    let entry = || {
+        json!({"experiment": "hero", "version": 4, "arm": ARM,
+               "subject": subject_hash("s", "v_1"),
+               "first_at": "2026-11-04T10:00:05Z", "last_at": "2026-11-04T10:00:58Z",
+               "unavailable": false, "requests": 3, "errors": 1,
+               "latency": [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0], "events": {"signup": 1}})
+    };
+    let batch = |entries: Vec<Value>| json!({"batch": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "counts": entries});
+    assert_eq!(check_counts(&batch(vec![entry()]), &config), Ok(()));
+    assert_eq!(
+        subject_hash("s", "v_1"),
+        "cf22ab595d8c337278d4556c963a4cf3ad5d2323326a9c051dcb17e298f7d89b"
+    );
+    let refused = |change: &dyn Fn(&mut Value), status: u16, error: &str| {
+        let mut entry = entry();
+        change(&mut entry);
+        assert_eq!(
+            check_counts(&batch(vec![entry]), &config),
+            Err((status, error.to_owned()))
+        );
+    };
+    refused(
+        &|entry| entry["subject"] = json!("v_1"),
+        400,
+        "subject must be 64 lowercase hexadecimal digits: the HMAC of the subject",
+    );
+    refused(
+        &|entry| entry["latency"] = json!([3]),
+        400,
+        "latency must have 11 buckets",
+    );
+    refused(
+        &|entry| entry["requests"] = json!(4),
+        400,
+        "the latency buckets must add up to requests",
+    );
+    refused(
+        &|entry| entry["events"] = json!({"purchase": 1}),
+        400,
+        "hero v4 has no event purchase",
+    );
+    refused(
+        &|entry| entry["arm"] = json!(LANDING),
+        400,
+        "b2c3d4e is not an arm of hero v4",
+    );
+    refused(
+        &|entry| entry["unavailable"] = json!(true),
+        400,
+        "a visitor whose arm was not ready has counts of 0",
+    );
+    refused(
+        &|entry| entry["version"] = json!(3),
+        409,
+        "the batch counts versions that are not running: hero v3. Drop their counts",
+    );
+    refused(
+        &|entry| {
+            entry["experiment"] = json!("pricing");
+            entry["version"] = json!(2);
+        },
+        409,
+        "the batch counts versions that are not running: pricing v2. Drop their counts",
+    );
+    assert_eq!(
+        check_counts(&json!({"batch": "1", "counts": [entry()]}), &config),
+        Err((400, "batch must be a UUID".to_owned()))
+    );
+    assert_eq!(
+        check_counts(&batch(vec![]), &config),
+        Err((400, "a batch must have 1 to 5000 counts".to_owned()))
+    );
     assert!(check_build(&json!({"commit": LIVE, "image": digest('1')})).is_ok());
     assert!(check_build(&json!({"commit": LIVE, "image": "ghcr.io/acme/shop:1"})).is_err());
     assert!(
@@ -625,7 +948,39 @@ fn statespace_on(port: u16, state: Arc<Mutex<Statespace>>) -> String {
                     json_answer(status, &json!({"error": error}))
                 }
             },
-            ("POST", "/v1/events") => json_answer(202, &json!({"accepted": true})),
+            ("POST", path)
+                if state.config["app"]
+                    .as_str()
+                    .is_some_and(|app| path == format!("/v1/runtime/apps/{app}/counts")) =>
+            {
+                let id = received.body["batch"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                match check_counts(&received.body, &state.config) {
+                    // A batch applies once; the same UUID again changes nothing.
+                    Ok(()) if state.batches.contains(&id) => {
+                        json_answer(200, &json!({"batch": id, "applied": false}))
+                    }
+                    Ok(()) => {
+                        state.batches.insert(id.clone());
+                        let entries = received.body["counts"].as_array().cloned().unwrap();
+                        state.applied.extend(entries);
+                        json_answer(200, &json!({"batch": id, "applied": true}))
+                    }
+                    // The proxy drops counts of a version that does not run.
+                    Err((409, error)) => json_answer(
+                        409,
+                        &json!({"error": error, "not_running": not_running(&received.body, &state.config)}),
+                    ),
+                    Err((status, error)) => {
+                        state
+                            .rejected
+                            .push(format!("counts {}: {error}", received.body));
+                        json_answer(status, &json!({"error": error}))
+                    }
+                }
+            }
             ("GET", "/v1/whoami") => json_answer(
                 200,
                 &json!({"person": {"login": "octo"}, "kind": "person", "workspaces": [{"login": "acme"}]}),
@@ -1553,7 +1908,7 @@ fn proxies_serve_live_until_statespace_answers() {
     for _ in 0..3 {
         let body = get(&arm_subject).expect("live answers");
         assert_eq!(body["name"], "live");
-        assert!(body["headers"].get("x-statespace-arm").is_none());
+        assert!(body["headers"].get("ssp-arm").is_none());
     }
     std::thread::sleep(Duration::from_secs(3));
     assert_eq!(get(&arm_subject).unwrap()["name"], "live");
@@ -1597,8 +1952,6 @@ struct Google {
     /// The IAM policy that the proxy set on each unit's service.
     policies: HashMap<String, Value>,
     id_tokens: Vec<String>,
-    /// The filter of each query of Cloud Logging.
-    log_queries: Vec<String>,
 }
 
 const SERVICE: &str = "projects/acme/locations/us-east1/services/shop";
@@ -1707,38 +2060,6 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                     None => json_answer(404, &json!({"error": {"message": "no revision"}})),
                 }
             }
-            ("POST", "/v2/entries:list") => {
-                assert_eq!(received.headers["authorization"], "Bearer access-1");
-                let filter = received.body["filter"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned();
-                google.log_queries.push(filter.clone());
-                // The first query is too many, as Cloud Logging says when the
-                // project reads more than its quota.
-                if google.log_queries.len() == 1 {
-                    return json_answer(429, &json!({"error": {"message": "quota"}}));
-                }
-                let log =
-                    |stream: &str| format!("projects/acme/logs/run.googleapis.com%2F{stream}");
-                let entries: Vec<Value> = filter
-                    .split("service_name=\"")
-                    .skip(1)
-                    .filter_map(|rest| rest.split('"').next())
-                    .flat_map(|service| {
-                        let resource = json!({"labels": {"service_name": service}});
-                        [
-                            json!({"insertId": format!("{service}-1"), "timestamp": "2099-01-01T00:00:00Z",
-                                   "resource": resource, "logName": log("stdout"),
-                                   "jsonPayload": {"event": "signup", "card": "4242424242424242"}}),
-                            json!({"insertId": format!("{service}-2"), "timestamp": "2099-01-01T00:00:01Z",
-                                   "resource": resource, "logName": log("stderr"),
-                                   "textPayload": "FATAL out of memory"}),
-                        ]
-                    })
-                    .collect();
-                json_answer(200, &json!({"entries": entries}))
-            }
             _ => json_answer(
                 404,
                 &json!({"error": {"message": format!("no route {} {path}", received.method)}}),
@@ -1797,7 +2118,6 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
         changes: Vec::new(),
         policies: HashMap::new(),
         id_tokens: Vec::new(),
-        log_queries: Vec::new(),
     }));
     let google_host = google(google_state.clone());
     let state = Arc::new(Mutex::new(Statespace {
@@ -1806,18 +2126,16 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
             "app": "shop-prod",
             "salt": "salt-1",
             "settings_hash": "settings-1",
-            "settings": {"redact": ["\\b\\d{16}\\b"]},
+            "settings": {},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
-                 "subject": null, "eligibility": null,
+                 "subject": "request.cookies.ssp_sid", "eligibility": null,
                  "events": [
                      {"name": "checkout", "source": "request",
-                      "match": "request.path == \"/checkout\" && request.status == 200"},
-                     {"name": "signup", "source": "stdout",
-                      "match": "stdout.json.event == \"signup\""},
-                     {"name": "fatal", "source": "stderr",
-                      "match": "stderr.text.contains(\"FATAL\")"},
+                      "match": "request.path == \"/checkout\" && response.status == 200"},
+                     {"name": "json", "source": "request",
+                      "match": "response.headers[\"content-type\"] == \"application/json\""},
                  ],
                  "arms": [
                      {"commit": LIVE, "image": digest('1'), "ranges": [[0.0, 0.4]]},
@@ -1847,7 +2165,7 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("STATESPACE_CLOUDRUN_API", format!("http://{google_host}"))
-        .env("STATESPACE_LOGGING_API", format!("http://{google_host}"))
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .env("GCE_METADATA_HOST", &google_host)
         .args(["proxy", "cloudrun"])
         .args(["--service", "shop", "--region", "us-east1"]);
@@ -1863,7 +2181,7 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
 }
 
 #[test]
-fn cloudrun_proxies_run_units_as_services_and_record_them() {
+fn cloudrun_proxies_run_units_as_services_and_count_them() {
     let test = cloudrun_proxy(true);
     let reference_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
@@ -1876,7 +2194,8 @@ fn cloudrun_proxies_run_units_as_services_and_record_them() {
             path,
             &[
                 ("cookie", &cookie),
-                ("x-statespace-arm", "spoofed"),
+                ("ssp-arm", "spoofed"),
+                ("ssp-experiment", "spoofed"),
                 ("x-forwarded-proto", "https"),
                 ("authorization", "Bearer the-app's-own"),
                 // us-landing claims this user, but it is only starting.
@@ -1926,10 +2245,17 @@ fn cloudrun_proxies_run_units_as_services_and_record_them() {
         assert_eq!(
             arm["template"],
             json!({"serviceAccount": "shop@acme.iam.gserviceaccount.com",
-                   "containers": [{"name": "shop", "image": digest('2'),
-                                   "ports": [{"containerPort": 8080}],
-                                   "env": [{"name": "MODE", "value": "prod"}]}]}),
-            "a copy of live's template, without the revision name"
+            "containers": [{"name": "shop", "image": digest('2'),
+                            "ports": [{"containerPort": 8080}],
+                            "env": [
+                                {"name": "MODE", "value": "prod"},
+                                {"name": "SSP_EXPERIMENT", "value": "checkout"},
+                                {"name": "SSP_ARM", "value": ARM},
+                                {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": format!(
+                                    "statespace.experiment=checkout,statespace.arm={ARM},\
+                                     service.version={ARM}")},
+                            ]}]}),
+            "a copy of live's template with the arm's labels, without the revision name"
         );
         assert!(arm.get("traffic").is_none());
         assert_eq!(
@@ -1945,14 +2271,14 @@ fn cloudrun_proxies_run_units_as_services_and_record_them() {
         }
     }
 
-    // The arm gets the experiment and arm headers and a Google ID token for
-    // the service's URL; the app keeps its own Authorization header.
+    // The arm gets the experiment and arm headers, not the client's, and a
+    // Google ID token for the service's URL; the app keeps its own
+    // Authorization header.
     let (arm_body, arm_response) = get(&arm_subject, "/checkout").unwrap();
     let headers = &arm_body["headers"];
-    assert_eq!(headers["x-statespace-experiment"], "checkout");
-    assert_eq!(headers["x-statespace-arm"], ARM);
-    assert_eq!(headers["x-statespace-subject"], arm_subject.as_str());
-    assert!(headers.get("x-statespace-side").is_none());
+    assert_eq!(headers["ssp-experiment"], "checkout");
+    assert_eq!(headers["ssp-arm"], ARM);
+    assert!(headers.get("x-statespace-subject").is_none());
     assert_eq!(headers["authorization"], "Bearer the-app's-own");
     // The ID token is for the URL of the unit's own service.
     let arm_url = test.google.lock().unwrap().arm.clone();
@@ -1961,184 +2287,98 @@ fn cloudrun_proxies_run_units_as_services_and_record_them() {
         format!("Bearer id-for-{arm_url}")
     );
     assert_eq!(arm_response["cache-control"], "private, max-age=60");
+    // The browser of an assigned visitor gets the readable ssp_arms cookie.
+    let cookies_of = |headers: &reqwest::header::HeaderMap| -> Vec<String> {
+        headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|value| value.to_str().unwrap().to_owned())
+            .collect()
+    };
+    assert!(
+        cookies_of(&arm_response).contains(&format!(
+            "ssp_arms=checkout:{ARM}; Path=/; Max-Age=7776000; SameSite=Lax; Secure"
+        )),
+        "{:?}",
+        cookies_of(&arm_response)
+    );
     let (reference_body, _) = get(&reference_subject, "/").unwrap();
-    assert_eq!(reference_body["headers"]["x-statespace-arm"], LIVE);
+    assert_eq!(reference_body["headers"]["ssp-arm"], LIVE);
 
-    // Live is untouched: no arm, no private cache, no recording. The
-    // starting experiment takes no request.
+    // Live is untouched: no arm, no private cache, no counts. The starting
+    // experiment takes no request.
     let (live_body, live_response) = get(&live_subject, "/").unwrap();
     assert_eq!(live_body["name"], "live");
-    assert!(live_body["headers"].get("x-statespace-arm").is_none());
-    assert!(
-        live_body["headers"]
-            .get("x-statespace-experiment")
-            .is_none()
-    );
+    assert!(live_body["headers"].get("ssp-arm").is_none());
+    assert!(live_body["headers"].get("ssp-experiment").is_none());
+    assert!(live_body["headers"].get("x-statespace-subject").is_none());
     assert_eq!(live_response["cache-control"], "public, max-age=60");
-    assert_eq!(
-        live_body["headers"]["x-statespace-subject"],
-        live_subject.as_str()
-    );
 
     // While checkout uses the visitor cookie, every response renews it, and
     // a new visitor gets one.
-    let cookies = live_response
-        .get_all("set-cookie")
-        .iter()
-        .map(|value| value.to_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
     assert_eq!(
-        cookies,
+        cookies_of(&live_response),
         [format!(
             "ssp_sid={live_subject}; Path=/; Max-Age=7776000; HttpOnly; Secure; SameSite=None; Partitioned"
         )]
     );
     let fresh = send(test.port, "GET", "/", &[]).unwrap();
-    let cookie = set_cookies(&fresh).pop().unwrap();
+    // The new visitor can be in an arm: then ssp_arms comes after ssp_sid.
+    let cookie = set_cookies(&fresh).into_iter().next().unwrap();
     assert!(
         cookie.starts_with("ssp_sid=sid_")
             && cookie.ends_with("; Path=/; Max-Age=7776000; HttpOnly; SameSite=Lax"),
         "{cookie}"
     );
+    // A visitor in no arm loses an ssp_arms cookie.
+    let stale = format!("ssp_sid={live_subject}; ssp_arms=checkout:{ARM}");
+    let response = send(test.port, "GET", "/", &[("cookie", stale.as_str())]).unwrap();
+    assert!(
+        set_cookies(&response).contains(&"ssp_arms=; Path=/; Max-Age=0; SameSite=Lax".to_owned()),
+        "{:?}",
+        set_cookies(&response)
+    );
 
-    // Rows arrive for the units only, with the agreed fields.
-    wait_until(30, "rows of every table", || {
+    // Counts arrive for the arms only: per visitor, with the subject hashed
+    // with the app's salt, and the events that matched.
+    let hash = |subject: &str| subject_hash("salt-1", subject);
+    wait_until(30, "the counts of both arms", || {
         let state = test.statespace.lock().unwrap();
-        [
-            "runs",
-            "requests",
-            "stdout",
-            "stderr",
-            "events",
-            "lifecycle",
-        ]
-        .iter()
-        .all(|table| !state.rows(table).is_empty())
-            && state
-                .rows("events")
-                .iter()
-                .any(|row| row["name"] == "fatal")
-            && state
-                .rows("events")
-                .iter()
-                .any(|row| row["name"] == "checkout")
+        state.totals("checkout", ARM).events.get("checkout") == Some(&1)
+            && !state.totals("checkout", LIVE).visitors.is_empty()
     });
-
-    // One query of Cloud Logging reads the output of all three units by the
-    // names of their services. The
-    // first answer is 429: the proxy waits as asked and loses no line. The
-    // stand-in gives the same lines to each query, and each line arrives
-    // once.
-    wait_until(30, "the output of every unit", || {
-        test.statespace.lock().unwrap().rows("stdout").len() >= 3
-    });
-    std::thread::sleep(Duration::from_secs(12));
-    {
-        let queries = test.google.lock().unwrap().log_queries.clone();
-        assert!(
-            queries
-                .iter()
-                .any(|filter| filter.matches("service_name=").count() == 3),
-            "{queries:?}"
-        );
-        let state = test.statespace.lock().unwrap();
-        for table in ["stdout", "stderr"] {
-            let mut units: Vec<String> = state
-                .rows(table)
-                .iter()
-                .map(|row| format!("{}:{}", row["experiment"], row["arm"]))
-                .collect();
-            units.sort();
-            let all = units.len();
-            units.dedup();
-            assert_eq!((all, units.len()), (3, 3), "{table}: {units:?}");
-        }
-    }
     let state = test.statespace.lock().unwrap();
-    let runs = state.rows("runs");
-    assert!(runs.iter().any(|run| run["experiment"] == "checkout"
-        && run["arm"] == LIVE
-        && run["version"] == 3
-        && run["subject"] == reference_subject.as_str()
-        && run["reason"] == "assigned"));
-    assert!(runs.iter().any(|run| run["arm"] == ARM));
+    let arm = state.totals("checkout", ARM);
+    // The new visitor above may be in an arm too.
+    assert!(arm.visitors.contains(&hash(&arm_subject)), "{arm:?}");
+    assert!(arm.visitors.len() <= 2, "{arm:?}");
+    assert!(arm.requests >= 2, "{arm:?}");
+    assert_eq!(arm.latency.iter().sum::<u64>(), arm.requests);
+    assert_eq!(arm.errors, 0);
+    assert_eq!(arm.events["json"], arm.requests, "{arm:?}");
+    let reference = state.totals("checkout", LIVE);
+    assert!(reference.visitors.contains(&hash(&reference_subject)));
+    assert!(!reference.events.contains_key("checkout"));
+    let counts = state.counts();
+    // While the arms started, their visitors got live, as unavailable.
     assert!(
-        runs.iter()
-            .all(|run| run["subject"] != live_subject.as_str() && run.get("side").is_none())
-    );
-    let requests = state.rows("requests");
-    assert!(requests.iter().all(|row| row["experiment"] == "checkout"));
-    let checkout = requests
-        .iter()
-        .find(|row| row["path"] == "/checkout")
-        .unwrap();
-    assert_eq!(checkout["status"], 200);
-    assert_eq!(checkout["override"], false);
-    assert_eq!(checkout["subject"], arm_subject.as_str());
-    assert_eq!(
-        (&checkout["arm"], &checkout["version"]),
-        (&json!(ARM), &json!(3))
-    );
-    assert!(
-        checkout["ms"].as_f64().is_some()
-            && checkout["id"].is_string()
-            && checkout["timestamp"].is_string()
-    );
-    let events = state.rows("events");
-    let event = events.iter().find(|row| row["name"] == "checkout").unwrap();
-    assert_eq!(
-        (&event["experiment"], &event["arm"], &event["subject"]),
-        (&json!("checkout"), &json!(ARM), &json!(arm_subject))
-    );
-    assert!(
-        events
+        counts
             .iter()
-            .any(|row| row["name"] == "signup" && row["subject"].is_null())
+            .all(|entry| entry["experiment"] == "checkout" && entry["version"] == 3)
     );
-    // us-landing has no events of its own here, so its output matches none.
-    assert!(events.iter().all(|row| row["experiment"] == "checkout"));
-    // Output is redacted before it leaves.
-    let stdout = state.rows("stdout");
-    assert!(
-        stdout
-            .iter()
-            .all(|row| !row["text"].as_str().unwrap().contains("4242424242424242"))
-    );
-    assert!(
-        stdout
-            .iter()
-            .any(|row| row["text"].as_str().unwrap().contains("[redacted]"))
-    );
-    assert!(
-        state
-            .rows("stderr")
-            .iter()
-            .any(|row| row["text"] == "FATAL out of memory")
-    );
-    assert!(
-        state
-            .rows("lifecycle")
-            .iter()
-            .any(|row| row["event"] == "started" && row["experiment"] == "us-landing")
-    );
-    // Batches carry every table.
-    let batch = state
-        .received
-        .iter()
-        .find(|received| received.path == "/v1/events")
-        .unwrap();
-    for table in [
-        "app",
-        "runs",
-        "requests",
-        "stdout",
-        "stderr",
-        "events",
-        "lifecycle",
-    ] {
-        assert!(batch.body.get(table).is_some(), "{table}");
+    // Live is never counted, and no raw subject leaves the proxy.
+    let sent = serde_json::to_string(&counts).unwrap();
+    assert!(!sent.contains(&hash(&live_subject)));
+    for subject in [&arm_subject, &reference_subject, &live_subject] {
+        assert!(!sent.contains(subject.as_str()), "{subject}");
     }
-    assert_eq!(batch.body["app"], "shop-prod");
+    // No rows and no logs: only counts.
+    assert!(
+        state
+            .received
+            .iter()
+            .all(|received| received.path != "/v1/events")
+    );
     drop(state);
     // Reports name the orchestrator and live image; the holder adds each
     // unit with its experiment.
@@ -2200,6 +2440,27 @@ fn cloudrun_proxies_without_the_lease_route_but_do_not_orchestrate() {
     });
     let response = send(test.port, "GET", "/", &[]).unwrap();
     assert_eq!(response.json::<Value>().unwrap()["name"], "live");
+    // No instance runs the arm, so its visitors get live, without the
+    // ssp_arms cookie, and count as unavailable.
+    let arm_subject = subject_in(0.4, 0.8);
+    let cookie = format!("ssp_sid={arm_subject}");
+    let response = send(test.port, "GET", "/", &[("cookie", cookie.as_str())]).unwrap();
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .all(|cookie| !cookie.starts_with("ssp_arms="))
+    );
+    assert_eq!(response.json::<Value>().unwrap()["name"], "live");
+    wait_until(30, "an unavailable visitor", || {
+        test.statespace
+            .lock()
+            .unwrap()
+            .totals("checkout", ARM)
+            .unavailable
+            .contains(&subject_hash("salt-1", &arm_subject))
+    });
+    let arm = test.statespace.lock().unwrap().totals("checkout", ARM);
+    assert!(arm.visitors.is_empty() && arm.requests == 0, "{arm:?}");
     std::thread::sleep(Duration::from_secs(3));
     assert!(test.google.lock().unwrap().changes.is_empty());
     let state = test.statespace.lock().unwrap();
@@ -2237,9 +2498,15 @@ fn overrides_name_an_experiment_and_a_commit() {
             .iter()
             .all(|cookie| !cookie.starts_with("ssp="))
     );
+    // An override is not an assignment: no ssp_arms cookie.
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .all(|cookie| !cookie.starts_with("ssp_arms="))
+    );
     let body: Value = response.json().unwrap();
     assert_eq!(body["name"], "arm");
-    assert_eq!(body["headers"]["x-statespace-experiment"], "checkout");
+    assert_eq!(body["headers"]["ssp-experiment"], "checkout");
     assert!(body["headers"].get("ssp").is_none());
 
     // A browser's parameter sets the cookie and returns to the clean URL.
@@ -2292,22 +2559,23 @@ fn overrides_name_an_experiment_and_a_commit() {
             .any(|cookie| cookie.starts_with("ssp=; "))
     );
 
-    wait_until(30, "an override run and request", || {
-        let state = test.statespace.lock().unwrap();
-        state.rows("runs").iter().any(|run| {
-            run["reason"] == "override"
-                && run["experiment"] == "checkout"
-                && run["subject"] == live_subject.as_str()
-        }) && state
-            .rows("requests")
+    // Overrides are never counted. The arm served this visitor several
+    // times; after a few sends, Statespace has no count of them.
+    std::thread::sleep(Duration::from_secs(3));
+    let state = test.statespace.lock().unwrap();
+    let hash = subject_hash("salt-1", &live_subject);
+    assert!(
+        state
+            .counts()
             .iter()
-            .any(|row| row["override"] == true)
-    });
+            .all(|entry| entry["subject"] != hash.as_str()),
+        "{:?}",
+        state.counts()
+    );
 }
 
 // ---------------------------------------------------------------------------
-// The proxy on Fly.io, against a stand-in for the Machines API and the logs
-// API.
+// The proxy on Fly.io, against a stand-in for the Machines API.
 
 /// The Machines of the Fly.io app `shop`.
 struct FlyApi {
@@ -2351,7 +2619,7 @@ fn fly_api(state: Arc<Mutex<FlyApi>>) -> String {
                     .map(|(_, digest)| digest)
                     .unwrap_or_default();
                 // The starting experiment's unit fails its health check.
-                let status = if config["metadata"]["statespace.com/experiment"] == "us-landing" {
+                let status = if config["metadata"]["statespace_experiment"] == "us-landing" {
                     json!({"name": "service-0-0", "status": "critical",
                            "output": "connection refused"})
                 } else {
@@ -2380,33 +2648,6 @@ fn fly_api(state: Arc<Mutex<FlyApi>>) -> String {
                     }
                 }
                 json_answer(200, &json!({"ok": true}))
-            }
-            ("GET", "/api/v1/apps/shop/logs") => {
-                // One page of lines for every unit, then nothing new.
-                if received.query.contains("next_token=done") {
-                    return json_answer(200, &json!({"data": [], "meta": {"next_token": "done"}}));
-                }
-                let mut data = Vec::new();
-                for machine in &fly.machines {
-                    let id = machine["id"].as_str().unwrap();
-                    if !id.starts_with("unit") {
-                        continue;
-                    }
-                    let entry = |provider: &str, message: &str| {
-                        json!({"id": format!("{id}-{provider}"), "type": "logs", "attributes": {
-                            "timestamp": "2099-01-01T00:00:00Z", "message": message,
-                            "level": "info", "instance": id, "region": "iad",
-                            "meta": {"instance": id, "region": "iad",
-                                     "event": {"provider": provider}},
-                        }})
-                    };
-                    data.push(entry("runner", "Pulling container image"));
-                    data.push(entry(
-                        "app",
-                        r#"{"event": "visit", "card": "4242424242424242"}"#,
-                    ));
-                }
-                json_answer(200, &json!({"data": data, "meta": {"next_token": "done"}}))
             }
             _ => json_answer(404, &json!({"error": format!("no route {path}")})),
         }
@@ -2461,13 +2702,13 @@ fn fly_proxies_run_units_as_machines_without_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {"redact": ["\\b\\d{16}\\b"]},
+            "settings": {},
             "live": {"commit": LIVE, "image": digest('1')},
             "experiments": [
                 {"name": "checkout", "version": 3, "state": "running",
-                 "subject": null, "eligibility": null,
-                 "events": [{"name": "visit", "source": "stdout",
-                             "match": "stdout.json.event == \"visit\""}],
+                 "subject": "request.cookies.ssp_sid", "eligibility": null,
+                 "events": [{"name": "visit", "source": "request",
+                             "match": "request.path == \"/checkout\" && response.status == 200"}],
                  "arms": [
                      {"commit": LIVE, "image": digest('1'), "ranges": [[0.0, 0.4]]},
                      {"commit": ARM, "image": digest('2'), "ranges": [[0.4, 0.8]]},
@@ -2490,7 +2731,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("FLY_API_TOKEN", FLY_TOKEN)
         .env("STATESPACE_FLY_API", &fly_url)
-        .env("STATESPACE_FLY_LOGS_API", &fly_url)
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .args(["proxy", "fly", "--fly-app", "shop"])
         .args(["--live-url", &format!("http://127.0.0.1:{live}")]);
     let (_proxy, port) = spawn_proxy(command);
@@ -2505,26 +2746,24 @@ fn fly_proxies_run_units_as_machines_without_services() {
             "/checkout",
             &[
                 ("cookie", &format!("ssp_sid={subject}")),
-                ("x-statespace-arm", "spoofed"),
+                ("ssp-arm", "spoofed"),
             ],
         )?
         .json()
         .ok()
     };
     wait_until(60, "both arms of checkout serve", || {
-        get(&arm_subject).is_some_and(|body| {
-            body["name"] == "unit" && body["headers"]["x-statespace-arm"] == ARM
-        }) && get(&reference_subject).is_some_and(|body| {
-            body["name"] == "unit" && body["headers"]["x-statespace-arm"] == LIVE
-        })
+        get(&arm_subject)
+            .is_some_and(|body| body["name"] == "unit" && body["headers"]["ssp-arm"] == ARM)
+            && get(&reference_subject)
+                .is_some_and(|body| body["name"] == "unit" && body["headers"]["ssp-arm"] == LIVE)
     });
     let arm = get(&arm_subject).unwrap();
-    assert_eq!(arm["headers"]["x-statespace-experiment"], "checkout");
-    assert_eq!(arm["headers"]["x-statespace-subject"], arm_subject.as_str());
+    assert_eq!(arm["headers"]["ssp-experiment"], "checkout");
     // Live gets the rest, without an arm.
     let body = get(&live_subject).unwrap();
     assert_eq!(body["name"], "live");
-    assert!(body["headers"].get("x-statespace-arm").is_none());
+    assert!(body["headers"].get("ssp-arm").is_none());
 
     // One Machine for each unit, also for the starting experiment: a copy
     // of live with the unit's image, without services, mounts, deploy
@@ -2547,7 +2786,12 @@ fn fly_proxies_run_units_as_machines_without_services() {
     let config = &arm_machine["config"];
     assert_eq!(config["image"], digest('2'));
     assert_eq!(config["guest"]["memory_mb"], 512);
-    assert_eq!(config["env"], json!({"MODE": "prod"}));
+    assert_eq!(
+        config["env"],
+        json!({"MODE": "prod", "SSP_EXPERIMENT": "checkout", "SSP_ARM": ARM,
+               "OTEL_RESOURCE_ATTRIBUTES": format!(
+                   "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")})
+    );
     assert!(config.get("services").is_none() && config.get("mounts").is_none());
     let unit_port = fly.lock().unwrap().unit_port;
     assert_eq!(
@@ -2557,11 +2801,11 @@ fn fly_proxies_run_units_as_machines_without_services() {
     assert_eq!(
         config["metadata"],
         json!({
-            "statespace.com/app": "shop-prod",
-            "statespace.com/experiment": "checkout",
-            "statespace.com/commit": ARM,
-            "statespace.com/image": digest('2'),
-            "statespace.com/port": unit_port.to_string(),
+            "statespace_app": "shop-prod",
+            "statespace_experiment": "checkout",
+            "statespace_commit": ARM,
+            "statespace_image": digest('2'),
+            "statespace_port": unit_port.to_string(),
         })
     );
 
@@ -2590,22 +2834,27 @@ fn fly_proxies_run_units_as_machines_without_services() {
     assert_eq!(report["orchestrator"], "fly");
     assert_eq!(report["live_image"], digest('1'));
 
-    // The app's lines arrive, redacted; Fly's own lines do not.
-    wait_until(30, "output and events of checkout", || {
+    // The arms' visitors are counted with their events; live's are not.
+    wait_until(30, "the counts of checkout", || {
         let state = state.lock().unwrap();
-        state
-            .rows("events")
-            .iter()
-            .any(|row| row["name"] == "visit" && row["experiment"] == "checkout")
+        state.totals("checkout", ARM).events.contains_key("visit")
+            && state.totals("checkout", LIVE).events.contains_key("visit")
     });
     {
         let state = state.lock().unwrap();
-        let stdout = state.rows("stdout");
-        assert!(stdout.iter().all(|row| {
-            let text = row["text"].as_str().unwrap();
-            !text.contains("4242424242424242") && !text.contains("Pulling")
-        }));
-        assert!(stdout.iter().any(|row| row["arm"] == ARM));
+        let arm = state.totals("checkout", ARM);
+        assert_eq!(
+            arm.visitors,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        assert_eq!(arm.events["visit"], arm.requests);
+        let live = subject_hash("salt-1", &live_subject);
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| entry["subject"] != live.as_str())
+        );
     }
 
     // When checkout stops, the holder destroys the Machines of its units.
@@ -2616,7 +2865,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
     wait_until(30, "the Machines of checkout are destroyed", || {
         let fly = fly.lock().unwrap();
         fly.machines.iter().all(|machine| {
-            machine["config"]["metadata"]["statespace.com/experiment"] != "checkout"
+            machine["config"]["metadata"]["statespace_experiment"] != "checkout"
                 || machine["state"] == "destroyed"
         })
     });
@@ -2683,7 +2932,7 @@ impl Drop for Cleanup {
                 "--all",
                 "--quiet",
                 "--filter",
-                &format!("label=statespace.com/app={}", self.app),
+                &format!("label=com.statespace.app={}", self.app),
             ])
             .output()
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
@@ -2810,13 +3059,13 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         lease: true,
         config: json!({
             "app": app, "salt": "salt-1", "settings_hash": "h",
-            "settings": {"redact": []},
+            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
-                "subject": null, "eligibility": null,
-                "events": [{"name": "visit", "source": "stdout",
-                            "match": "stdout.json.event == \"visit\""}],
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "visit", "source": "request",
+                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -2834,6 +3083,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
                 .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
                 .env("STATESPACE_API", &api)
                 .env("STATESPACE_TOKEN", "runtime-secret")
+                .env("STATESPACE_COUNTS_EVERY", "1")
                 .args(["proxy", "docker", "--live-container", &live_name])
                 .args(["--health", "/"])
                 .args(["--listen", &format!("127.0.0.1:{listen_port}")])
@@ -2855,7 +3105,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
             "/checkout",
             &[
                 ("cookie", &format!("ssp_sid={subject}")),
-                ("x-statespace-arm", "spoofed"),
+                ("ssp-arm", "spoofed"),
             ],
         )?
         .json()
@@ -2891,8 +3141,20 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
     for body in [&reference, &arm] {
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
+    // Each arm's environment names it, also for OpenTelemetry; live's does not.
+    assert_eq!(
+        arm["labels"],
+        json!({"SSP_EXPERIMENT": "checkout", "SSP_ARM": ARM,
+               "OTEL_RESOURCE_ATTRIBUTES": format!(
+                   "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")})
+    );
+    assert_eq!(reference["labels"]["SSP_ARM"], LIVE);
+    assert_eq!(
+        live["labels"],
+        json!({"SSP_EXPERIMENT": null, "SSP_ARM": null, "OTEL_RESOURCE_ATTRIBUTES": null})
+    );
 
-    // The arms are the proxy's containers: labeled statespace.com/*, on
+    // The arms are the proxy's containers: labeled com.statespace.*, on
     // live's network, without any label of Compose or a network alias.
     let arms = || {
         let mut ids: Vec<String> = docker(&[
@@ -2900,9 +3162,9 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
             "--quiet",
             "--no-trunc",
             "--filter",
-            &format!("label=statespace.com/app={app}"),
+            &format!("label=com.statespace.app={app}"),
             "--filter",
-            &format!("label=statespace.com/proxy=127.0.0.1:{listen_port}"),
+            &format!("label=com.statespace.proxy=127.0.0.1:{listen_port}"),
         ])
         .split_whitespace()
         .map(str::to_owned)
@@ -2917,9 +3179,11 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
             serde_json::from_str(&docker(&["inspect", "--format", "{{json .}}", id])).unwrap();
         let labels = inspected["Config"]["Labels"].as_object().unwrap();
         assert!(
-            labels.keys().all(|key| key.starts_with("statespace.com/")),
+            labels.keys().all(|key| key.starts_with("com.statespace.")),
             "{labels:?}"
         );
+        assert_eq!(labels["com.statespace.experiment"], "checkout");
+        assert!(labels["com.statespace.commit"] == ARM || labels["com.statespace.commit"] == LIVE);
         let networks = &inspected["NetworkSettings"]["Networks"];
         let aliases = networks[&network]["Aliases"]
             .as_array()
@@ -2928,33 +3192,27 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         assert!(!aliases.contains(&json!("shop")), "{aliases:?}");
     }
 
-    wait_until(60, "rows arrive", || {
+    // The visitors of the arms are counted, with the event in the app's
+    // response header; live's visitor is not.
+    wait_until(60, "the counts of both arms", || {
         let state = state.lock().unwrap();
-        !state.rows("runs").is_empty()
-            && state
-                .rows("stdout")
-                .iter()
-                .any(|row| row["text"].as_str().unwrap_or_default().contains("visit"))
-            && state.rows("stderr").iter().any(|row| {
-                row["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("GET /checkout")
-            })
-            && state
-                .rows("events")
-                .iter()
-                .any(|row| row["name"] == "visit")
-            && state.rows("requests").len() >= 2
+        state.totals("checkout", ARM).events.contains_key("visit")
+            && state.totals("checkout", LIVE).events.contains_key("visit")
     });
     {
         let state = state.lock().unwrap();
+        let arm = state.totals("checkout", ARM);
+        assert_eq!(
+            arm.visitors,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        assert_eq!(arm.events["visit"], arm.requests);
+        let live = subject_hash("salt-1", &live_subject);
         assert!(
             state
-                .rows("requests")
+                .counts()
                 .iter()
-                .all(|row| row["experiment"] == "checkout"
-                    && row["subject"] != live_subject.as_str())
+                .all(|entry| entry["subject"] != live.as_str())
         );
         assert!(state.reports().iter().any(
             |report| report["orchestrator"] == "docker" && report["live_image"] == live_digest
@@ -3114,10 +3372,11 @@ spec:
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"redact": []},
+            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
+                "subject": "request.cookies.ssp_sid", "eligibility": null, "events": [],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.05]]},
                     {"commit": ARM, "image": live_digest, "ranges": [[0.05, 0.6]]},
@@ -3231,6 +3490,26 @@ spec:
         "jsonpath={.spec.template.spec.containers[0].args}",
     ]);
     assert!(args.contains("netexec"), "{args}");
+    // The app's container gets the variables that label the arm.
+    let environment = kubectl(&[
+        "get",
+        "deployment",
+        &arm_name,
+        "--namespace",
+        &namespace,
+        "-o",
+        "jsonpath={.spec.template.spec.containers[0].env}",
+    ]);
+    let environment: Value = serde_json::from_str(&environment).unwrap();
+    assert_eq!(
+        environment,
+        json!([
+            {"name": "SSP_EXPERIMENT", "value": "checkout"},
+            {"name": "SSP_ARM", "value": ARM},
+            {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": format!(
+                "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")},
+        ])
+    );
     let service = kubectl(&[
         "get",
         "service",
@@ -3837,11 +4116,19 @@ fn spec(service: &Value) -> Value {
 }
 
 /// A template without its revision name and the image of each container.
+/// A template without its revision, images, and the variables that label
+/// an arm: what an arm's service copies from live's.
 fn template_settings(template: &Value) -> Value {
     let mut settings = template.clone();
     settings.as_object_mut().unwrap().remove("revision");
     for container in settings["containers"].as_array_mut().into_iter().flatten() {
         container.as_object_mut().unwrap().remove("image");
+        if let Some(variables) = container["env"].as_array_mut() {
+            variables.retain(|variable| {
+                !["SSP_EXPERIMENT", "SSP_ARM", "OTEL_RESOURCE_ATTRIBUTES"]
+                    .contains(&variable["name"].as_str().unwrap_or_default())
+            });
+        }
     }
     settings
 }
@@ -4024,7 +4311,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"redact": []},
+            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [],
             "lease": null, "poll_interval_seconds": 2,
@@ -4033,7 +4320,9 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     }));
     let checkout = json!([{
         "name": "checkout", "version": 1, "state": "running",
-        "subject": null, "eligibility": null, "events": [],
+        "subject": "request.cookies.ssp_sid", "eligibility": null,
+        "events": [{"name": "visit", "source": "request",
+                    "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
         "arms": [
             {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
             {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -4061,6 +4350,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-secret")
+        .env("STATESPACE_COUNTS_EVERY", "5")
         .env("GCE_METADATA_HOST", &metadata)
         .args(["proxy", "cloudrun", "--service", &name])
         .args(["--region", &sandbox.region, "--project", &sandbox.project]);
@@ -4092,23 +4382,44 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     );
     assert_eq!(arm["shared"], "from-the-service");
     assert_eq!(arm["experiment"], "checkout");
-    // The output of both arms arrives from Cloud Logging, read with one
-    // query for all units, and Cloud Logging never asks the proxy to slow
-    // down.
-    let output_of_both_arms = |state: &Arc<Mutex<Statespace>>| {
+    // The arm's environment names it, also for OpenTelemetry.
+    assert_eq!(arm["labels"]["SSP_EXPERIMENT"], "checkout");
+    assert_eq!(arm["labels"]["SSP_ARM"], ARM);
+    assert_eq!(
+        arm["labels"]["OTEL_RESOURCE_ATTRIBUTES"],
+        format!("statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")
+    );
+    assert!(live["labels"]["SSP_ARM"].is_null());
+    // The visitors of both arms are counted, with the event of the app's
+    // response header; live's visitor is not.
+    let counted_both_arms = |state: &Arc<Mutex<Statespace>>| {
         let state = state.lock().unwrap();
-        let stdout = state.rows("stdout");
         [LIVE, ARM].iter().all(|commit| {
-            stdout.iter().any(|row| {
-                row["arm"] == *commit && row["text"].as_str().unwrap_or_default().contains("visit")
-            })
+            state
+                .totals("checkout", commit)
+                .events
+                .contains_key("visit")
         })
     };
-    wait_until(180, "the output of both arms arrives", || {
+    wait_until(180, "the counts of both arms arrive", || {
         let _ = visit(&proxy_url, &arm_subject, &[]);
         let _ = visit(&proxy_url, &reference_subject, &[]);
-        output_of_both_arms(&state)
+        counted_both_arms(&state)
     });
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.totals("checkout", ARM).visitors,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        let live = subject_hash("salt-1", &live_subject);
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| entry["subject"] != live.as_str())
+        );
+    }
     // The customer's service is as it was: same spec, same generation.
     let during = sandbox.service(&name);
     assert_eq!(spec(&during), spec(&before), "the customer's service");
@@ -4127,6 +4438,10 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         assert_eq!(unit["ingress"], before["ingress"]);
         assert_eq!(unit["labels"][TEST_LABEL], id.as_str());
         assert_eq!(unit["labels"]["statespace-experiment"], "checkout");
+        assert!(
+            unit["labels"]["statespace-commit"] == LIVE
+                || unit["labels"]["statespace-commit"] == ARM
+        );
         assert!(
             unit.get("traffic")
                 .is_none_or(|traffic| traffic.as_array().is_some_and(|targets| targets.len() <= 1))
@@ -4277,9 +4592,9 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         // The proxy's own words for a rate limit: a status such as "429 Too
         // Many Requests" in an error, or the throttle message. A bare "429"
         // also matches image digests.
-        !log.iter().any(|line| line.contains("429 Too Many Requests")
-            || line.contains("slow down")
-            || line.contains("could not read the output")),
+        !log.iter()
+            .any(|line| line.contains("429 Too Many Requests")
+                || line.contains("could not send counts")),
         "{log:?}"
     );
 
@@ -4323,6 +4638,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
             .is_ok_and(|response| response.status() == 200)
     });
     state.lock().unwrap().received.clear();
+    state.lock().unwrap().applied.clear();
     state.lock().unwrap().config["experiments"] = checkout;
     let proxy_service = sandbox.create_service(
         &format!("{name}-proxy"),
@@ -4338,6 +4654,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
                 "env": [
                     {"name": "STATESPACE_API", "value": public},
                     {"name": "STATESPACE_TOKEN", "value": "runtime-secret"},
+                    {"name": "STATESPACE_COUNTS_EVERY", "value": "5"},
                 ],
                 "ports": [{"containerPort": 8080}],
                 "resources": {"limits": {"cpu": "1", "memory": "512Mi"}, "cpuIdle": false},
@@ -4361,11 +4678,11 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     assert_eq!(arm["authorization"], "Bearer the-app's-own");
     wait_until(
         180,
-        "the output of both arms arrives from the proxy on Cloud Run",
+        "the counts of both arms arrive from the proxy on Cloud Run",
         || {
             let _ = visit(&proxy_url, &arm_subject, &caller);
             let _ = visit(&proxy_url, &reference_subject, &caller);
-            output_of_both_arms(&state)
+            counted_both_arms(&state)
         },
     );
     assert_eq!(
@@ -4391,7 +4708,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
 }
 
 // ---------------------------------------------------------------------------
-// A stand-in for ECS, EC2, and CloudWatch Logs.
+// A stand-in for ECS and EC2.
 
 const ECR: &str = "123456789012.dkr.ecr.us-east-1.amazonaws.com/shop";
 const CLUSTER_ARN: &str = "arn:aws:ecs:us-east-1:123456789012:cluster/shop";
@@ -4597,27 +4914,6 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
                 json_answer(200, &json!({}))
             }
             "DeleteTaskDefinitions" => json_answer(200, &json!({"taskDefinitions": []})),
-            "FilterLogEvents" => {
-                assert_eq!(body["logGroupName"], "/ecs/shop");
-                let events: Vec<Value> = body["logStreamNames"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .flat_map(|stream| {
-                        let stream = stream.as_str().unwrap();
-                        assert!(stream.starts_with("ecs/shop/"), "{stream}");
-                        [
-                            json!({"eventId": format!("{stream}-1"), "logStreamName": stream,
-                                   "timestamp": 4_102_444_800_000_i64,
-                                   "message": "{\"event\": \"signup\", \"card\": \"4242424242424242\"}\n"}),
-                            json!({"eventId": format!("{stream}-2"), "logStreamName": stream,
-                                   "timestamp": 4_102_444_800_001_i64,
-                                   "message": "FATAL out of memory"}),
-                        ]
-                    })
-                    .collect();
-                json_answer(200, &json!({"events": events}))
-            }
             _ => json_answer(
                 400,
                 &json!({"__type": "UnknownOperationException", "message": target}),
@@ -4628,9 +4924,9 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
 }
 
 /// A proxy on Fargate runs each unit as an ECS service from a copy of live's
-/// task definition, sends to the task's address, records the unit's
-/// CloudWatch Logs, and deletes the services and task definitions of an
-/// experiment that stops.
+/// task definition, sends to the task's address, counts the arms' visitors,
+/// and deletes the services and task definitions of an experiment that
+/// stops.
 #[test]
 fn fargate_proxies_run_units_as_services() {
     let live = echo("live");
@@ -4678,13 +4974,13 @@ fn fargate_proxies_run_units_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
-            "settings": {"redact": ["\\b\\d{16}\\b"]},
+            "settings": {},
             "live": {"commit": LIVE, "image": fargate_digest('1')},
             "experiments": [{
                 "name": "checkout", "version": 3, "state": "running",
-                "subject": null, "eligibility": null,
-                "events": [{"name": "signup", "source": "stdout",
-                            "match": "stdout.json.event == \"signup\""}],
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "signup", "source": "request",
+                            "match": "request.path == \"/checkout\" && response.status == 200"}],
                 "arms": [
                     {"commit": LIVE, "image": fargate_digest('1'), "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": fargate_digest('2'), "ranges": [[0.4, 0.8]]},
@@ -4713,7 +5009,7 @@ fn fargate_proxies_run_units_as_services() {
         .env("AWS_EC2_METADATA_DISABLED", "true")
         .env("AWS_ENDPOINT_URL_ECS", &endpoint)
         .env("AWS_ENDPOINT_URL_EC2", &endpoint)
-        .env("AWS_ENDPOINT_URL_CLOUDWATCH_LOGS", &endpoint)
+        .env("STATESPACE_COUNTS_EVERY", "1")
         // The region comes from the AWS configuration, not --region.
         .env("AWS_REGION", "us-east-1")
         .args(["proxy", "fargate"])
@@ -4731,7 +5027,7 @@ fn fargate_proxies_run_units_as_services() {
             "/checkout",
             &[
                 ("cookie", &format!("ssp_sid={subject}")),
-                ("x-statespace-arm", "spoofed"),
+                ("ssp-arm", "spoofed"),
             ],
         )?
         .json()
@@ -4781,7 +5077,13 @@ fn fargate_proxies_run_units_as_services() {
         assert_eq!(container["image"], fargate_digest('2'));
         assert_eq!(
             container["environment"],
-            json!([{"name": "MODE", "value": "prod"}])
+            json!([
+                {"name": "MODE", "value": "prod"},
+                {"name": "SSP_EXPERIMENT", "value": "checkout"},
+                {"name": "SSP_ARM", "value": ARM},
+                {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": format!(
+                    "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")},
+            ])
         );
         assert_eq!(registration["cpu"], "256");
         assert_eq!(
@@ -4795,51 +5097,42 @@ fn fargate_proxies_run_units_as_services() {
 
     // The arm gets the experiment and arm headers; live gets neither.
     let body = get(&arm_subject).unwrap();
-    assert_eq!(body["headers"]["x-statespace-experiment"], "checkout");
-    assert_eq!(body["headers"]["x-statespace-arm"], ARM);
-    assert_eq!(
-        body["headers"]["x-statespace-subject"],
-        arm_subject.as_str()
-    );
+    assert_eq!(body["headers"]["ssp-experiment"], "checkout");
+    assert_eq!(body["headers"]["ssp-arm"], ARM);
     let body = get(&reference_subject).unwrap();
-    assert_eq!(body["headers"]["x-statespace-arm"], LIVE);
+    assert_eq!(body["headers"]["ssp-arm"], LIVE);
     let body = get(&live_subject).unwrap();
     assert_eq!(body["name"], "live");
-    assert!(body["headers"].get("x-statespace-arm").is_none());
+    assert!(body["headers"].get("ssp-arm").is_none());
 
     // The report names live's image by the digest its tasks run, and every
-    // unit ready. The units' CloudWatch Logs are recorded and redacted.
-    wait_until(
-        30,
-        "a report with both units ready and their output",
-        || {
-            let state = state.lock().unwrap();
-            let ready = state.reports().iter().any(|report| {
-                report["orchestrator"] == "fargate"
-                    && report["live_image"] == fargate_digest('1').as_str()
-                    && report["units"].as_array().is_some_and(|units| {
-                        units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
-                    })
-            });
-            ready
-                && state
-                    .rows("events")
-                    .iter()
-                    .any(|row| row["name"] == "signup" && row["arm"] == ARM)
-                && state
-                    .rows("stdout")
-                    .iter()
-                    .any(|row| row["text"] == "FATAL out of memory")
-        },
-    );
-    assert!(
-        state
-            .lock()
-            .unwrap()
-            .rows("stdout")
-            .iter()
-            .all(|row| !row["text"].as_str().unwrap().contains("4242424242424242"))
-    );
+    // unit ready. The arms' visitors are counted with their events.
+    wait_until(30, "a report with both units ready, and counts", || {
+        let state = state.lock().unwrap();
+        let ready = state.reports().iter().any(|report| {
+            report["orchestrator"] == "fargate"
+                && report["live_image"] == fargate_digest('1').as_str()
+                && report["units"].as_array().is_some_and(|units| {
+                    units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
+                })
+        });
+        ready && state.totals("checkout", ARM).events.contains_key("signup")
+    });
+    {
+        let state = state.lock().unwrap();
+        let arm = state.totals("checkout", ARM);
+        assert_eq!(
+            arm.visitors,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        let live = subject_hash("salt-1", &live_subject);
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| entry["subject"] != live.as_str())
+        );
+    }
 
     // When checkout stops, its services and task definitions go, and its
     // subjects go to live.
@@ -5212,23 +5505,6 @@ impl AwsSandbox {
                 ]);
             }
         }
-        // Log groups.
-        let groups = self.aws(&[
-            "logs",
-            "describe-log-groups",
-            "--log-group-name-prefix",
-            "/statespace-test/",
-        ])["logGroups"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        for group in &groups {
-            let name = group["logGroupName"].as_str().unwrap_or_default();
-            if select(name.trim_start_matches("/statespace-test/")) {
-                eprintln!("sweeping log group {name}");
-                let _ = self.try_aws(&["logs", "delete-log-group", "--log-group-name", name]);
-            }
-        }
         // VPCs that a test made when the account had no default VPC.
         let vpcs = self.aws(&[
             "ec2",
@@ -5491,8 +5767,8 @@ fn aws_sweeper_deletes_old_test_resources() {
 /// The proxy on the CI runner orchestrates a real Fargate service: it reads
 /// live's digest, starts both arms of an experiment as ECS services, sends
 /// each arm its requests with the right headers, keeps the arms through a
-/// redeploy of live, records their CloudWatch Logs, and deletes them when
-/// the experiment stops. The tasks have public IP addresses, and a security
+/// redeploy of live, counts the arms' visitors, and deletes them when the
+/// experiment stops. The tasks have public IP addresses, and a security
 /// group opens the app's port to the runner only.
 #[test]
 fn aws_fargate_proxies_run_arms_as_services() {
@@ -5558,23 +5834,6 @@ fn aws_fargate_proxies_run_arms_as_services() {
     let (next_tag, next_digest) = sandbox.push(&run, "next", "hey");
     eprintln!("pushed {live_digest}, {arm_digest}, and {next_digest}");
 
-    let log_group = format!("/statespace-test/{run}");
-    sandbox.aws(&[
-        "logs",
-        "create-log-group",
-        "--log-group-name",
-        &log_group,
-        "--tags",
-        &format!("{AWS_TEST_TAG}={run}"),
-    ]);
-    sandbox.aws(&[
-        "logs",
-        "put-retention-policy",
-        "--log-group-name",
-        &log_group,
-        "--retention-in-days",
-        "1",
-    ]);
     // A new account has no service-linked role for ECS yet.
     if let Err(error) = sandbox.try_aws(&[
         "iam",
@@ -5612,11 +5871,6 @@ fn aws_fargate_proxies_run_arms_as_services() {
                 "command": ["python3", "/app/app.py", "8000"],
                 "portMappings": [{"containerPort": 8000, "protocol": "tcp"}],
                 "environment": [{"name": "SHARED", "value": "from-live"}],
-                "logConfiguration": {"logDriver": "awslogs", "options": {
-                    "awslogs-group": log_group,
-                    "awslogs-region": sandbox.region,
-                    "awslogs-stream-prefix": "app",
-                }},
             }],
             "tags": [{"key": AWS_TEST_TAG, "value": run}],
         })
@@ -5698,13 +5952,13 @@ fn aws_fargate_proxies_run_arms_as_services() {
         lease: true,
         config: json!({
             "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
-            "settings": {"redact": []},
+            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
-                "subject": null, "eligibility": null,
-                "events": [{"name": "visit", "source": "stdout",
-                            "match": "stdout.json.event == \"visit\""}],
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "visit", "source": "request",
+                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -5721,6 +5975,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-secret")
+        .env("STATESPACE_COUNTS_EVERY", "5")
         .env("AWS_REGION", &sandbox.region)
         .args(["proxy", "fargate"])
         .args(["--cluster", &run, "--service", &run])
@@ -5733,7 +5988,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
             "/checkout",
             &[
                 ("cookie", &format!("ssp_sid={subject}")),
-                ("x-statespace-arm", "spoofed"),
+                ("ssp-arm", "spoofed"),
             ],
         )?
         .json()
@@ -5796,11 +6051,13 @@ fn aws_fargate_proxies_run_arms_as_services() {
     assert_eq!(container["image"], arm_digest.as_str());
     assert_eq!(
         container["environment"],
-        json!([{"name": "SHARED", "value": "from-live"}])
-    );
-    assert_eq!(
-        container["logConfiguration"]["options"]["awslogs-group"],
-        log_group.as_str()
+        json!([
+            {"name": "SHARED", "value": "from-live"},
+            {"name": "SSP_EXPERIMENT", "value": "checkout"},
+            {"name": "SSP_ARM", "value": ARM},
+            {"name": "OTEL_RESOURCE_ATTRIBUTES", "value": format!(
+                "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")},
+        ])
     );
     assert_eq!(
         (&arm_definition["cpu"], &arm_definition["memory"]),
@@ -5820,8 +6077,9 @@ fn aws_fargate_proxies_run_arms_as_services() {
     let reference = get(&reference_subject).unwrap();
     let live = get(&live_subject).unwrap();
     assert_eq!(arm["experiment"], "checkout");
-    assert_eq!(arm["subject"], arm_subject.as_str());
+    assert_eq!(arm["labels"]["SSP_ARM"], ARM);
     assert_eq!(reference["experiment"], "checkout");
+    assert_eq!(live["labels"]["SSP_ARM"], Value::Null);
     assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
     assert_eq!(live["experiment"], Value::Null);
     assert_eq!(
@@ -5844,20 +6102,35 @@ fn aws_fargate_proxies_run_arms_as_services() {
         })
     });
 
-    // The arm's output arrives from CloudWatch Logs.
-    wait_until(180, "the arm's visit lines arrive", || {
+    // The arm's visitor is counted, with the event of the app's response
+    // header; live's visitor is not.
+    wait_until(180, "the counts of the arm arrive", || {
         let _ = get(&arm_subject);
         let found = state
             .lock()
             .unwrap()
-            .rows("events")
-            .iter()
-            .any(|row| row["name"] == "visit" && row["arm"] == ARM);
+            .totals("checkout", ARM)
+            .events
+            .contains_key("visit");
         if !found {
             std::thread::sleep(Duration::from_secs(3));
         }
         found
     });
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.totals("checkout", ARM).visitors,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        let live = subject_hash("salt-1", &live_subject);
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| entry["subject"] != live.as_str())
+        );
+    }
 
     // The customer deploys a new live, as `aws ecs update-service` does.
     // The arms keep serving, and the proxy reports the new digest.
@@ -6097,7 +6370,7 @@ impl Drop for FlyCleanup {
             let metadata = &machine["config"]["metadata"];
             let id = machine["id"].as_str().unwrap();
             if made.contains(id)
-                || metadata["statespace.com/app"] == self.run.as_str()
+                || metadata["statespace_app"] == self.run.as_str()
                 || metadata[TEST_LABEL] == self.id.as_str()
             {
                 self.fly.destroy(id);
@@ -6337,13 +6610,13 @@ primary_region = "{region}"
         lease: true,
         config: json!({
             "app": run, "salt": "salt-1", "settings_hash": "h",
-            "settings": {"redact": []},
+            "settings": {},
             "live": {"commit": LIVE, "image": live_digest},
             "experiments": [{
                 "name": "checkout", "version": 1, "state": "running",
-                "subject": null, "eligibility": null,
-                "events": [{"name": "visit", "source": "stdout",
-                            "match": "stdout.json.event == \"visit\""}],
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "visit", "source": "request",
+                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -6374,6 +6647,7 @@ primary_region = "{region}"
                 "env": {
                     "STATESPACE_API": tunnel_url,
                     "STATESPACE_TOKEN": "runtime-1",
+                    "STATESPACE_COUNTS_EVERY": "5",
                     "FLY_API_TOKEN": token,
                 },
                 "guest": {"cpu_kind": "shared", "cpus": 1, "memory_mb": 256},
@@ -6402,7 +6676,7 @@ primary_region = "{region}"
         public
             .get(format!("https://{app}.fly.dev{path}"))
             .header("cookie", format!("ssp_sid={subject}"))
-            .header("x-statespace-arm", "spoofed")
+            .header("ssp-arm", "spoofed")
             .send()
             .ok()?
             .json()
@@ -6416,8 +6690,8 @@ primary_region = "{region}"
             && get(&arm_subject, "/").is_some_and(|body| body["arm"] == ARM)
     });
 
-    // Each arm gets its experiment, arm, and subject, and live's
-    // environment without Statespace variables.
+    // Each arm gets its experiment and arm, live's environment without
+    // Statespace variables, and the variables that label it.
     let reference = get(&reference_subject, "/checkout").unwrap();
     let arm = get(&arm_subject, "/checkout").unwrap();
     assert_eq!(
@@ -6429,7 +6703,8 @@ primary_region = "{region}"
         assert_eq!(body["shared"], "from-live");
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
-    assert_eq!(arm["subject"], arm_subject.as_str());
+    assert_eq!(arm["labels"]["SSP_ARM"], ARM);
+    assert_eq!(reference["labels"]["SSP_ARM"], LIVE);
 
     // The holder reports both units ready and live's image.
     wait_until(120, "a report with both units ready", || {
@@ -6450,7 +6725,7 @@ primary_region = "{region}"
     let unit_machines = || -> Vec<Value> {
         fly.machines()
             .into_iter()
-            .filter(|machine| machine["config"]["metadata"]["statespace.com/app"] == run.as_str())
+            .filter(|machine| machine["config"]["metadata"]["statespace_app"] == run.as_str())
             .collect()
     };
     let units = unit_machines();
@@ -6469,35 +6744,45 @@ primary_region = "{region}"
                 .all(|key| !key.starts_with("fly_")),
             "{config}"
         );
-        assert_eq!(config["metadata"]["statespace.com/experiment"], "checkout");
+        assert_eq!(config["metadata"]["statespace_experiment"], "checkout");
     }
 
     // Live traffic never reaches a unit: Fly's proxy sends Flycast
-    // requests only to live's Machines, and the units print no such path.
+    // requests only to live's Machines, which have no arm variables.
     let marker = format!("/live-only-{run}");
     for subject in &live_subjects {
         let body = get(subject, &marker).expect("live answers");
         assert_eq!(body["arm"], Value::Null, "{body}");
         assert_eq!(body["greeting"], "hello", "{body}");
+        assert_eq!(
+            body["labels"]["SSP_ARM"],
+            Value::Null,
+            "a unit got live traffic"
+        );
     }
-    wait_until(60, "the units' output arrives", || {
-        state.lock().unwrap().rows("stdout").iter().any(|row| {
-            row["text"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("/checkout")
+    // The arms' visitors are counted; live's are not.
+    wait_until(120, "the counts of both arms arrive", || {
+        let state = state.lock().unwrap();
+        [LIVE, ARM].iter().all(|commit| {
+            state
+                .totals("checkout", commit)
+                .events
+                .contains_key("visit")
         })
     });
-    std::thread::sleep(Duration::from_secs(20));
-    assert!(
-        state
-            .lock()
-            .unwrap()
-            .rows("stdout")
+    {
+        let state = state.lock().unwrap();
+        let live: Vec<String> = live_subjects
             .iter()
-            .all(|row| !row["text"].as_str().unwrap_or_default().contains(&marker)),
-        "a unit got live traffic"
-    );
+            .map(|subject| subject_hash("salt-1", subject))
+            .collect();
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| !live.iter().any(|hash| entry["subject"] == hash.as_str()))
+        );
+    }
 
     // A customer deploys live again: fly deploy replaces live's image and
     // leaves the units as they are.
@@ -6640,13 +6925,13 @@ fn site_build(scheme: &str, bucket: &str, commit: &str) -> Value {
 fn site_config(scheme: &str, bucket: &str) -> Value {
     json!({
         "app": SITE_APP, "salt": "salt-1", "settings_hash": "h",
-        "settings": {"redact": []},
+        "settings": {},
         "live": {"commit": LIVE, "files": site_build(scheme, bucket, LIVE)},
         "experiments": [
             {"name": "hero", "version": 1, "state": "running",
-             "subject": null, "eligibility": null,
+             "subject": "request.cookies.ssp_sid", "eligibility": null,
              "events": [{"name": "about", "source": "request",
-                         "match": "request.path == \"/about\" && request.status == 200"}],
+                         "match": "request.path == \"/about\" && response.status == 200"}],
              "arms": [
                  {"commit": LIVE, "files": site_build(scheme, bucket, LIVE),
                   "ranges": [[0.0, 0.4]]},
@@ -6654,7 +6939,7 @@ fn site_config(scheme: &str, bucket: &str) -> Value {
                   "ranges": [[0.4, 0.8]]},
              ]},
             {"name": "video", "version": 1, "state": "running",
-             "subject": null, "eligibility": null, "events": [],
+             "subject": "request.cookies.ssp_sid", "eligibility": null, "events": [],
              "arms": [{"commit": LANDING, "image": digest('3'), "ranges": [[0.8, 0.9]]}]},
         ],
         "lease": null, "poll_interval_seconds": 1,
@@ -6863,30 +7148,51 @@ fn check_site(
         Some("arm home\n".into())
     );
 
-    // The arm's requests, runs, and events are recorded; live's are not.
-    wait_until(wait, "the arm's requests and events", || {
-        let state = state.lock().unwrap();
-        state
-            .rows("requests")
-            .iter()
-            .any(|row| row["arm"] == ARM && row["path"] == "/about" && row["override"] == true)
-            && state
-                .rows("events")
-                .iter()
-                .any(|row| row["name"] == "about" && row["arm"] == ARM)
-            && state
-                .rows("runs")
-                .iter()
-                .any(|row| row["arm"] == ARM && row["reason"] == "override")
-    });
+    // An assigned visitor of the arm gets the arm's page and the readable
+    // ssp_arms cookie, which tags browser analytics on a static site.
+    let (status, headers, body) = fetch(port, "GET", "/about", &[("cookie", &arm_cookie)]).unwrap();
+    assert_eq!((status, body.as_str()), (200, "arm about\n"));
+    let cookies: Vec<&str> = headers
+        .get_all("set-cookie")
+        .iter()
+        .map(|value| value.to_str().unwrap())
+        .collect();
     assert!(
-        state
-            .lock()
-            .unwrap()
-            .rows("requests")
-            .iter()
-            .all(|row| !row["arm"].is_null())
+        cookies.contains(
+            &format!("ssp_arms=hero:{ARM}; Path=/; Max-Age=7776000; SameSite=Lax").as_str()
+        ),
+        "{cookies:?}"
     );
+
+    // The arm's visitor and its event are counted. The visitor of video,
+    // whose image build a file runtime does not run, gets live and counts as
+    // unavailable. Live's visitor and the override are never counted.
+    let hash = |subject: &str| subject_hash("salt-1", subject);
+    wait_until(wait, "the counts of the arm", || {
+        let state = state.lock().unwrap();
+        state.totals("hero", ARM).events.contains_key("about")
+    });
+    let state_now = state.lock().unwrap();
+    let hero = state_now.totals("hero", ARM);
+    assert_eq!(hero.visitors, HashSet::from([hash(&arm)]));
+    assert!(hero.events["about"] >= 1, "{hero:?}");
+    assert_eq!(
+        state_now.totals("hero", LIVE).visitors,
+        HashSet::from([hash(&reference)])
+    );
+    assert!(
+        state_now
+            .totals("video", LANDING)
+            .unavailable
+            .contains(&hash(&video))
+    );
+    assert!(
+        state_now
+            .counts()
+            .iter()
+            .all(|entry| entry["subject"] != hash(&live).as_str())
+    );
+    drop(state_now);
 
     // A build that changed after it was recorded is not ready, and its
     // subjects go to live. When it is back, the arm serves again.
@@ -7122,6 +7428,7 @@ fn s3_proxies_serve_builds_from_folders() {
         .env_remove("AWS_REGION")
         .env_remove("AWS_DEFAULT_REGION")
         .env_remove("AWS_PROFILE")
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .args(["proxy", "s3", "--bucket", SITE_BUCKET])
         .args(["--endpoint", &format!("http://127.0.0.1:{s3}")])
         .args(["--cache", "--fallback", "200.html"]);
@@ -7165,6 +7472,7 @@ fn gcs_proxies_serve_builds_from_folders() {
         .env("GCE_METADATA_HOST", format!("127.0.0.1:{gcs}"))
         .env("CLOUDSDK_CONFIG", directory.path())
         .env_remove("GOOGLE_APPLICATION_CREDENTIALS")
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .args(["proxy", "gcs", "--bucket", SITE_BUCKET])
         .args(["--fallback", "200.html"]);
     let (_proxy, port) = spawn_proxy(command);
@@ -7300,6 +7608,7 @@ fn aws_s3_proxies_serve_builds_from_a_real_bucket() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("STATESPACE_CHECK_EVERY", "5")
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .args(["proxy", "s3", "--bucket", &bucket])
         .args([
             "--region",
@@ -7506,6 +7815,7 @@ fn gcp_gcs_proxies_serve_builds_from_a_real_bucket() {
         .env("STATESPACE_API", &api)
         .env("STATESPACE_TOKEN", "runtime-1")
         .env("STATESPACE_CHECK_EVERY", "5")
+        .env("STATESPACE_COUNTS_EVERY", "1")
         .args(["proxy", "gcs", "--bucket", &bucket])
         .args(["--fallback", "200.html"]);
     let (_proxy, port) = spawn_proxy(command);

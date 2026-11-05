@@ -5,16 +5,14 @@
 use std::{
     convert::Infallible,
     net::SocketAddr,
-    pin::Pin,
     sync::{Arc, OnceLock, atomic::Ordering},
-    task::{Context, Poll},
     time::{Duration, Instant},
 };
 
 use bytes::Bytes;
-use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode, header};
+use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
-use hyper::body::{Body, Frame, Incoming, SizeHint};
+use hyper::body::{Body, Incoming};
 use hyper_rustls::HttpsConnector;
 use hyper_util::{
     client::legacy::{Client, connect::HttpConnector},
@@ -24,10 +22,12 @@ use serde_json::{Map, Value, json};
 
 use super::{
     Runtime,
-    assign::{self, Decision, OVERRIDE, OVERRIDE_HEADER, Refused, Routing, SUBJECT_COOKIE},
+    assign::{
+        self, Decision, OVERRIDE, OVERRIDE_HEADER, Reason, Refused, Routing, Run, SUBJECT_COOKIE,
+    },
+    counts::{self, Counter, Visitor},
+    events,
     orchestrator::{FileRequest, Orchestrator, UnitKey},
-    recorder::{Origin, RequestRow, Source},
-    redact,
 };
 
 type ProxyBody = BoxBody<Bytes, hyper::Error>;
@@ -36,6 +36,11 @@ type ProxyBody = BoxBody<Bytes, hyper::Error>;
 const VISITOR_SECONDS: u32 = 7_776_000;
 /// How long an override cookie lasts without a request. Each request renews it.
 const OVERRIDE_SECONDS: u32 = 3600;
+/// The cookie that names the arms of a visitor, for browser analytics.
+pub const ARMS_COOKIE: &str = "ssp_arms";
+/// The headers that name the arm of a request, for the app.
+pub const EXPERIMENT_HEADER: &str = "ssp-experiment";
+pub const ARM_HEADER: &str = "ssp-arm";
 
 fn client() -> &'static Client<HttpsConnector<HttpConnector>, ProxyBody> {
     static CLIENT: OnceLock<Client<HttpsConnector<HttpConnector>, ProxyBody>> = OnceLock::new();
@@ -138,6 +143,24 @@ pub fn override_cookie(arm: Option<&str>, secure: bool) -> String {
     }
 }
 
+/// The `Set-Cookie` value of the `ssp_arms` cookie: `<experiment>:<commit>`
+/// of the arm that serves an assigned visitor, readable by JavaScript and
+/// as long-lived as the visitor cookie. A visitor in no arm loses the
+/// cookie, when the request had it.
+pub fn arms_cookie(arm: Option<&UnitKey>, had: bool, secure: bool) -> Option<String> {
+    let secure = if secure { "; Secure" } else { "" };
+    match arm {
+        Some(key) => Some(format!(
+            "{ARMS_COOKIE}={}:{}; Path=/; Max-Age={VISITOR_SECONDS}; SameSite=Lax{secure}",
+            key.experiment, key.commit
+        )),
+        None if had => Some(format!(
+            "{ARMS_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax{secure}"
+        )),
+        None => None,
+    }
+}
+
 /// A visitor ID the proxy may send back: letters, digits, `_`, and `-`.
 fn valid_visitor(id: &str) -> bool {
     (1..=128).contains(&id.len())
@@ -160,6 +183,7 @@ async fn forward<O: Orchestrator>(
     let requested = take_override(&mut request);
     let mut cookies = assign::cookies(request.headers());
     let secure = is_secure(request.headers());
+    let had_arms = cookies.contains_key(ARMS_COOKIE);
     // While a running experiment uses the default subject, every response
     // sets or renews the visitor cookie.
     let visitor = routing
@@ -174,34 +198,38 @@ async fn forward<O: Orchestrator>(
             cookies.insert(SUBJECT_COOKIE.into(), json!(id));
             visitor_cookie(&id, secure)
         });
-    let mut response = route(
+    let (mut response, arm) = route(
         runtime, peer, request, routing, requested, cookies, secure, started,
     )
     .await;
-    if let Some(cookie) = visitor
-        && let Ok(value) = HeaderValue::from_str(&cookie)
-    {
-        response.headers_mut().append(header::SET_COOKIE, value);
+    let arms = arms_cookie(arm.as_ref(), had_arms, secure);
+    for cookie in [visitor, arms].into_iter().flatten() {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
     }
     response
 }
 
+/// Route a request, and count it when an arm serves an assigned visitor.
+/// Also returns that arm, for the `ssp_arms` cookie.
 #[allow(clippy::too_many_arguments)]
 async fn route<O: Orchestrator>(
     runtime: &Arc<Runtime<O>>,
     peer: SocketAddr,
-    mut request: Request<Incoming>,
+    request: Request<Incoming>,
     routing: Option<Arc<Routing>>,
     requested: Requested,
     cookies: Map<String, Value>,
     secure: bool,
     started: Instant,
-) -> Response<ProxyBody> {
+) -> (Response<ProxyBody>, Option<UnitKey>) {
     let method = request.method().clone();
     let path = request.uri().path().to_owned();
     let query = request.uri().query().unwrap_or_default().to_owned();
     let view = assign::request_value(
         method.as_str(),
+        request.uri().host(),
         &path,
         Some(&query),
         request.headers(),
@@ -224,55 +252,103 @@ async fn route<O: Orchestrator>(
             Overridden::Assign { cookie } => (None, cookie),
             Overridden::Arm { decision, cookie } => (Some(decision), cookie),
             Overridden::Redirect { cookie } => {
-                return redirect(&same_site(request.uri()), Some(cookie));
+                return (redirect(&same_site(request.uri()), Some(cookie)), None);
             }
             Overridden::Refuse {
                 status,
                 message,
                 page: true,
-            } => return page(status, &message),
+            } => return (page(status, &message), None),
             Overridden::Refuse {
                 status, message, ..
-            } => return plain(status, message),
+            } => return (plain(status, message), None),
         },
     };
+    // An override is never counted.
     let over = chosen.is_some();
     let decision = match (chosen, &routing) {
         (Some(decision), _) => decision,
         (None, Some(routing)) => assign::decide(routing, &view, |key| ready(routing, key)),
-        (None, None) => Decision::live(None),
+        (None, None) => Decision::live(),
     };
-    if let Some((routing, session)) = routing.as_ref().zip(runtime.session()) {
-        for run in &decision.runs {
-            let origin = Origin {
-                experiment: run.experiment.clone(),
-                arm: run.arm.clone(),
-                version: routing
-                    .experiment(&run.experiment)
-                    .map(|experiment| experiment.version),
-            };
-            session.recorder.run(&origin, &run.subject, run.reason);
-        }
-    }
-    let mut serve = decision.serve.clone();
-    let address = match (&serve, &routing) {
+    let counter = routing
+        .clone()
+        .zip(runtime.session().map(|session| session.counter.clone()))
+        .filter(|_| !over);
+    let address = match (&decision.serve, &routing) {
         (Some(key), Some(routing)) => runtime.address(routing, key),
         _ => None,
     };
-    let address = match address {
-        Some(address) => address,
-        None => {
-            serve = None;
-            runtime.orchestrator.live_address()
-        }
+    let (serve, address) = match address {
+        Some(address) => (decision.serve.clone(), address),
+        None => (None, runtime.orchestrator.live_address()),
     };
+    let visit = match (&counter, counted(&decision, over, serve.is_some())) {
+        (Some((routing, counter)), Some((run, served))) => visitor(routing, &run.key, &run.subject)
+            .and_then(|visitor| match served {
+                true => Some(Visit {
+                    counter: counter.clone(),
+                    routing: routing.clone(),
+                    key: run.key.clone(),
+                    visitor,
+                }),
+                false => {
+                    counter.unavailable(visitor);
+                    None
+                }
+            }),
+        _ => None,
+    };
+    let response = deliver(runtime, peer, request, serve, address, override_change).await;
+    let arm = visit.map(|visit| {
+        visit.count(&view, &response, started);
+        visit.key
+    });
+    (response, arm)
+}
+
+/// What a request counts for: the run of an assigned visitor, and whether
+/// the arm serves it (`false`: the arm is not ready, and the visitor is
+/// counted as unavailable). Live and overrides count for nothing. `served`
+/// says whether the unit is still ready when the request is sent.
+fn counted(decision: &Decision, over: bool, served: bool) -> Option<(&Run, bool)> {
+    let run = decision.run.as_ref().filter(|_| !over)?;
+    match run.reason {
+        Reason::Assigned => Some((run, served)),
+        Reason::ArmUnavailable => Some((run, false)),
+        Reason::Override => None,
+    }
+}
+
+/// The visitor that a subject of an arm counts as, or `None` when the
+/// experiment no longer runs.
+fn visitor(routing: &Routing, key: &UnitKey, subject: &str) -> Option<Visitor> {
+    Some(Visitor {
+        experiment: key.experiment.clone(),
+        version: routing.version(key)?,
+        arm: key.commit.clone(),
+        subject: counts::subject_hash(&routing.salt, subject),
+    })
+}
+
+/// Send a request to `address`: live, or the unit `serve`. On a file
+/// runtime, answer from the files at `address` instead. A unit that fails
+/// sends a request without a body to live instead.
+async fn deliver<O: Orchestrator>(
+    runtime: &Arc<Runtime<O>>,
+    peer: SocketAddr,
+    mut request: Request<Incoming>,
+    mut serve: Option<UnitKey>,
+    address: String,
+    override_change: Option<String>,
+) -> Response<ProxyBody> {
     if address.is_empty() {
         return text(StatusCode::SERVICE_UNAVAILABLE, "the app is starting");
     }
     // A file runtime answers from the files of live or of the arm.
     let asked = FileRequest {
-        method: method.clone(),
-        path: path.clone(),
+        method: request.method().clone(),
+        path: request.uri().path().to_owned(),
         if_none_match: request
             .headers()
             .get(header::IF_NONE_MATCH)
@@ -297,22 +373,6 @@ async fn route<O: Orchestrator>(
                 }
             }
         };
-        let record = Recording::of(
-            runtime,
-            &serve,
-            &routing,
-            &decision,
-            &view,
-            &method,
-            &path,
-            &query,
-            served.status,
-            started,
-            over,
-        );
-        if let Some(record) = record {
-            record.finish(Some(served.body.len() as u64));
-        }
         let mut response = Response::new(
             Full::new(served.body)
                 .map_err(|never| match never {})
@@ -330,12 +390,7 @@ async fn route<O: Orchestrator>(
         }
         return response;
     }
-    prepare_headers(
-        &mut request,
-        peer,
-        serve.as_ref(),
-        decision.subject.as_deref(),
-    );
+    prepare_headers(&mut request, peer, serve.as_ref());
     let upgrade = is_upgrade(request.headers());
     let retry = (!upgrade && replayable(&request)).then(|| {
         (
@@ -370,8 +425,8 @@ async fn route<O: Orchestrator>(
             };
             serve = None;
             let live = runtime.orchestrator.live_address();
-            headers.remove("x-statespace-experiment");
-            headers.remove("x-statespace-arm");
+            headers.remove(EXPERIMENT_HEADER);
+            headers.remove(ARM_HEADER);
             let mut again = Request::new(Empty::new().map_err(|never| match never {}).boxed());
             *again.method_mut() = method;
             *again.uri_mut() = upstream_uri(&live, &uri);
@@ -390,13 +445,8 @@ async fn route<O: Orchestrator>(
             }
         }
     };
-    let status = response.status();
 
-    let record = Recording::of(
-        runtime, &serve, &routing, &decision, &view, &method, &path, &query, status, started, over,
-    );
-
-    if status == StatusCode::SWITCHING_PROTOCOLS {
+    if response.status() == StatusCode::SWITCHING_PROTOCOLS {
         if let Some(client_upgrade) = client_upgrade {
             let upstream_upgrade = hyper::upgrade::on(&mut response);
             tokio::spawn(async move {
@@ -408,9 +458,6 @@ async fn route<O: Orchestrator>(
                     .await;
                 }
             });
-        }
-        if let Some(record) = record {
-            record.finish(None);
         }
         let (parts, _) = response.into_parts();
         return Response::from_parts(parts, Empty::new().map_err(|never| match never {}).boxed());
@@ -426,108 +473,33 @@ async fn route<O: Orchestrator>(
     if serve.is_some() {
         make_private(&mut parts.headers);
     }
-    let finish: Option<Box<dyn FnOnce(u64) + Send + Sync>> = record.map(|record| {
-        Box::new(move |bytes: u64| record.finish(Some(bytes))) as Box<dyn FnOnce(u64) + Send + Sync>
-    });
-    Response::from_parts(
-        parts,
-        Metered {
-            inner: body,
-            bytes: 0,
-            finish,
-        }
-        .boxed(),
-    )
+    Response::from_parts(parts, body.boxed())
 }
 
-/// A request to a unit, recorded when its response ends. Live is never
-/// recorded.
-struct Recording {
-    recorder: Arc<super::recorder::Recorder>,
+/// A request that an arm serves to an assigned visitor, counted when its
+/// response headers arrive. Live and overrides are never counted.
+struct Visit {
+    counter: Arc<Counter>,
     routing: Arc<Routing>,
     key: UnitKey,
-    origin: Origin,
-    subject: Option<String>,
-    method: String,
-    path: String,
-    query: String,
-    view: Value,
-    status: StatusCode,
-    started: Instant,
-    first_byte_ms: f64,
-    request_bytes: Option<u64>,
-    over: bool,
+    visitor: Visitor,
 }
 
-impl Recording {
-    /// The recording of a response from `serve`, or `None` for live.
-    #[allow(clippy::too_many_arguments)]
-    fn of<O: Orchestrator>(
-        runtime: &Runtime<O>,
-        serve: &Option<UnitKey>,
-        routing: &Option<Arc<Routing>>,
-        decision: &Decision,
-        view: &Value,
-        method: &Method,
-        path: &str,
-        query: &str,
-        status: StatusCode,
-        started: Instant,
-        over: bool,
-    ) -> Option<Self> {
-        let (key, routing) = serve.clone().zip(routing.clone())?;
-        Some(Self {
-            recorder: runtime.session()?.recorder.clone(),
-            origin: Runtime::<O>::origin(&routing, &key),
-            routing,
-            key,
-            subject: decision.subject.clone(),
-            method: method.as_str().to_owned(),
-            path: path.to_owned(),
-            query: query.to_owned(),
-            view: view.clone(),
-            status,
-            started,
-            first_byte_ms: started.elapsed().as_secs_f64() * 1000.0,
-            request_bytes: view["headers"]["content-length"]
-                .as_str()
-                .and_then(|length| length.parse::<u64>().ok()),
-            over,
-        })
-    }
-
-    /// Record the request and the request events it matches.
-    fn finish(self, response_bytes: Option<u64>) {
-        let ms = self.started.elapsed().as_secs_f64() * 1000.0;
-        let path = redact::redact(&self.path, &self.routing.redact);
-        let query = redact::redact(&self.query, &self.routing.redact);
-        let request_id = self.recorder.request(
-            &self.origin,
-            RequestRow {
-                subject: self.subject.as_deref(),
-                method: &self.method,
-                path: &path,
-                query: &query,
-                status: self.status.as_u16(),
-                ms,
-                first_byte_ms: Some(self.first_byte_ms),
-                request_bytes: self.request_bytes,
-                response_bytes,
-                over: self.over,
-            },
-        );
-        // The unit's experiment decides which events apply.
-        let Some(events) = self.routing.events(&self.key) else {
-            return;
+impl Visit {
+    /// Count the response the visitor got, and the events it matches. When
+    /// the arm failed, that is the answer of the proxy or of live.
+    fn count(&self, request: &Value, response: &Response<ProxyBody>, started: Instant) {
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        let status = response.status().as_u16();
+        let events = match self.routing.events(&self.key) {
+            Some(events) if !events.is_empty() => {
+                let response = events::response_value(status, response.headers(), ms);
+                events.matching(request, &response)
+            }
+            _ => Vec::new(),
         };
-        for name in events.request(&self.view, self.status.as_u16(), ms) {
-            self.recorder.event(
-                &self.origin,
-                name,
-                self.subject.as_deref(),
-                Source::Request(&request_id),
-            );
-        }
+        self.counter
+            .served(self.visitor.clone(), status, ms, &events);
     }
 }
 
@@ -792,14 +764,10 @@ pub fn make_private(headers: &mut HeaderMap) {
     }
 }
 
-/// Tell the app who the subject is and what serves it. Clients cannot set
-/// Statespace headers themselves.
-pub fn prepare_headers<B>(
-    request: &mut Request<B>,
-    peer: SocketAddr,
-    serve: Option<&UnitKey>,
-    subject: Option<&str>,
-) {
+/// Tell the app which arm serves the request, with `ssp-experiment` and
+/// `ssp-arm`. Clients cannot set these headers themselves, and live never
+/// gets them.
+pub fn prepare_headers<B>(request: &mut Request<B>, peer: SocketAddr, serve: Option<&UnitKey>) {
     let authority = request
         .uri()
         .authority()
@@ -809,14 +777,8 @@ pub fn prepare_headers<B>(
     if !upgrade {
         remove_hop_by_hop(headers);
     }
-    let reserved: Vec<HeaderName> = headers
-        .keys()
-        .filter(|name| name.as_str().starts_with("x-statespace-"))
-        .cloned()
-        .collect();
-    for name in reserved {
-        headers.remove(name);
-    }
+    headers.remove(EXPERIMENT_HEADER);
+    headers.remove(ARM_HEADER);
     if !headers.contains_key(header::HOST)
         && let Some(value) = authority.and_then(|authority| HeaderValue::from_str(&authority).ok())
     {
@@ -835,12 +797,9 @@ pub fn prepare_headers<B>(
         }
     };
     set("x-forwarded-for", &forwarded);
-    if let Some(subject) = subject {
-        set("x-statespace-subject", subject);
-    }
     if let Some(key) = serve {
-        set("x-statespace-experiment", &key.experiment);
-        set("x-statespace-arm", &key.commit);
+        set(EXPERIMENT_HEADER, &key.experiment);
+        set(ARM_HEADER, &key.commit);
     }
 }
 
@@ -983,59 +942,6 @@ fn text(status: StatusCode, message: &'static str) -> Response<ProxyBody> {
     response
 }
 
-/// A response body that reports its size once it ends or is dropped, so
-/// streamed responses are timed to their last byte.
-struct Metered {
-    inner: Incoming,
-    bytes: u64,
-    finish: Option<Box<dyn FnOnce(u64) + Send + Sync>>,
-}
-
-impl Metered {
-    fn done(&mut self) {
-        if let Some(finish) = self.finish.take() {
-            finish(self.bytes);
-        }
-    }
-}
-
-impl Body for Metered {
-    type Data = Bytes;
-    type Error = hyper::Error;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Bytes>, hyper::Error>>> {
-        let this = self.get_mut();
-        let polled = Pin::new(&mut this.inner).poll_frame(context);
-        match &polled {
-            Poll::Ready(Some(Ok(frame))) => {
-                if let Some(data) = frame.data_ref() {
-                    this.bytes += data.len() as u64;
-                }
-            }
-            Poll::Ready(None) | Poll::Ready(Some(Err(_))) => this.done(),
-            Poll::Pending => {}
-        }
-        polled
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
-    }
-}
-
-impl Drop for Metered {
-    fn drop(&mut self) {
-        self.done();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1061,7 +967,7 @@ mod tests {
             let mut headers = HeaderMap::new();
             for (name, value) in pairs {
                 headers.insert(
-                    HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
                     value.parse().unwrap(),
                 );
             }
@@ -1113,13 +1019,12 @@ mod tests {
     }
 
     #[test]
-    fn sets_statespace_headers_and_removes_incoming_ones() {
+    fn names_the_arm_to_the_app_and_removes_incoming_names() {
         let peer: SocketAddr = "10.0.0.9:5000".parse().unwrap();
         let commit = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
         let incoming = [
-            ("x-statespace-arm", "spoofed"),
-            ("x-statespace-experiment", "spoofed"),
-            ("x-statespace-anything", "1"),
+            ("ssp-arm", "spoofed"),
+            ("ssp-experiment", "spoofed"),
             ("x-forwarded-for", "1.2.3.4"),
         ];
         let mut arm = request("/", &incoming);
@@ -1127,26 +1032,77 @@ mod tests {
             experiment: "checkout".into(),
             commit: commit.into(),
         };
-        prepare_headers(&mut arm, peer, Some(&key), Some("sid_1"));
+        prepare_headers(&mut arm, peer, Some(&key));
         let headers = arm.headers();
-        assert_eq!(headers["x-statespace-subject"], "sid_1");
-        assert_eq!(headers["x-statespace-experiment"], "checkout");
-        assert_eq!(headers["x-statespace-arm"], commit);
-        assert!(!headers.contains_key("x-statespace-anything"));
-        assert!(!headers.contains_key("x-statespace-side"));
+        assert_eq!(headers[EXPERIMENT_HEADER], "checkout");
+        assert_eq!(headers[ARM_HEADER], commit);
+        assert_eq!(headers.get_all(ARM_HEADER).iter().count(), 1);
         assert_eq!(headers["x-forwarded-for"], "1.2.3.4, 10.0.0.9");
+        assert!(!headers.contains_key("x-statespace-subject"));
 
         let mut live = request("/", &incoming);
-        prepare_headers(&mut live, peer, None, Some("sid_1"));
-        assert_eq!(live.headers()["x-statespace-subject"], "sid_1");
-        assert!(!live.headers().contains_key("x-statespace-arm"));
-        let mut live = request("/", &incoming);
-        prepare_headers(&mut live, peer, None, None);
-        assert!(
-            live.headers()
-                .keys()
-                .all(|name| !name.as_str().starts_with("x-statespace-"))
+        prepare_headers(&mut live, peer, None);
+        assert!(!live.headers().contains_key(EXPERIMENT_HEADER));
+        assert!(!live.headers().contains_key(ARM_HEADER));
+    }
+
+    #[test]
+    fn only_assigned_visitors_of_arms_count() {
+        let key = UnitKey {
+            experiment: "hero".into(),
+            commit: "a".repeat(40),
+        };
+        let decision = |reason| Decision {
+            serve: (reason != Reason::ArmUnavailable).then(|| key.clone()),
+            run: Some(Run {
+                key: key.clone(),
+                subject: "v_1".into(),
+                reason,
+            }),
+        };
+        let assigned = decision(Reason::Assigned);
+        assert_eq!(
+            counted(&assigned, false, true).map(|(_, served)| served),
+            Some(true)
         );
+        // The unit stopped being ready since the decision: live serves.
+        assert_eq!(
+            counted(&assigned, false, false).map(|(_, served)| served),
+            Some(false)
+        );
+        let unavailable = decision(Reason::ArmUnavailable);
+        assert_eq!(
+            counted(&unavailable, false, false).map(|(_, served)| served),
+            Some(false)
+        );
+        // Overrides and live are never counted.
+        assert!(counted(&decision(Reason::Override), true, true).is_none());
+        assert!(counted(&assigned, true, true).is_none());
+        assert!(counted(&Decision::live(), false, false).is_none());
+    }
+
+    #[test]
+    fn the_arms_cookie_is_readable_and_follows_the_assignment() {
+        let key = UnitKey {
+            experiment: "hero".into(),
+            commit: "a4946646bc0106a632833f54d3aaab42d83d4830".into(),
+        };
+        assert_eq!(
+            arms_cookie(Some(&key), false, false).as_deref(),
+            Some(
+                "ssp_arms=hero:a4946646bc0106a632833f54d3aaab42d83d4830; Path=/; \
+                 Max-Age=7776000; SameSite=Lax"
+            )
+        );
+        let secure = arms_cookie(Some(&key), true, true).unwrap();
+        assert!(secure.ends_with("SameSite=Lax; Secure"), "{secure}");
+        assert!(!secure.contains("HttpOnly"));
+        // A visitor in no arm loses the cookie, only when it had one.
+        assert_eq!(
+            arms_cookie(None, true, false).as_deref(),
+            Some("ssp_arms=; Path=/; Max-Age=0; SameSite=Lax")
+        );
+        assert_eq!(arms_cookie(None, false, false), None);
     }
 
     #[test]
@@ -1238,7 +1194,6 @@ mod tests {
     fn refusals_list_the_running_arms() {
         let config: super::super::config::RuntimeConfig = serde_json::from_value(json!({
             "app": "shop-prod", "salt": "s",
-            "settings": {"redact": []},
             "live": {"commit": "c0ffee1", "image": "shop@sha256:1"},
             "experiments": [
                 {"name": "checkout", "version": 1, "state": "running", "arms": [
