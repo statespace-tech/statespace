@@ -102,7 +102,7 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-7. Compare the versions:
+7. Read the results:
 
    ```text
    $ ssp experiment show checkout
@@ -119,7 +119,11 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
      signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
      search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
 
-   Find it in your own tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+   Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+
+   Override links:
+     c0ffee1  ?ssp=checkout:c0ffee1
+     a1b2c3d  ?ssp=checkout:a1b2c3d
    ```
 
 ## Community
