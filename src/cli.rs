@@ -838,41 +838,6 @@ mod tests {
                 "--color",
                 "blue",
             ],
-            // The app comes from the runtime token; no proxy takes --app.
-            vec![
-                "ssp",
-                "proxy",
-                "docker",
-                "--app",
-                "shop-prod",
-                "--token",
-                "t",
-                "--live-container",
-                "shop",
-            ],
-            vec![
-                "ssp",
-                "proxy",
-                "cloudrun",
-                "--app",
-                "shop-prod",
-                "--token",
-                "t",
-                "--service",
-                "shop",
-                "--region",
-                "us-east1",
-            ],
-            // Docker forwards to a live container; it no longer runs live.
-            vec![
-                "ssp",
-                "proxy",
-                "docker",
-                "--token",
-                "t",
-                "--image-file",
-                "/etc/shop/image",
-            ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }

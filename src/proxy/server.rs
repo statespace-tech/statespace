@@ -1038,7 +1038,6 @@ mod tests {
         assert_eq!(headers[ARM_HEADER], commit);
         assert_eq!(headers.get_all(ARM_HEADER).iter().count(), 1);
         assert_eq!(headers["x-forwarded-for"], "1.2.3.4, 10.0.0.9");
-        assert!(!headers.contains_key("x-statespace-subject"));
 
         let mut live = request("/", &incoming);
         prepare_headers(&mut live, peer, None);

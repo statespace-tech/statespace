@@ -171,8 +171,11 @@ mod tests {
                 r#"response.headers["x-app-event"] == "account_created""#,
             ),
             ("missing", r#"request.headers["x-missing"] == "1""#),
-            // Removed in 0.5.0: these fields are missing, so no match.
-            ("old", "request.status == 201 || request.ms > 0.0"),
+            // A field that a request does not have is no match.
+            (
+                "unknown",
+                r#"request.user == "octo" || request.ip == "1.2.3.4""#,
+            ),
         ]);
         assert_eq!(
             events.matching(&post("/signup"), &response(201, 12.0, None)),

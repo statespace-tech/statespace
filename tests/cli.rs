@@ -2229,7 +2229,19 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     let headers = &arm_body["headers"];
     assert_eq!(headers["ssp-experiment"], "checkout");
     assert_eq!(headers["ssp-arm"], ARM);
-    assert!(headers.get("x-statespace-subject").is_none());
+    // The subject reaches the arm only in the client's own cookie.
+    let carriers: Vec<&String> = headers
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, value)| {
+            value
+                .as_str()
+                .is_some_and(|value| value.contains(&arm_subject))
+        })
+        .map(|(name, _)| name)
+        .collect();
+    assert_eq!(carriers, ["cookie"], "{headers}");
     assert_eq!(headers["authorization"], "Bearer the-app's-own");
     // The ID token is for the URL of the unit's own service.
     let arm_url = test.google.lock().unwrap().arm.clone();
@@ -2262,7 +2274,6 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     assert_eq!(live_body["name"], "live");
     assert!(live_body["headers"].get("ssp-arm").is_none());
     assert!(live_body["headers"].get("ssp-experiment").is_none());
-    assert!(live_body["headers"].get("x-statespace-subject").is_none());
     assert_eq!(live_response["cache-control"], "public, max-age=60");
 
     // While checkout uses the subject cookie, every response renews it, and
@@ -2323,12 +2334,18 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     for subject in [&arm_subject, &live_arm_subject, &live_subject] {
         assert!(!sent.contains(subject.as_str()), "{subject}");
     }
-    // No rows and no logs: only counts.
+    // The proxy calls only the runtime API.
     assert!(
         state
             .received
             .iter()
-            .all(|received| received.path != "/v1/events")
+            .all(|received| received.path.starts_with("/v1/runtime/")),
+        "{:?}",
+        state
+            .received
+            .iter()
+            .map(|received| &received.path)
+            .collect::<Vec<_>>()
     );
     drop(state);
     // Reports name the orchestrator and live image; the holder adds each

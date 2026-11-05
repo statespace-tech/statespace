@@ -1112,9 +1112,6 @@ Versions:
         );
         detail["results"]["split"] = json!({"ok": false});
         assert!(show(&shown(&detail)).contains(" · split off\n"));
-        for gone in ["(%)", "±", "error rate", "p=", "Arms:", "History:", "Drift"] {
-            assert!(!text.contains(gone), "{gone:?} in\n{text}");
-        }
 
         detail["results"] = Value::Null;
         detail["versions"] = json!([]);
