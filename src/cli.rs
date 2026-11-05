@@ -838,6 +838,18 @@ mod tests {
                 "--color",
                 "blue",
             ],
+            // The app comes from the runtime token; no proxy takes --app.
+            vec![
+                "ssp",
+                "proxy",
+                "docker",
+                "--app",
+                "shop-prod",
+                "--token",
+                "t",
+                "--live-container",
+                "shop",
+            ],
         ] {
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
         }
