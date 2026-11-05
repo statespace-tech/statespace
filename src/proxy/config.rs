@@ -8,8 +8,6 @@ use super::orchestrator::Build;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RuntimeConfig {
-    #[allow(dead_code)]
-    pub app: String,
     pub salt: String,
     #[serde(default)]
     pub settings_hash: Option<String>,

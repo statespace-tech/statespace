@@ -25,11 +25,9 @@ pub struct Granted {
     pub lease: bool,
 }
 
-/// A recent build of the app: its commit, and its image or files.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
+/// A recent build of the app: its image or files.
+#[derive(Debug, Deserialize)]
 pub struct Recorded {
-    #[allow(dead_code)]
-    pub commit: String,
     #[serde(flatten)]
     pub build: Build,
 }
