@@ -456,11 +456,23 @@ fn describe(build: &Build) -> String {
     }
 }
 
+/// The live to report. When live cannot be read for a moment, such as while
+/// a new live starts on Fargate, the proxy reports the last live it read:
+/// live has not changed as far as anyone can tell, and a report without live
+/// would stop the app's experiments.
+fn reported_live(read: anyhow::Result<Live>, last: &mut Option<Live>) -> Option<Live> {
+    if let Ok(live) = read {
+        *last = Some(live);
+    }
+    last.clone()
+}
+
 /// Report this instance every 10 seconds. The answer grants or renews the
 /// lease; the holder also reports what runs.
 async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>) {
     let mut held = false;
     let mut dropped = 0;
+    let mut last_live = None;
     loop {
         let sent = Instant::now();
         let now_dropped = session.counter.dropped();
@@ -478,10 +490,14 @@ async fn report<O: Orchestrator>(runtime: Arc<Runtime<O>>, session: Arc<Session>
             "orchestrator": runtime.orchestrator.name(),
             "settings_hash": routing.as_ref().and_then(|routing| routing.settings_hash.clone()),
         });
-        match runtime.orchestrator.live(&session.app).await {
-            Ok(Live::Image(image)) => body["live_image"] = json!(image),
-            Ok(Live::Files(hash)) => body["live_files"] = json!(hash),
-            Err(error) => runtime.note(format!("could not read what live runs: {error:#}")),
+        let read = runtime.orchestrator.live(&session.app).await;
+        if let Err(error) = &read {
+            runtime.note(format!("could not read what live runs: {error:#}"));
+        }
+        match reported_live(read, &mut last_live) {
+            Some(Live::Image(image)) => body["live_image"] = json!(image),
+            Some(Live::Files(hash)) => body["live_files"] = json!(hash),
+            None => {}
         }
         if runtime.lease.held(sent) {
             body["units"] = json!(runtime.unit_report(routing.as_deref()));
@@ -646,6 +662,29 @@ fn known(address: &str) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn reports_the_last_live_while_live_cannot_be_read() {
+        let mut last = None;
+        assert_eq!(
+            super::reported_live(Err(anyhow::anyhow!("starting")), &mut last),
+            None
+        );
+        let live = super::Live::Files("sha256:1".into());
+        assert_eq!(
+            super::reported_live(Ok(live.clone()), &mut last),
+            Some(live.clone())
+        );
+        assert_eq!(
+            super::reported_live(Err(anyhow::anyhow!("starting")), &mut last),
+            Some(live)
+        );
+        let next = super::Live::Files("sha256:2".into());
+        assert_eq!(
+            super::reported_live(Ok(next.clone()), &mut last),
+            Some(next)
+        );
+    }
 
     #[test]
     fn reports_leave_out_an_empty_address() {

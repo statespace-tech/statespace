@@ -119,6 +119,12 @@ data tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** `ssp db url` and `ssp db rotate`. There is no SQL access. Read the
   results with `ssp experiment show`, its `--json`, or the dashboard.
 
+### Fixed
+
+- While the proxy cannot read what live runs, such as while a new live starts on
+  ECS Fargate, it reports the last live that it read. Before, its reports named no
+  live, and the experiments of the app stopped until the new live was ready.
+
 ## 0.4.3 - 2026-11-03
 
 `ssp` runs alongside live, never inside it. It never changes a resource that it did
