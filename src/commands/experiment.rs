@@ -875,11 +875,13 @@ fn whole(value: &Value) -> String {
 }
 
 /// A rate and its 95% margin, such as `2.1 (±0.8)`. Without a value, `–`;
-/// without a margin (fewer than 30 visitors), `2.1 (±–)`.
+/// without a margin (fewer than 30 visitors), `2.1 (–)`, as in commit
+/// statuses.
 fn rate(value: &Value) -> String {
-    match value["value"].as_f64() {
-        None => "–".into(),
-        Some(number) => format!("{number:.1} (±{})", decimal(&value["margin"])),
+    match (value["value"].as_f64(), value["margin"].as_f64()) {
+        (None, _) => "–".into(),
+        (Some(number), None) => format!("{number:.1} (–)"),
+        (Some(number), Some(_)) => format!("{number:.1} (±{})", decimal(&value["margin"])),
     }
 }
 
@@ -1029,7 +1031,7 @@ Find it in your own tools:
         detail["lookup"]["window"]["to"] = json!("2026-11-05T10:00:00Z");
         let shown = show(&detail);
         assert!(
-            shown.contains("error rate %         0.2 (±–)       –\n"),
+            shown.contains("error rate %         0.2 (–)        –\n"),
             "{shown}"
         );
         assert!(shown.contains("latency p50 ms       41             –\n"));
