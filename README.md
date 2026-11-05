@@ -3,9 +3,9 @@
 <div align="center">
   <a href="https://statespace.com">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-dark.png">
-      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-light.png">
-      <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-light.png" alt="Statespace" width="520">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-light.svg">
+      <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-dark.svg">
+      <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/header-dark.svg" alt="Statespace" width="520">
     </picture>
   </a>
 </div>
@@ -21,13 +21,14 @@
 
 </div>
 
-Statespace lets you A/B test code changes on your own infrastructure. A reverse proxy runs beside your app and routes a small share of your traffic to experimental versions of it. Statespace shows the results of each version, and labels them in your own tools so your agents can compare and act on them.
+Statespace lets you A/B test code changes on your own infrastructure. A reverse proxy runs beside your app and routes a small share of your traffic to experimental versions of it. Statespace tags their logs, traces, and requests before they land in your own data tools so your agents can compare and act on them.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png">
-  <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.png" alt="Requests go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. The data of the two commits goes to Postgres." width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-light.svg">
+  <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.svg">
+  <img src="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.svg" alt="Subjects go through the proxy: 80% to main, and 10% to each of the commits c0ffee1 and a1b2c3d. All of it goes on to your own data tools, such as Datadog, Grafana, Sentry, PostHog, Postgres, OpenTelemetry, Google Analytics, Supabase, and Elasticsearch." width="100%">
 </picture>
+
 
 <p align="center">
   <a href="https://docs.statespace.com/guides/docker">Docker</a> ·
