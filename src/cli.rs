@@ -217,12 +217,17 @@ pub enum ExperimentCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Show an experiment: its definition, arms, evidence, and history.
+    /// Show an experiment: its definition, arms, history, the results of a
+    /// version per arm, where to find it in your own tools, and its versions.
     Show {
         #[arg(value_parser = experiment_name)]
         name: String,
         #[command(flatten)]
         app: AppFlag,
+        /// The results of this version, such as 3. A stopped version shows
+        /// its snapshot. Defaults to the current or last version.
+        #[arg(long, value_name = "N")]
+        version: Option<u32>,
     },
     /// Add, change, or remove arms. Without --arm, print the arms.
     Update {

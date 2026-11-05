@@ -311,15 +311,13 @@ fn compact(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Null => "-".into(),
         Value::Array(items) if items.is_empty() => "none".into(),
-        // Events and metrics, by name or label.
+        // Events, by name.
         Value::Array(items) => items
             .iter()
-            .map(
-                |item| match item.get("name").or_else(|| item.get("label")) {
-                    Some(name) => text(name),
-                    None => compact(item),
-                },
-            )
+            .map(|item| match item.get("name") {
+                Some(name) => text(name),
+                None => compact(item),
+            })
             .collect::<Vec<_>>()
             .join(", "),
         other => other.to_string(),
@@ -347,8 +345,8 @@ mod tests {
     fn shows_settings_compactly() {
         assert_eq!(compact(&json!([])), "none");
         assert_eq!(
-            compact(&json!([{"name": "purchase", "match": "x"}, {"label": "rate %"}])),
-            "purchase, rate %"
+            compact(&json!([{"name": "purchase", "match": "x"}, {"name": "signup"}])),
+            "purchase, signup"
         );
         assert_eq!(compact(&json!(false)), "false");
     }

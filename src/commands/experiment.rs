@@ -66,9 +66,13 @@ pub fn run(api: &Api, command: ExperimentCommand) -> anyhow::Result<()> {
                 table(&["NAME", "STATE", "VERSION", "ARMS", "HEADLINE"], rows)
             })
         }
-        ExperimentCommand::Show { name, app } => {
+        ExperimentCommand::Show { name, app, version } => {
             let app = resolve(api, app.app)?;
-            let experiment: Value = api.get(&experiment_path(&app, &name))?;
+            let mut path = experiment_path(&app, &name);
+            if let Some(version) = version {
+                path.push_str(&format!("?version={version}"));
+            }
+            let experiment: Value = api.get(&path)?;
             emit(&experiment, || show(&experiment))
         }
         ExperimentCommand::Update {
@@ -495,18 +499,6 @@ fn number(value: &Value) -> String {
     }
 }
 
-/// An event's value for one arm: a count of lines, with the subjects of a
-/// request event.
-fn event_value(value: &Value) -> String {
-    match (&value["lines"], &value["subjects"]) {
-        (lines, Value::Null) if lines.is_number() => number(lines),
-        (lines, subjects) if lines.is_number() => {
-            format!("{} ({} subjects)", number(lines), number(subjects))
-        }
-        _ => number(value),
-    }
-}
-
 fn show(experiment: &Value) -> String {
     let definition = &experiment["definition"];
     let mut rows = vec![
@@ -606,82 +598,6 @@ fn show(experiment: &Value) -> String {
         )));
     }
 
-    let columns: Vec<String> = commits.iter().map(|commit| short(commit)).collect();
-    let header = |first: &'static str| -> Vec<&str> {
-        std::iter::once(first)
-            .chain(columns.iter().map(String::as_str))
-            .collect()
-    };
-    if let Some(totals) = experiment["totals"]
-        .as_object()
-        .filter(|totals| !totals.is_empty())
-    {
-        out.push_str(&format!(
-            "\nEvidence of version {}:\n",
-            text(&experiment["version"])
-        ));
-        let keys = ["subjects", "requests", "errors", "p50_ms", "p90_ms"];
-        let rows = keys
-            .iter()
-            .map(|key| {
-                std::iter::once((*key).to_owned())
-                    .chain(commits.iter().map(|commit| {
-                        number(totals.get(commit).map_or(&Value::Null, |total| &total[key]))
-                    }))
-                    .collect()
-            })
-            .collect();
-        out.push_str(&indent(&table(&header("TOTAL"), rows)));
-    }
-    if let Some(metrics) = experiment["metrics"]
-        .as_array()
-        .filter(|list| !list.is_empty())
-    {
-        let rows = metrics
-            .iter()
-            .map(|metric| {
-                std::iter::once(text(&metric["label"]))
-                    .chain(
-                        commits
-                            .iter()
-                            .map(|commit| number(&metric["values"][commit])),
-                    )
-                    .collect()
-            })
-            .collect();
-        out.push('\n');
-        out.push_str(&indent(&table(&header("METRIC"), rows)));
-    }
-    if let Some(events) = experiment["events"]
-        .as_array()
-        .filter(|list| !list.is_empty())
-    {
-        let rows = events
-            .iter()
-            .map(|event| {
-                std::iter::once(text(&event["name"]))
-                    .chain(
-                        commits
-                            .iter()
-                            .map(|commit| event_value(&event["values"][commit])),
-                    )
-                    .collect()
-            })
-            .collect();
-        out.push('\n');
-        out.push_str(&indent(&table(&header("EVENT"), rows)));
-    }
-    let split = &experiment["split"];
-    if !experiment["totals"].is_null() {
-        out.push_str(&format!(
-            "\nSplit: {}\n",
-            match split["ok"].as_bool() {
-                Some(true) => "OK".to_owned(),
-                Some(false) => format!("off (p={})", text(&split["p"])),
-                None => "not checked yet: fewer than 100 subjects".into(),
-            }
-        ));
-    }
     if let Some(urls) = experiment["override_urls"]
         .as_object()
         .filter(|urls| !urls.is_empty())
@@ -693,6 +609,31 @@ fn show(experiment: &Value) -> String {
             }
         }
     }
+    if let Some(history) = experiment["history"]
+        .as_array()
+        .filter(|list| !list.is_empty())
+    {
+        out.push_str("\nHistory:\n");
+        for entry in history {
+            let mut line = format!("  {}  {}", time(&entry["at"]), text(&entry["text"]));
+            if let Some(actor) = entry["actor"].as_str() {
+                line.push_str(&format!(" · {actor}"));
+                line.push_str(match entry["via"].as_str() {
+                    Some("cli") => " with the CLI",
+                    Some("dashboard") => " in the dashboard",
+                    Some("api") => " through the API",
+                    _ => "",
+                });
+            }
+            if let Some(note) = entry["note"].as_str().filter(|note| !note.is_empty()) {
+                line.push_str(&format!(" · {note}"));
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
+    }
+    out.push_str(&results(experiment));
+    out.push_str(&lookup(experiment));
     if let Some(versions) = experiment["versions"]
         .as_array()
         .filter(|list| !list.is_empty())
@@ -736,30 +677,222 @@ fn show(experiment: &Value) -> String {
             rows,
         )));
     }
-    if let Some(history) = experiment["history"]
-        .as_array()
-        .filter(|list| !list.is_empty())
-    {
-        out.push_str("\nHistory:\n");
-        for entry in history {
-            let mut line = format!("  {}  {}", time(&entry["at"]), text(&entry["text"]));
-            if let Some(actor) = entry["actor"].as_str() {
-                line.push_str(&format!(" · {actor}"));
-                line.push_str(match entry["via"].as_str() {
-                    Some("cli") => " with the CLI",
-                    Some("dashboard") => " in the dashboard",
-                    Some("api") => " through the API",
-                    _ => "",
-                });
-            }
-            if let Some(note) = entry["note"].as_str().filter(|note| !note.is_empty()) {
-                line.push_str(&format!(" · {note}"));
-            }
-            out.push_str(&line);
-            out.push('\n');
-        }
-    }
     out
+}
+
+/// The results of one version per arm, as `show` prints them: the arms in
+/// columns, a row for each result, and the split check. An empty string
+/// before the first start.
+fn results(experiment: &Value) -> String {
+    let Some(arms) = experiment["results"]
+        .as_array()
+        .filter(|arms| !arms.is_empty())
+    else {
+        return String::new();
+    };
+    let window = &experiment["lookup"]["window"];
+    let since = match (window["from"].is_null(), window["to"].is_null()) {
+        (true, _) => String::new(),
+        (false, true) => format!(" (since {})", time(&window["from"])),
+        (false, false) => format!(" ({} to {})", time(&window["from"]), time(&window["to"])),
+    };
+    let mut rows: Vec<(String, Vec<String>)> = vec![
+        (
+            "".into(),
+            arms.iter()
+                .map(|arm| short(arm["commit"].as_str().unwrap_or_default()))
+                .collect(),
+        ),
+        (
+            "visitors".into(),
+            arms.iter().map(|arm| count(&arm["visitors"])).collect(),
+        ),
+        (
+            "requests/visitor".into(),
+            arms.iter()
+                .map(|arm| decimal(&arm["requests_per_visitor"]))
+                .collect(),
+        ),
+        (
+            "error rate %".into(),
+            arms.iter().map(|arm| rate(&arm["error_rate"])).collect(),
+        ),
+        (
+            "latency p50 ms".into(),
+            arms.iter()
+                .map(|arm| whole(&arm["latency_p50_ms"]))
+                .collect(),
+        ),
+        (
+            "latency p90 ms".into(),
+            arms.iter()
+                .map(|arm| whole(&arm["latency_p90_ms"]))
+                .collect(),
+        ),
+    ];
+    // One row for each event, in the order of statespace.toml.
+    let names: Vec<String> = arms[0]["events"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|event| text(&event["name"]))
+        .collect();
+    for name in names {
+        let values = arms
+            .iter()
+            .map(|arm| {
+                arm["events"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|event| event["name"] == name.as_str())
+                    .map_or_else(|| "–".into(), |event| rate(&event["rate"]))
+            })
+            .collect();
+        rows.push((format!("{name} %"), values));
+    }
+    let split = &experiment["split"];
+    let split = match split["ok"].as_bool() {
+        Some(true) => "ok".to_owned(),
+        Some(false) => format!("off (p={})", probability(&split["p"])),
+        None => "–".into(),
+    };
+    let label_width = rows
+        .iter()
+        .map(|(label, _)| label.chars().count())
+        .chain(["split".len()])
+        .max()
+        .unwrap_or(0)
+        .max(19)
+        + 2;
+    let value_width = rows
+        .iter()
+        .flat_map(|(_, values)| values.iter().map(|value| value.chars().count()))
+        .max()
+        .unwrap_or(0)
+        .max(13)
+        + 2;
+    let mut out = format!(
+        "\nEvidence of version {}{since}:\n",
+        text(&experiment["results_version"])
+    );
+    let line = |label: &str, values: &[String]| {
+        let mut line = format!("  {label:label_width$}");
+        let last = values.len().saturating_sub(1);
+        for (index, value) in values.iter().enumerate() {
+            match index == last {
+                true => line.push_str(value),
+                false => line.push_str(&format!("{value:value_width$}")),
+            }
+        }
+        format!("{}\n", line.trim_end())
+    };
+    for (label, values) in &rows {
+        out.push_str(&line(label, values));
+    }
+    out.push_str(&line("split", &[split]));
+    out
+}
+
+/// Where to find the version in the customer's own tools: the window and
+/// the labels of the arms.
+fn lookup(experiment: &Value) -> String {
+    let lookup = &experiment["lookup"];
+    let Some(arms) = lookup["arms"].as_array().filter(|arms| !arms.is_empty()) else {
+        return String::new();
+    };
+    let commits: Vec<String> = arms
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|commit| format!("{}…", short(commit)))
+        .collect();
+    let quoted = |values: &[String]| {
+        values
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+    let name = text(&experiment["name"]);
+    let window = &lookup["window"];
+    let to = window["to"].as_str().unwrap_or("now");
+    let arms_line = format!("statespace.arm = {}", quoted(&commits));
+    let mut out = String::from("\nFind it in your own tools:\n");
+    out.push_str(&format!("  Window   {} → {to}\n", text(&window["from"])));
+    out.push_str(&format!(
+        "  Arms     {arms_line}     (no attribute: live)\n"
+    ));
+    out.push_str(&format!(
+        "           statespace.experiment = {}\n",
+        quoted(std::slice::from_ref(&name))
+    ));
+    out.push_str(&format!(
+        "  Version  service.version = {}\n",
+        quoted(&commits)
+    ));
+    let cookies: Vec<String> = commits
+        .iter()
+        .map(|commit| format!("{name}:{commit}"))
+        .collect();
+    out.push_str(&format!(
+        "  Browser  cookie ssp_arms contains {}\n",
+        quoted(&cookies)
+    ));
+    out
+}
+
+/// A count with thousands separators, such as `1,204`, or `–`.
+fn count(value: &Value) -> String {
+    let Some(number) = value.as_i64() else {
+        return "–".into();
+    };
+    let digits = number.unsigned_abs().to_string();
+    let mut grouped = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    if number < 0 {
+        grouped.insert(0, '-');
+    }
+    grouped
+}
+
+/// A number with one decimal, such as `4.1`, or `–`.
+fn decimal(value: &Value) -> String {
+    value
+        .as_f64()
+        .map_or_else(|| "–".into(), |number| format!("{number:.1}"))
+}
+
+/// A whole number, such as `41`, or `–`.
+fn whole(value: &Value) -> String {
+    value
+        .as_f64()
+        .map_or_else(|| "–".into(), |number| format!("{number:.0}"))
+}
+
+/// A rate and its 95% margin, such as `2.1 (±0.8)`. Without a value, `–`;
+/// without a margin (fewer than 30 visitors), `2.1 (±–)`.
+fn rate(value: &Value) -> String {
+    match value["value"].as_f64() {
+        None => "–".into(),
+        Some(number) => format!("{number:.1} (±{})", decimal(&value["margin"])),
+    }
+}
+
+/// A p-value, such as `0.0004`, or `<0.0001`.
+fn probability(value: &Value) -> String {
+    match value.as_f64() {
+        Some(p) if p < 0.0001 => "<0.0001".into(),
+        Some(p) => {
+            let text = format!("{p:.4}");
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        }
+        None => "–".into(),
+    }
 }
 
 fn indent(text: &str) -> String {
@@ -813,43 +946,106 @@ mod tests {
     }
 
     #[test]
-    fn shows_evidence_per_arm() {
-        let mut detail = experiment(&[(LIVE, 0.05), (OLD, 0.05)]);
+    fn shows_results_per_arm() {
+        const REFERENCE: &str = "619f978000000000000000000000000000000000";
+        const ARM: &str = "a494664000000000000000000000000000000000";
+        let mut detail = experiment(&[(REFERENCE, 0.05), (ARM, 0.05)]);
+        detail["name"] = json!("hero");
         detail["state"] = json!("running");
         detail["arms"][1]["ready"] = json!(false);
         detail["arms"][1]["reason"] = json!("the container exits at start (exit 1)");
-        detail["totals"] = json!({LIVE: {"subjects": 2031, "requests": 9000, "errors": 3},
-                                  OLD: {"subjects": 2040}});
-        detail["metrics"] = json!([{"label": "purchase rate %", "values": {LIVE: 2.8, OLD: 3.4}}]);
-        detail["events"] =
-            json!([{"name": "purchase", "values": {LIVE: {"lines": 57, "subjects": 57}}}]);
-        detail["split"] = json!({"ok": false, "p": 0.0004});
+        detail["results_version"] = json!(4);
+        let arm = |commit: &str,
+                   visitors: i64,
+                   per: f64,
+                   error: (f64, f64),
+                   p50: f64,
+                   p90: f64,
+                   signup: (f64, f64)| {
+            json!({"commit": commit, "visitors": visitors, "requests_per_visitor": per,
+                   "error_rate": {"value": error.0, "margin": error.1},
+                   "latency_p50_ms": p50, "latency_p90_ms": p90,
+                   "events": [{"name": "signup", "visitors": 25,
+                               "rate": {"value": signup.0, "margin": signup.1}}]})
+        };
+        detail["results"] = json!([
+            arm(REFERENCE, 1204, 4.1, (0.2, 0.1), 41.0, 120.0, (2.1, 0.8)),
+            arm(ARM, 1188, 4.3, (0.3, 0.1), 44.2, 131.0, (2.6, 0.9)),
+        ]);
+        detail["split"] = json!({"ok": true, "p": 0.41});
+        detail["lookup"] = json!({
+            "window": {"from": "2026-11-04T09:12:00Z", "to": null},
+            "arms": [REFERENCE, ARM],
+            "attributes": {"statespace.arm": [REFERENCE, ARM]},
+        });
         detail["drift"] = json!({"live_commit": "f2f2f2f000"});
-        detail["override_urls"] = json!({OLD: "https://shop.example.com/?ssp=checkout:a1b2c3d"});
-        detail["versions"] = json!([{"version": 1, "arms": {LIVE: 0.05, OLD: 0.05},
+        detail["override_urls"] = json!({ARM: "https://shop.example.com/?ssp=hero:a494664"});
+        detail["versions"] = json!([{"version": 1, "arms": {REFERENCE: 0.05, ARM: 0.05},
             "started_at": "2026-10-29T10:00:00Z", "started_by": "octo",
             "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "stop_note": "enough data"}]);
         detail["history"] = json!([{"at": "2026-10-29T10:00:00Z", "actor": "octo", "via": "cli",
-            "text": "started v1", "note": "one-page checkout"}]);
+            "text": "started v1", "note": "one-page hero"}]);
         let shown = show(&detail);
+        let evidence = "\
+Evidence of version 4 (since 2026-11-04 09:12 UTC):
+                       619f978        a494664
+  visitors             1,204          1,188
+  requests/visitor     4.1            4.3
+  error rate %         0.2 (±0.1)     0.3 (±0.1)
+  latency p50 ms       41             44
+  latency p90 ms       120            131
+  signup %             2.1 (±0.8)     2.6 (±0.9)
+  split                ok
+";
+        assert!(shown.contains(evidence), "{shown}");
+        let tools = "\
+Find it in your own tools:
+  Window   2026-11-04T09:12:00Z → now
+  Arms     statespace.arm = \"619f978…\" | \"a494664…\"     (no attribute: live)
+           statespace.experiment = \"hero\"
+  Version  service.version = \"619f978…\" | \"a494664…\"
+  Browser  cookie ssp_arms contains \"hero:619f978…\" | \"hero:a494664…\"
+";
+        assert!(shown.contains(tools), "{shown}");
         for expected in [
             "Drift:       live is now f2f2f2f",
             "not ready: the container exits at start (exit 1)",
-            "reference",
-            "purchase rate %  2.8      3.4",
-            "purchase  57 (57 subjects)  –",
-            "Split: off (p=0.0004)",
-            "a1b2c3d   https://shop.example.com/?ssp=checkout:a1b2c3d",
-            "a1b2c3d=0.05 c0ffee1=0.05",
-            "2026-10-29 10:00 UTC  started v1 · octo with the CLI · one-page checkout",
-            "enough data",
+            "a494664   https://shop.example.com/?ssp=hero:a494664",
+            "2026-10-29 10:00 UTC  started v1 · octo with the CLI · one-page hero",
         ] {
             assert!(shown.contains(expected), "{expected:?} in\n{shown}");
         }
+        // The versions come last.
+        let versions = shown.find("Versions:").unwrap();
+        assert!(versions > shown.find("Find it in your own tools").unwrap());
+        assert!(shown.trim_end().ends_with("enough data"), "{shown}");
+        assert!(!shown.contains("METRIC") && !shown.contains("TOTAL"));
+
+        // Without a margin, a value, or the split check.
+        detail["results"][0]["error_rate"] = json!({"value": 0.2, "margin": null});
+        detail["results"][1]["error_rate"] = json!({"value": null, "margin": null});
+        detail["results"][1]["latency_p50_ms"] = Value::Null;
+        detail["split"] = Value::Null;
+        detail["lookup"]["window"]["to"] = json!("2026-11-05T10:00:00Z");
+        let shown = show(&detail);
+        assert!(
+            shown.contains("error rate %         0.2 (±–)       –\n"),
+            "{shown}"
+        );
+        assert!(shown.contains("latency p50 ms       41             –\n"));
+        assert!(shown.contains("split                –\n"));
+        assert!(shown.contains("(2026-11-04 09:12 UTC to 2026-11-05 10:00 UTC):"));
+        assert!(shown.contains("2026-11-04T09:12:00Z → 2026-11-05T10:00:00Z"));
+        detail["split"] = json!({"ok": false, "p": 0.0004});
+        assert!(show(&detail).contains("split                off (p=0.0004)\n"));
+
+        assert_eq!(count(&json!(1234567)), "1,234,567");
+        assert_eq!(count(&json!(12)), "12");
+        assert_eq!(probability(&json!(0.00001)), "<0.0001");
         assert_eq!(
-            headline(&json!({"arms": [{"commit": LIVE}, {"commit": OLD}],
-                              "headline": {"label": "rate %", "values": {LIVE: 2.8, OLD: null}}})),
-            "rate %: c0ffee1 2.8, a1b2c3d –"
+            headline(&json!({"arms": [{"commit": REFERENCE}, {"commit": ARM}],
+                              "headline": {"label": "signup %", "values": {REFERENCE: 2.1, ARM: null}}})),
+            "signup %: 619f978 2.1, a494664 –"
         );
     }
 }
