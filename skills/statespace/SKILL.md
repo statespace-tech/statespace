@@ -5,8 +5,8 @@ description: Run commits of an app as arms of an experiment on shares of live tr
 
 # Statespace
 
-Statespace runs commits of an app on small shares of live traffic and records
-what happens.
+Statespace runs commits of an app on small shares of live traffic and counts
+what happens to their visitors.
 
 - An **app** is one running copy of a service, such as `shop-prod`. A proxy is
   in front of it.
@@ -14,11 +14,10 @@ what happens.
   `statespace.toml` defines it, such as `[experiment.checkout]`.
 - An **arm** is one commit in one experiment, with an exact share of the
   app's subjects, such as `a1b2c3d=0.05`. The commit is the arm's ID.
-- The **reference** is the arm that you added first. Evidence compares each
-  arm with it. To compare a change with what runs now, add the live commit as
-  an arm.
+- The **reference** is the arm that you added first. To compare a change
+  with what runs now, add the live commit as an arm.
 - **Live** gets every request that no experiment takes. Statespace never
-  records live.
+  counts live or overrides.
 - Each `start` begins a new **version**. Evidence is per version.
 - Settings and experiment definitions are in `statespace.toml`. They change
   only by commits. The file in the build that live runs applies.
@@ -67,7 +66,7 @@ access`. Tell the user, and stop. Retrying does not help.
    https://statespace.com.
 3. Write `statespace.toml` in the app's folder. Start from the file in
    [Starter statespace.toml](#starter-statespacetoml). Change the event
-   rules and the metric to match the app.
+   rules to match the app.
 4. Add the step of `statespace-tech/action@v1` after the build, in the
    workflow that builds every commit that can become an arm. See
    [CI step](#ci-step).
@@ -161,8 +160,6 @@ proxy's service account:
 3. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
    repository of the images. Cloud Run deploys an image only when the
    caller can read it.
-4. Logs Viewer (`roles/logging.viewer`) on the project, to read the output
-   of the arms.
 
 Gotchas:
 
@@ -175,8 +172,8 @@ Gotchas:
 ### Kubernetes
 
 The proxy runs as its own Deployment. Its service account needs a Role
-that can manage Deployments and Services, and read pods and pod logs, in
-the namespace of the app.
+that can manage Deployments and Services, and read pods, in the namespace
+of the app.
 
 ### ECS Fargate
 
@@ -189,8 +186,6 @@ The proxy runs as its own ECS service. Its task role needs:
    `RegisterTaskDefinition`, `TagResource`, and `UpdateService`.
 2. `iam:PassRole` on the task role and the execution role of live, for
    `ecs-tasks.amazonaws.com`.
-3. `logs:FilterLogEvents` on the log group of live. Live's container must
-   log with `awslogs`.
 
 Gotchas:
 
@@ -254,33 +249,24 @@ Gotchas:
 
 ## Starter statespace.toml
 
-Put this file in the folder of the app's code. It has one experiment, one
-shared event, and one metric. Keep the comments.
+Put this file in the folder of the app's code. It has one experiment and one
+shared event. Keep the comments.
 
 ```toml
 # Statespace settings for every app built from this folder.
 # A change applies when the build of its commit runs as live.
 # Reference: https://docs.statespace.com
 
-# Regular expressions. The proxy replaces each match with
-# [redacted] before output leaves the machine.
-redact = []
-
 # A shared event: it counts in every experiment. Each rule
-# uses one source: request, stdout, or stderr.
+# sees one request and its response. The first event is
+# the headline.
 [[event]]
 name = "signup"
 match = '''
 request.method == "POST"
   && request.path == "/signup"
-  && request.status < 300
+  && response.status < 300
 '''
-
-# A shared metric: a formula over the totals of one arm.
-# The first metric is the headline.
-[[metric]]
-label = "signup rate %"
-value = '100.0 * events["signup"].subjects / subjects'
 
 # An experiment. The order of the experiment tables is
 # their priority. Set its arms with:
@@ -302,8 +288,7 @@ max_traffic = 0.2
 - Experiment names have 1 to 40 lowercase letters, digits, and `-`.
 - Event names are lowercase snake_case: a lowercase letter, then lowercase
   letters, digits, or `_`, at most 64 characters, such as `add_to_cart`.
-- `[[experiment.<name>.event]]` and `[[experiment.<name>.metric]]` add events
-  and metrics for one experiment only.
+- `[[experiment.<name>.event]]` adds events for one experiment only.
 - CI checks the file when it records a build. A wrong key or a CEL error
   fails the step.
 
@@ -371,11 +356,15 @@ with `/`. The job needs read access to the folder.
    ssp experiment show <experiment> --app <app> --json
    ```
 
-   - `totals` has `subjects`, `requests`, `errors`, `p50_ms`, and `p90_ms`
-     for each arm, by commit.
-   - `metrics` has each metric for each arm.
-   - `split` tells whether the subjects match the shares. Do not trust
+   - `results` has, for each arm: `visitors`, `requests_per_visitor`,
+     `error_rate`, `latency_p50_ms`, `latency_p90_ms`, and `events` (each
+     event's `visitors` and `rate`). A rate has a `value` and a 95%
+     `margin`. The margin is null below 30 visitors.
+   - `split` tells whether the visitors match the shares. Do not trust
      evidence when `split.ok` is false.
+   - `lookup` gives the time window and the labels of the arms, to find the
+     version in the user's own tools.
+   - `--version N` shows the results of an earlier version.
    - `drift.live_commit` tells that live changed since the start.
 6. Decide with the user. Statespace gives evidence, not verdicts.
 7. Stop the experiment. Statespace keeps its evidence.
@@ -410,68 +399,46 @@ ssp experiment list --app <app> --running --json
 ssp experiment stop <name> <name> --app <app> --note "<why>"
 ```
 
-## Events and metrics
+## Events
 
 ```toml
 [[event]]
-name = "fatal"
-match = 'stderr.text.contains("FATAL")'
+name = "account"
+match = 'response.headers["x-statespace-event"] == "account_created"'
 
 [[experiment.checkout.event]]
 name = "coupon"
-match = 'request.path == "/checkout/coupon"'
+match = 'request.path == "/checkout/coupon" && response.status == 200'
 ```
 
-- Each `match` uses one source: `request`, `stdout`, or `stderr`.
-- `request` has `method`, `path`, `query`, `headers`, `cookies`, `status`,
-  and `ms`.
-- `stdout` and `stderr` have `text` and `json` (the line as a JSON object, or
-  `{}`).
+- Each rule sees one request and its response, when the response headers
+  arrive. The proxy never reads a body.
+- `request` has `method`, `host`, `path`, `query`, `headers`, and
+  `cookies`.
+- `response` has `status`, `headers`, and `ms` (the time to the response
+  headers).
+- `subject` and `eligibility` use `request` only.
 - A missing field is no match.
-- Output events have `.lines` only. Request events have `.lines` and
-  `.subjects`.
+- To count an event that no request shows, let the app name it in a
+  response header, and match that header.
+- The results give, for each event, the share of visitors with the event.
 - A release that changes a shared event, or the event, `subject`,
-  `eligibility`, or `max_traffic` of an experiment, stops the experiment. A
-  change of a metric stops nothing.
+  `eligibility`, or `max_traffic` of an experiment, stops the experiment.
 
-## Query the data with SQL
+## Find an arm in your own tools
 
-Each person has one PostgreSQL login. It only reads, and it reads only the
-apps whose GitHub repository the person can read. It needs the session of
-`ssp login`.
+The proxy labels each arm. Live gets none of these labels.
 
-```shell
-psql "$(ssp db url)"
-```
+- The arm's resources: labels or tags with the experiment and the commit.
+- The arm's environment: `SSP_EXPERIMENT`, `SSP_ARM`, and
+  `OTEL_RESOURCE_ATTRIBUTES` with `statespace.experiment`, `statespace.arm`,
+  and `service.version`.
+- Each request to an arm: the headers `ssp-experiment` and `ssp-arm`.
+- The visitor's browser: the cookie `ssp_arms`, such as
+  `checkout:<commit>`, which JavaScript can read.
 
-The connection string has `sslmode=require`: the connection is encrypted.
-To also check the server's certificate, use `ssp db url --verify`. It needs
-psql or libpq 16 or later.
-
-Read these views. They need no schema name:
-
-- `experiments`, `versions`, `arms`, and `builds`: the experiments, each
-  start (version) with its notes, the arms of each version, and the builds
-  of CI.
-- `assignments`: the first arm of each subject in each version, with the
-  `reason` (`assigned`, `override`, or `arm-unavailable`).
-- `requests`, `logs`, and `events`: the rows of the arms. `logs` has stdout
-  and stderr in `stream`. An event has the `request_id` or `log_id` of the
-  row that matched.
-
-Each row has `app`, `experiment`, `version`, and `arm` (the full commit).
-
-```sql
-SELECT arm, count(DISTINCT subject) AS buyers
-FROM events
-WHERE app = 'shop-prod' AND experiment = 'checkout'
-  AND version = 3 AND name = 'purchase'
-GROUP BY arm;
-```
-
-The password stays the same. If it leaks, run
-`ssp db rotate --note "<why>"`. Statespace never records live, so live has
-no rows.
+`ssp experiment show` prints the keys to search for, under "Find it in your
+own tools".
 
 ## Rules
 

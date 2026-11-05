@@ -21,7 +21,7 @@
 
 </div>
 
-Statespace lets you A/B test code changes on your own infrastructure. A reverse proxy runs beside your app and routes a small share of your traffic to experimental versions of it. Their requests, logs, and events land in Postgres so your agents can query and act on them.
+Statespace lets you A/B test code changes on your own infrastructure. A reverse proxy runs beside your app and routes a small share of your traffic to experimental versions of it. Statespace shows the results of each version, and labels them in your own tools so your agents can compare and act on them.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/statespace-tech/statespace/main/assets/how-it-works-dark.png">
@@ -72,10 +72,6 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    name  = "purchase"
    match = 'request.method == "POST" && request.path == "/checkout"'
 
-   [[metric]]
-   label = "conversion %"
-   value = '100.0 * events["purchase"].subjects / subjects'
-
    [experiment.checkout]
    subject     = 'request.headers["x-user-id"]'
    eligibility = 'request.headers["cf-ipcountry"] == "US"'  # behind Cloudflare
@@ -101,20 +97,19 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-7. Compare the versions in Postgres:
+7. Compare the versions:
 
    ```text
-   $ psql "$(ssp db url)"
-   acme=> SELECT arm, count(*) AS purchases
-   acme->   FROM events
-   acme->   WHERE experiment = 'checkout' AND name = 'purchase'
-   acme->   GROUP BY arm;
-
-      arm   | purchases
-   ---------+-----------
-    c0ffee1 |        71
-    a1b2c3d |        84
-   (2 rows)
+   $ ssp experiment show checkout
+   Evidence of version 1 (since 2026-11-04 09:12 UTC):
+                          c0ffee1        a1b2c3d
+     visitors             1,204          1,188
+     requests/visitor     4.1            4.3
+     error rate %         0.2 (±0.1)     0.3 (±0.1)
+     latency p50 ms       41             44
+     latency p90 ms       120            131
+     purchase %           2.1 (±0.8)     2.6 (±0.9)
+     split                ok
    ```
 
 ## Community

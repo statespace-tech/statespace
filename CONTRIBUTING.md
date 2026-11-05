@@ -40,8 +40,8 @@ kind create cluster --name ssp-test
 STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 ```
 
-The Cloud Run tests use stand-ins for the Admin API, the metadata server, and Cloud
-Logging. They run with `cargo test`.
+The Cloud Run tests use stand-ins for the Admin API and the metadata server. They run
+with `cargo test`.
 
 The real Cloud Run test runs `ssp proxy cloudrun` in a sandbox project of Google
 Cloud. Use only a sandbox project. Never use a production project or a project of a
@@ -82,8 +82,7 @@ cargo test --locked --test cli gcp_cloudrun -- --nocapture
 cargo test --locked --test cli gcp_sweeper -- --nocapture
 ```
 
-The Fargate tests use stand-ins for ECS, EC2, and CloudWatch Logs. They run
-with `cargo test`.
+The Fargate tests use stand-ins for ECS and EC2. They run with `cargo test`.
 
 The real Fargate test runs `ssp proxy fargate` in a sandbox account of AWS.
 Use only a sandbox account. Never use a production account or an account of
@@ -95,7 +94,7 @@ a customer. The test does these steps:
    small VPC with public subnets and an internet gateway, without a NAT
    gateway.
 3. It makes a security group that lets only your IP address connect to
-   port 8000, an ECR repository, a log group, and a cluster. It pushes three
+   port 8000, an ECR repository, and a cluster. It pushes three
    images of `examples/app`, and runs one as the service. Each name is
    `statespace-test-<run id>`.
 4. It runs the proxy on your machine with your credentials, and with
@@ -161,8 +160,7 @@ cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
 cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
 ```
 
-The Fly.io tests use a stand-in for the Machines API and the logs API. They run
-with `cargo test`.
+The Fly.io tests use a stand-in for the Machines API. They run with `cargo test`.
 
 The real Fly.io test runs `ssp proxy fly` in a dedicated Fly.io app. Use only that
 app, never an app of production or of a customer. The test does these steps:

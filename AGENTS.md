@@ -1,7 +1,7 @@
 # Contributor instructions
 
 An experiment compares commits of one app. Each arm is one commit with an exact share
-of the app's subjects. `ssp app`, `ssp experiment`, `ssp token`, and `ssp db` call the
+of the app's subjects. `ssp app`, `ssp experiment`, and `ssp token` call the
 Statespace API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
 fargate`, and `ssp proxy fly` run a reverse proxy in front of the app's live service.
 `ssp proxy s3` and `ssp proxy gcs` serve a static site from a bucket: live is the
@@ -29,11 +29,11 @@ checks the build folders, because each instance serves the files itself.
 - Keep commands noninteractive, except `ssp login`.
 - Print secrets only in the response that creates them. Never pass `STATESPACE_*`
   variables to units or live.
-- `ssp proxy` must never block or slow the app: drop rows rather than wait, and send a
+- `ssp proxy` must never block or slow the app: drop counts rather than wait, and send a
   request to live rather than fail it. Build an orchestrator from its flags alone, so the
   proxy serves live before Statespace names the app; the calls that report live or run
   units take the `App`.
-- Never record live.
+- Never count live or overrides. Read no logs of units or live.
 - Never change the bucket function: it would move the subjects of running experiments.
 - Keep no legacy: when the design changes, remove the old way.
 - Keep the starter `statespace.toml` and the CI step in `skills/statespace/SKILL.md`
