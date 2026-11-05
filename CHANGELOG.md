@@ -2,6 +2,71 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+Statespace records counts per visitor, not requests, log lines, or bodies. Your own
+tools keep the detail, and each arm carries labels that they can filter by.
+
+### Changed
+
+- **Breaking:** `ssp proxy` counts. For each request that an arm serves to an
+  assigned visitor, it adds to that visitor's counters in memory: requests, errors
+  (status 500 to 599), one of 11 latency buckets, and each event that matches. It
+  sends the changes every 60 seconds and when it stops, to
+  `POST /v1/runtime/apps/{app}/counts`, in batches of at most 5,000 visitors with a
+  UUID. It sends a failed batch again with the same UUID. It keeps at most 50,000
+  visitors in memory and drops the oldest above that, and drops the counts of a
+  version that does not run (409). Live and overrides are never counted. A visitor
+  whose arm is not ready gets live and is counted with no requests, as unavailable.
+- **Breaking:** no subject leaves the proxy. It sends
+  `hex(HMAC-SHA256(key = app salt, message = subject))`.
+- **Breaking:** the proxy sends no rows to `/v1/events`: no runs, requests, stdout,
+  stderr, events, or lifecycle rows. `redact` has no effect, because nothing that it
+  changed leaves the proxy.
+- **Breaking:** the proxy reads no logs on any runtime: no Docker logs, Kubernetes pod
+  logs, CloudWatch Logs, Cloud Logging, or Fly.io logs. Readiness and the reason that
+  an arm is not ready come from the platform: the exit code and out of memory on
+  Docker, the container states of the pods on Kubernetes (such as `OOMKilled` or
+  `ImagePullBackOff`), the stop reason of the tasks on ECS, the conditions of the
+  service on Cloud Run, and the state of the Machine on Fly.io. The proxy needs no
+  log permission: not Logs Viewer on Cloud Run, not `logs:FilterLogEvents` on Fargate,
+  not `pods/log` on Kubernetes. Live's container on Fargate can log with any driver.
+- **Breaking:** an event is a CEL rule over one request and its response. A rule sees
+  `request` with `method`, `host`, `path`, `query`, `headers`, and `cookies`, and
+  `response` with `status`, `headers`, and `ms` (the time to the response headers).
+  The proxy evaluates the rules once per arm request, when the response headers
+  arrive, and never reads a body. `request.status` and `request.ms` are now
+  `response.status` and `response.ms`. Rules over `stdout` and `stderr` are gone.
+- **Breaking:** `[[metric]]` is gone. The results give, for each arm, the visitors,
+  requests per visitor, the error rate, latency p50 and p90, and the share of
+  visitors with each event, with 95% margins.
+- **Breaking:** the proxy sends `ssp-experiment` and `ssp-arm` to an arm, in place of
+  `x-statespace-experiment` and `x-statespace-arm`. It removes these headers when a
+  client sends them. It sends no `x-statespace-subject`.
+- Each arm carries labels for your own tools. Its environment has `SSP_EXPERIMENT`,
+  `SSP_ARM` (the full commit), and `OTEL_RESOURCE_ATTRIBUTES` with live's attributes
+  and `statespace.experiment`, `statespace.arm`, and `service.version` of the arm. A
+  visitor that an arm serves gets the cookie `ssp_arms=<experiment>:<commit>`, which
+  JavaScript can read (`Path=/`, `SameSite=Lax`, 90 days). A visitor in no arm loses
+  it. This cookie works on `ssp proxy s3` and `ssp proxy gcs` too.
+- **Breaking:** on Docker, the labels of an arm's container are `com.statespace.app`,
+  `com.statespace.unit`, `com.statespace.experiment`, `com.statespace.commit`,
+  `com.statespace.image`, and `com.statespace.proxy`, in place of
+  `statespace.com/*`. On Fly.io, the metadata of an arm's Machine is
+  `statespace_app`, `statespace_experiment`, `statespace_commit`, `statespace_image`,
+  and `statespace_port`. A proxy of this version does not adopt the arms of an
+  earlier version: stop the experiments before you upgrade.
+- **Breaking:** `ssp experiment show` prints the results of a version: a column for
+  each arm, a row for each result, and the split check. Then it prints where to find
+  the version in your own tools, and the versions. `--version N` shows the results of
+  version N; a stopped version shows the results of its end. `--json` prints the
+  document of the API as it is.
+
+### Removed
+
+- **Breaking:** `ssp db url` and `ssp db rotate`. There is no SQL access. Read the
+  results with `ssp experiment show`, its `--json`, or the dashboard.
+
 ## 0.4.3 - 2026-11-03
 
 `ssp` runs alongside live, never inside it. It never changes a resource that it did
