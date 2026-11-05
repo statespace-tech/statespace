@@ -172,7 +172,7 @@ fn share_of(experiment: &Value, commit: &str) -> Option<f64> {
 /// checkout · shop-prod · stopped
 ///   − a1b2c3d   0.05
 ///   + f6a7b8c   0.05
-///     c0ffee1   0.06   (reference)
+///     c0ffee1   0.06
 ///   total 0.11 of max_traffic 0.2
 /// ```
 fn arm_list(experiment: &Value, change: Option<&Change<'_>>) -> String {
@@ -181,7 +181,6 @@ fn arm_list(experiment: &Value, change: Option<&Change<'_>>) -> String {
         .into_iter()
         .flatten()
         .collect();
-    let reference = experiment["reference"].as_str();
     // (mark, commit, share, notes)
     let mut lines: Vec<(char, String, f64, Vec<String>)> = Vec::new();
     let marked = |commit: &str, list: &[String]| list.iter().any(|item| item == commit);
@@ -220,9 +219,6 @@ fn arm_list(experiment: &Value, change: Option<&Change<'_>>) -> String {
                     notes.push(format!("(was {})", fraction(previous)));
                 }
             }
-        }
-        if reference == Some(commit.as_str()) {
-            notes.push("(reference)".into());
         }
         lines.push((mark, commit, share, notes));
     }
@@ -554,7 +550,6 @@ fn show(experiment: &Value) -> String {
     let mut out = fields(&rows);
 
     let commits = commits_of(experiment);
-    let reference = experiment["reference"].as_str();
     out.push_str("\nArms:\n");
     if commits.is_empty() {
         out.push_str(&format!(
@@ -569,9 +564,6 @@ fn show(experiment: &Value) -> String {
             .map(|arm| {
                 let commit = arm["commit"].as_str().unwrap_or_default();
                 let mut notes = Vec::new();
-                if reference == Some(commit) {
-                    notes.push("reference".to_owned());
-                }
                 if arm["live_contains"] == true {
                     notes.push("live contains it".into());
                 }
@@ -913,7 +905,6 @@ mod tests {
         json!({
             "name": "checkout", "app": "shop-prod", "state": "stopped", "reason": null,
             "version": 2, "definition": {"subject": null, "eligibility": null, "max_traffic": 0.2},
-            "reference": LIVE,
             "arms": arms.iter().map(|(commit, share)| json!({"commit": commit, "share": share}))
                 .collect::<Vec<_>>(),
         })
@@ -934,14 +925,14 @@ mod tests {
             "checkout · shop-prod · stopped\n\
              \x20 − a1b2c3d   0.05\n\
              \x20 + f6a7b8c   0.05\n\
-             \x20 ~ c0ffee1   0.06   (was 0.05) (reference)\n\
+             \x20 ~ c0ffee1   0.06   (was 0.05)\n\
              \x20 total 0.11 of max_traffic 0.2\n\
              Next: ssp experiment start checkout\n"
         );
         assert_eq!(
             arm_list(&before, None),
             "checkout · shop-prod · stopped\n\
-             \x20   c0ffee1   0.05   (reference)\n\
+             \x20   c0ffee1   0.05\n\
              \x20   a1b2c3d   0.05\n\
              \x20 total 0.1 of max_traffic 0.2\n"
         );
@@ -949,9 +940,9 @@ mod tests {
 
     #[test]
     fn shows_results_per_arm() {
-        const REFERENCE: &str = "619f978000000000000000000000000000000000";
+        const FIRST: &str = "619f978000000000000000000000000000000000";
         const ARM: &str = "a494664000000000000000000000000000000000";
-        let mut detail = experiment(&[(REFERENCE, 0.05), (ARM, 0.05)]);
+        let mut detail = experiment(&[(FIRST, 0.05), (ARM, 0.05)]);
         detail["name"] = json!("hero");
         detail["state"] = json!("running");
         detail["arms"][1]["ready"] = json!(false);
@@ -971,18 +962,18 @@ mod tests {
                                "rate": {"value": signup.0, "margin": signup.1}}]})
         };
         detail["results"] = json!([
-            arm(REFERENCE, 1204, 4.1, (0.2, 0.1), 41.0, 120.0, (2.1, 0.8)),
+            arm(FIRST, 1204, 4.1, (0.2, 0.1), 41.0, 120.0, (2.1, 0.8)),
             arm(ARM, 1188, 4.3, (0.3, 0.1), 44.2, 131.0, (2.6, 0.9)),
         ]);
         detail["split"] = json!({"ok": true, "p": 0.41});
         detail["lookup"] = json!({
             "window": {"from": "2026-11-04T09:12:00Z", "to": null},
-            "arms": [REFERENCE, ARM],
-            "attributes": {"statespace.arm": [REFERENCE, ARM]},
+            "arms": [FIRST, ARM],
+            "attributes": {"statespace.arm": [FIRST, ARM]},
         });
         detail["drift"] = json!({"live_commit": "f2f2f2f000"});
         detail["override_urls"] = json!({ARM: "https://shop.example.com/?ssp=hero:a494664"});
-        detail["versions"] = json!([{"version": 1, "arms": {REFERENCE: 0.05, ARM: 0.05},
+        detail["versions"] = json!([{"version": 1, "arms": {FIRST: 0.05, ARM: 0.05},
             "started_at": "2026-10-29T10:00:00Z", "started_by": "octo",
             "stopped_at": "2026-10-29T12:00:00Z", "stopped_by": "octo", "stop_note": "enough data"}]);
         detail["history"] = json!([{"at": "2026-10-29T10:00:00Z", "actor": "octo", "via": "cli",
@@ -1045,8 +1036,8 @@ Find it in your own tools:
         assert_eq!(count(&json!(12)), "12");
         assert_eq!(probability(&json!(0.00001)), "<0.0001");
         assert_eq!(
-            headline(&json!({"arms": [{"commit": REFERENCE}, {"commit": ARM}],
-                              "headline": {"label": "signup %", "values": {REFERENCE: 2.1, ARM: null}}})),
+            headline(&json!({"arms": [{"commit": FIRST}, {"commit": ARM}],
+                              "headline": {"label": "signup %", "values": {FIRST: 2.1, ARM: null}}})),
             "signup %: 619f978 2.1, a494664 –"
         );
     }

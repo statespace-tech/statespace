@@ -9,6 +9,8 @@ tools keep the detail, and each arm carries labels that they can filter by.
 
 ### Changed
 
+- **Breaking:** no arm is the reference. `ssp experiment update`, `show`, and `list`
+  print no `(reference)`, and commit statuses say `running` on every arm.
 - **Breaking:** `ssp proxy` counts. For each request that an arm serves to an
   assigned visitor, it adds to that visitor's counters in memory: requests, errors
   (status 500 to 599), one of 11 latency buckets, and each event that matches. It

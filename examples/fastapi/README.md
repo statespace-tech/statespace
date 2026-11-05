@@ -43,7 +43,7 @@ For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
      --arm <live commit>=0.05 --arm <new commit>=0.05
    ```
 
-   The live commit is the reference. 5% of the shop's subjects get it, and 5% get
+   The live commit is an arm too. 5% of the shop's subjects get it, and 5% get
    the lower price. Everyone else gets live.
 3. Start the experiment. The command waits until both arms are ready.
 

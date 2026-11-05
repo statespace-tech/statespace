@@ -517,9 +517,9 @@ mod tests {
     const LIVE: &str = "c0ffee1000000000000000000000000000000000";
     const LANDING: &str = "b2c3d4e000000000000000000000000000000000";
 
-    /// `checkout` splits users by `x-user-id`: LIVE in `reference`, ARM in
+    /// `checkout` splits users by `x-user-id`: LIVE in `live_arm`, ARM in
     /// `arm`. `us-landing` uses the visitor cookie, eligible in the US only.
-    fn config(reference: [f64; 2], arm: [f64; 2], landing: [f64; 2]) -> RuntimeConfig {
+    fn config(live_arm: [f64; 2], arm: [f64; 2], landing: [f64; 2]) -> RuntimeConfig {
         serde_json::from_value(json!({
             "app": "shop-prod",
             "salt": "app-salt",
@@ -530,7 +530,7 @@ mod tests {
                  "subject": "request.headers[\"x-user-id\"]", "eligibility": null,
                  "events": [],
                  "arms": [
-                     {"commit": LIVE, "image": "shop@sha256:1", "ranges": [reference]},
+                     {"commit": LIVE, "image": "shop@sha256:1", "ranges": [live_arm]},
                      {"commit": ARM, "image": "shop@sha256:2", "ranges": [arm]},
                  ]},
                 {"name": "us-landing", "version": 1, "state": "running",

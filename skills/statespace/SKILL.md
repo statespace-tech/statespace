@@ -14,8 +14,8 @@ what happens to their visitors.
   `statespace.toml` defines it, such as `[experiment.checkout]`.
 - An **arm** is one commit in one experiment, with an exact share of the
   app's subjects, such as `a1b2c3d=0.05`. The commit is the arm's ID.
-- The **reference** is the arm that you added first. To compare a change
-  with what runs now, add the live commit as an arm.
+- No arm is special. To compare a change with what runs now, add the live
+  commit as an arm.
 - **Live** gets every request that no experiment takes. Statespace never
   counts live or overrides.
 - Each `start` begins a new **version**. Evidence is per version.
@@ -327,8 +327,8 @@ with `/`. The job needs read access to the folder.
    ssp app show <app> --json
    ```
 
-3. Set the arms of the experiment: the live commit first, so that it is the
-   reference, then the new commit. A share is a fraction, such as `0.05`.
+3. Set the arms of the experiment: the live commit and the new commit. A
+   share is a fraction, such as `0.05`.
    Never write `5` or `5%`.
 
    ```shell

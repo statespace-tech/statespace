@@ -217,7 +217,6 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
             "subject": if name == "us-landing" { json!("request.headers[\"x-user-id\"]") } else { Value::Null },
             "eligibility": null, "max_traffic": 0.2,
         },
-        "reference": LIVE,
         "headline": {"label": "purchase rate %", "values": {LIVE: 2.8, ARM: 3.4}},
         "arms": arms.iter().map(|(commit, share, ready, reason)| json!({
             "commit": commit, "share": share, "image": digest('2'), "ready": ready,
@@ -1575,17 +1574,14 @@ fn experiments_update_start_and_stop() {
         "checkout · shop-prod · stopped\n\
          \x20 − a1b2c3d   0.05\n\
          \x20 + b2c3d4e   0.05\n\
-         \x20 ~ 9f1ce8a   0.06   (was 0.05) (reference)\n\
+         \x20 ~ 9f1ce8a   0.06   (was 0.05)\n\
          \x20 total 0.11 of max_traffic 0.2\n\
          Next: ssp experiment start checkout\n"
     );
     // Without --arm, it prints the arms and changes nothing.
     let (ok, stdout, _) = run(&["experiment", "update", "checkout"]);
     assert!(ok);
-    assert!(
-        stdout.contains("    9f1ce8a   0.05   (reference)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("    9f1ce8a   0.05\n"), "{stdout}");
     assert!(
         stdout.contains("  total 0.1 of max_traffic 0.2"),
         "{stdout}"
@@ -1846,9 +1842,9 @@ struct Google {
     revisions: HashMap<String, Value>,
     /// The services the proxy made, by name.
     units: BTreeMap<String, Value>,
-    /// Where units' URLs point: the reference's (the live commit), and every
+    /// Where units' URLs point: the arm of the live commit, and every
     /// other unit's.
-    reference: String,
+    live_arm: String,
     arm: String,
     /// Every request that would change a service, with its path.
     changes: Vec<(String, String, Value)>,
@@ -1919,7 +1915,7 @@ fn google(state: Arc<Mutex<Google>>) -> String {
                 }
                 let mut service = received.body.clone();
                 let uri = if service["labels"]["statespace-commit"] == LIVE {
-                    google.reference.clone()
+                    google.live_arm.clone()
                 } else {
                     google.arm.clone()
                 };
@@ -1991,7 +1987,7 @@ fn cloudrun_proxy(lease: bool) -> CloudRunTest {
 /// address of Statespace until the test starts the stand-in there.
 fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
     let live = echo("live");
-    let reference = echo("reference");
+    let live_arm = echo("live_arm");
     let arm = echo("arm");
     let google_state = Arc::new(Mutex::new(Google {
         service: json!({
@@ -2016,7 +2012,7 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
                    "containers": [{"image": digest('1'), "ports": [{"containerPort": 8080}]}]}),
         )]),
         units: BTreeMap::new(),
-        reference: format!("http://127.0.0.1:{reference}"),
+        live_arm: format!("http://127.0.0.1:{live_arm}"),
         arm: format!("http://127.0.0.1:{arm}"),
         changes: Vec::new(),
         policies: HashMap::new(),
@@ -2086,7 +2082,7 @@ fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
 #[test]
 fn cloudrun_proxies_run_units_as_services_and_count_them() {
     let test = cloudrun_proxy(true);
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     let get = |subject: &str, path: &str| -> Option<(Value, reqwest::header::HeaderMap)> {
@@ -2111,7 +2107,7 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     };
     wait_until(60, "both arms of checkout serve", || {
         get(&arm_subject, "/").is_some_and(|(body, _)| body["name"] == "arm")
-            && get(&reference_subject, "/").is_some_and(|(body, _)| body["name"] == "reference")
+            && get(&live_arm_subject, "/").is_some_and(|(body, _)| body["name"] == "live_arm")
     });
 
     // The lease holder made one service for each unit, also for the starting
@@ -2205,8 +2201,8 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
         "{:?}",
         cookies_of(&arm_response)
     );
-    let (reference_body, _) = get(&reference_subject, "/").unwrap();
-    assert_eq!(reference_body["headers"]["ssp-arm"], LIVE);
+    let (live_arm_body, _) = get(&live_arm_subject, "/").unwrap();
+    assert_eq!(live_arm_body["headers"]["ssp-arm"], LIVE);
 
     // Live is untouched: no arm, no private cache, no counts. The starting
     // experiment takes no request.
@@ -2259,9 +2255,9 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     assert_eq!(arm.latency.iter().sum::<u64>(), arm.requests);
     assert_eq!(arm.errors, 0);
     assert_eq!(arm.events["json"], arm.requests, "{arm:?}");
-    let reference = state.totals("checkout", LIVE);
-    assert!(reference.visitors.contains(&hash(&reference_subject)));
-    assert!(!reference.events.contains_key("checkout"));
+    let live_arm = state.totals("checkout", LIVE);
+    assert!(live_arm.visitors.contains(&hash(&live_arm_subject)));
+    assert!(!live_arm.events.contains_key("checkout"));
     let counts = state.counts();
     // While the arms started, their visitors got live, as unavailable.
     assert!(
@@ -2272,7 +2268,7 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     // Live is never counted, and no raw subject leaves the proxy.
     let sent = serde_json::to_string(&counts).unwrap();
     assert!(!sent.contains(&hash(&live_subject)));
-    for subject in [&arm_subject, &reference_subject, &live_subject] {
+    for subject in [&arm_subject, &live_arm_subject, &live_subject] {
         assert!(!sent.contains(subject.as_str()), "{subject}");
     }
     // No rows and no logs: only counts.
@@ -2639,7 +2635,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
         .args(["--live-url", &format!("http://127.0.0.1:{live}")]);
     let (_proxy, port) = spawn_proxy(command);
 
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     let get = |subject: &str| -> Option<Value> {
@@ -2658,7 +2654,7 @@ fn fly_proxies_run_units_as_machines_without_services() {
     wait_until(60, "both arms of checkout serve", || {
         get(&arm_subject)
             .is_some_and(|body| body["name"] == "unit" && body["headers"]["ssp-arm"] == ARM)
-            && get(&reference_subject)
+            && get(&live_arm_subject)
                 .is_some_and(|body| body["name"] == "unit" && body["headers"]["ssp-arm"] == LIVE)
     });
     let arm = get(&arm_subject).unwrap();
@@ -3014,14 +3010,14 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
         .json()
         .ok()
     };
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     wait_until(240, "both arms start", || {
-        get(&reference_subject).is_some_and(|body| body["arm"] == LIVE)
+        get(&live_arm_subject).is_some_and(|body| body["arm"] == LIVE)
             && get(&arm_subject).is_some_and(|body| body["arm"] == ARM)
     });
-    let reference = get(&reference_subject).unwrap();
+    let live_arm = get(&live_arm_subject).unwrap();
     let arm = get(&arm_subject).unwrap();
     let live = get(&live_subject).unwrap();
     assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
@@ -3029,7 +3025,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
     assert_eq!(arm["experiment"], "checkout");
     assert_eq!(
         (
-            reference["greeting"].as_str(),
+            live_arm["greeting"].as_str(),
             arm["greeting"].as_str(),
             live["greeting"].as_str()
         ),
@@ -3038,10 +3034,10 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
     // Live is the customer's container, with its own environment. The arms
     // copy it, but never a STATESPACE_ variable.
     assert_eq!(live["statespace_variables"], json!(["STATESPACE_NOTE"]));
-    for body in [&reference, &arm, &live] {
+    for body in [&live_arm, &arm, &live] {
         assert_eq!(body["shared"], "from-live");
     }
-    for body in [&reference, &arm] {
+    for body in [&live_arm, &arm] {
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
     // Each arm's environment names it, also for OpenTelemetry; live's does not.
@@ -3051,7 +3047,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
                "OTEL_RESOURCE_ATTRIBUTES": format!(
                    "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}")})
     );
-    assert_eq!(reference["labels"]["SSP_ARM"], LIVE);
+    assert_eq!(live_arm["labels"]["SSP_ARM"], LIVE);
     assert_eq!(
         live["labels"],
         json!({"SSP_EXPERIMENT": null, "SSP_ARM": null, "OTEL_RESOURCE_ATTRIBUTES": null})
@@ -3334,11 +3330,11 @@ spec:
             "jsonpath={.items[*].metadata.name}",
         ])
     };
-    let reference_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
+    let live_arm_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
     let arm_name = format!("shop-ssp-checkout-{}", &ARM[..12]);
     wait_until(120, "both arms exist", || {
         let names = names();
-        names.contains(&reference_name) && names.contains(&arm_name)
+        names.contains(&live_arm_name) && names.contains(&arm_name)
     });
     kubectl(&[
         "rollout",
@@ -3359,16 +3355,16 @@ spec:
         "jsonpath={.spec.replicas}",
     ]);
     assert_eq!(replicas, "2");
-    let reference_replicas = kubectl(&[
+    let live_arm_replicas = kubectl(&[
         "get",
         "deployment",
-        &reference_name,
+        &live_arm_name,
         "--namespace",
         &namespace,
         "-o",
         "jsonpath={.spec.replicas}",
     ]);
-    assert_eq!(reference_replicas, "1");
+    assert_eq!(live_arm_replicas, "1");
     let labels = kubectl(&[
         "get",
         "deployment",
@@ -3462,7 +3458,7 @@ spec:
         "jsonpath={.items[*].metadata.name}",
     ]);
     assert!(!services.contains(&arm_name), "{services}");
-    assert!(names().contains(&reference_name));
+    assert!(names().contains(&live_arm_name));
 }
 
 // ---------------------------------------------------------------------------
@@ -3822,7 +3818,7 @@ impl Sandbox {
     }
 
     /// Build `context` for linux/amd64, push it as `<package>:<tag>`, and
-    /// return its reference by digest.
+    /// return its live_arm by digest.
     fn push(
         &self,
         package: &str,
@@ -4232,7 +4228,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         ],
     }]);
     let api = statespace(state.clone());
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     let greeting = |body: &Option<Value>| {
@@ -4273,7 +4269,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     // c. Each arm is its own service, and serves through its URL.
     state.lock().unwrap().config["experiments"] = checkout.clone();
     wait_until(600, "both arms serve through their services", || {
-        greeting(&visit(&proxy_url, &reference_subject, &[]))
+        greeting(&visit(&proxy_url, &live_arm_subject, &[]))
             == Some((LIVE.to_owned(), "hello".to_owned()))
             && greeting(&visit(&proxy_url, &arm_subject, &[]))
                 == Some((ARM.to_owned(), "hi".to_owned()))
@@ -4306,7 +4302,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     };
     wait_until(180, "the counts of both arms arrive", || {
         let _ = visit(&proxy_url, &arm_subject, &[]);
-        let _ = visit(&proxy_url, &reference_subject, &[]);
+        let _ = visit(&proxy_url, &live_arm_subject, &[]);
         counted_both_arms(&state)
     });
     {
@@ -4418,7 +4414,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
     }
     for _ in 0..5 {
         assert_eq!(
-            greeting(&visit(&proxy_url, &reference_subject, &[])),
+            greeting(&visit(&proxy_url, &live_arm_subject, &[])),
             Some((LIVE.to_owned(), "hello".to_owned()))
         );
         assert_eq!(
@@ -4571,7 +4567,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         600,
         "both arms serve through the proxy on Cloud Run",
         || {
-            greeting(&visit(&proxy_url, &reference_subject, &caller))
+            greeting(&visit(&proxy_url, &live_arm_subject, &caller))
                 == Some((LIVE.to_owned(), "hello".to_owned()))
                 && greeting(&visit(&proxy_url, &arm_subject, &caller))
                     == Some((ARM.to_owned(), "hi".to_owned()))
@@ -4584,7 +4580,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         "the counts of both arms arrive from the proxy on Cloud Run",
         || {
             let _ = visit(&proxy_url, &arm_subject, &caller);
-            let _ = visit(&proxy_url, &reference_subject, &caller);
+            let _ = visit(&proxy_url, &live_arm_subject, &caller);
             counted_both_arms(&state)
         },
     );
@@ -4627,9 +4623,9 @@ struct Ecs {
     creations: Vec<Value>,
     deletions: Vec<Value>,
     deregistered: Vec<String>,
-    /// The port of the stand-in app of each unit: the reference's and the
+    /// The port of the stand-in app of each unit: the arm of the live commit and the
     /// arm's. The stand-in gives a unit's task definition that port.
-    reference: u16,
+    live_arm: u16,
     arm: u16,
     actions: Vec<String>,
 }
@@ -4743,7 +4739,7 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
                 definition["revision"] = json!(revision);
                 // The stand-in app of the unit listens on its own port.
                 let port = if family.contains(&LIVE[..12]) {
-                    ecs.reference
+                    ecs.live_arm
                 } else {
                     ecs.arm
                 };
@@ -4833,7 +4829,7 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
 #[test]
 fn fargate_proxies_run_units_as_services() {
     let live = echo("live");
-    let reference = echo("reference");
+    let live_arm = echo("live_arm");
     let arm = echo("arm");
     let live_arn = "arn:aws:ecs:us-east-1:123456789012:task-definition/shop:7";
     let live_service = json!({
@@ -4868,7 +4864,7 @@ fn fargate_proxies_run_units_as_services() {
     let ecs = Arc::new(Mutex::new(Ecs {
         services: HashMap::from([("shop".to_owned(), live_service)]),
         definitions: HashMap::from([(live_arn.to_owned(), live_definition)]),
-        reference,
+        live_arm,
         arm,
         ..Ecs::default()
     }));
@@ -4920,7 +4916,7 @@ fn fargate_proxies_run_units_as_services() {
         .args(["--live-url", &format!("http://127.0.0.1:{live}")])
         .args(["--unit-ip", "public"]);
     let (_proxy, port) = spawn_proxy(command);
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
     let get = |subject: &str| -> Option<Value> {
@@ -4938,12 +4934,12 @@ fn fargate_proxies_run_units_as_services() {
     };
     wait_until(60, "both arms of checkout serve", || {
         get(&arm_subject).is_some_and(|body| body["name"] == "arm")
-            && get(&reference_subject).is_some_and(|body| body["name"] == "reference")
+            && get(&live_arm_subject).is_some_and(|body| body["name"] == "live_arm")
     });
 
     // Each unit is a service from a copy of live's task definition with its
     // own image, tagged with the app, experiment, and commit.
-    let reference_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
+    let live_arm_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
     let arm_name = format!("shop-ssp-checkout-{}", &ARM[..12]);
     {
         let ecs = ecs.lock().unwrap();
@@ -4995,14 +4991,14 @@ fn fargate_proxies_run_units_as_services() {
         );
         assert!(registration.get("taskDefinitionArn").is_none());
         assert!(!registration.to_string().contains("STATESPACE_"));
-        assert!(ecs.services.contains_key(&reference_name));
+        assert!(ecs.services.contains_key(&live_arm_name));
     }
 
     // The arm gets the experiment and arm headers; live gets neither.
     let body = get(&arm_subject).unwrap();
     assert_eq!(body["headers"]["ssp-experiment"], "checkout");
     assert_eq!(body["headers"]["ssp-arm"], ARM);
-    let body = get(&reference_subject).unwrap();
+    let body = get(&live_arm_subject).unwrap();
     assert_eq!(body["headers"]["ssp-arm"], LIVE);
     let body = get(&live_subject).unwrap();
     assert_eq!(body["name"], "live");
@@ -5897,7 +5893,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         .json()
         .ok()
     };
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subject = subject_in(0.8, 1.0);
 
@@ -5910,7 +5906,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
 
     // Each arm runs as its own service, from a copy of live's task
     // definition, tagged with the app, experiment, and commit.
-    let reference_name = format!("{run}-ssp-checkout-{}", &LIVE[..12]);
+    let live_arm_name = format!("{run}-ssp-checkout-{}", &LIVE[..12]);
     let arm_name = format!("{run}-ssp-checkout-{}", &ARM[..12]);
     wait_until(120, "both arms are services", || {
         let names: Vec<String> = sandbox
@@ -5919,7 +5915,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
             .filter(|service| service["status"] == "ACTIVE")
             .filter_map(|service| service["serviceName"].as_str().map(str::to_owned))
             .collect();
-        names.contains(&reference_name) && names.contains(&arm_name)
+        names.contains(&live_arm_name) && names.contains(&arm_name)
     });
     let arm_service = sandbox.service(&cluster, &arm_name);
     let tags = &arm_service["tags"];
@@ -5970,30 +5966,30 @@ fn aws_fargate_proxies_run_arms_as_services() {
     // The arms become ready and get their requests with the right headers.
     wait_until(600, "both arms serve", || {
         let served = get(&arm_subject).is_some_and(|body| body["arm"] == ARM)
-            && get(&reference_subject).is_some_and(|body| body["arm"] == LIVE);
+            && get(&live_arm_subject).is_some_and(|body| body["arm"] == LIVE);
         if !served {
             std::thread::sleep(Duration::from_secs(5));
         }
         served
     });
     let arm = get(&arm_subject).unwrap();
-    let reference = get(&reference_subject).unwrap();
+    let live_arm = get(&live_arm_subject).unwrap();
     let live = get(&live_subject).unwrap();
     assert_eq!(arm["experiment"], "checkout");
     assert_eq!(arm["labels"]["SSP_ARM"], ARM);
-    assert_eq!(reference["experiment"], "checkout");
+    assert_eq!(live_arm["experiment"], "checkout");
     assert_eq!(live["labels"]["SSP_ARM"], Value::Null);
     assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
     assert_eq!(live["experiment"], Value::Null);
     assert_eq!(
         (
-            reference["greeting"].as_str(),
+            live_arm["greeting"].as_str(),
             arm["greeting"].as_str(),
             live["greeting"].as_str()
         ),
         (Some("hello"), Some("hi"), Some("hello"))
     );
-    for body in [&reference, &arm] {
+    for body in [&live_arm, &arm] {
         assert_eq!(body["shared"], "from-live");
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
@@ -6055,8 +6051,8 @@ fn aws_fargate_proxies_run_arms_as_services() {
             "the arm stops serving while live deploys"
         );
         assert!(
-            get(&reference_subject).is_some_and(|body| body["arm"] == LIVE),
-            "the reference stops serving while live deploys"
+            get(&live_arm_subject).is_some_and(|body| body["arm"] == LIVE),
+            "the arm of the live commit stops serving while live deploys"
         );
         std::thread::sleep(Duration::from_secs(2));
         state
@@ -6083,7 +6079,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
         }
         gone
     });
-    for family in [&reference_name, &arm_name] {
+    for family in [&live_arm_name, &arm_name] {
         let active = sandbox.aws(&[
             "ecs",
             "list-task-definitions",
@@ -6585,29 +6581,29 @@ primary_region = "{region}"
             .json()
             .ok()
     };
-    let reference_subject = subject_in(0.0, 0.4);
+    let live_arm_subject = subject_in(0.0, 0.4);
     let arm_subject = subject_in(0.4, 0.8);
     let live_subjects = subjects_in(0.8, 1.0, 20);
     wait_until(600, "both arms serve through the proxy", || {
-        get(&reference_subject, "/").is_some_and(|body| body["arm"] == LIVE)
+        get(&live_arm_subject, "/").is_some_and(|body| body["arm"] == LIVE)
             && get(&arm_subject, "/").is_some_and(|body| body["arm"] == ARM)
     });
 
     // Each arm gets its experiment and arm, live's environment without
     // Statespace variables, and the variables that label it.
-    let reference = get(&reference_subject, "/checkout").unwrap();
+    let live_arm = get(&live_arm_subject, "/checkout").unwrap();
     let arm = get(&arm_subject, "/checkout").unwrap();
     assert_eq!(
-        (&reference["greeting"], &arm["greeting"]),
+        (&live_arm["greeting"], &arm["greeting"]),
         (&json!("hello"), &json!("hi"))
     );
-    for body in [&reference, &arm] {
+    for body in [&live_arm, &arm] {
         assert_eq!(body["experiment"], "checkout");
         assert_eq!(body["shared"], "from-live");
         assert_eq!(body["statespace_variables"], json!([]), "{body}");
     }
     assert_eq!(arm["labels"]["SSP_ARM"], ARM);
-    assert_eq!(reference["labels"]["SSP_ARM"], LIVE);
+    assert_eq!(live_arm["labels"]["SSP_ARM"], LIVE);
 
     // The holder reports both units ready and live's image.
     wait_until(120, "a report with both units ready", || {
@@ -6706,7 +6702,7 @@ primary_region = "{region}"
     after.sort_by_key(|(id, _)| id.to_string());
     assert_eq!(before, after, "fly deploy changed a unit");
     assert_eq!(get(&arm_subject, "/").unwrap()["greeting"], "hi");
-    assert_eq!(get(&reference_subject, "/").unwrap()["greeting"], "hello");
+    assert_eq!(get(&live_arm_subject, "/").unwrap()["greeting"], "hello");
 
     // The experiment stops: its Machines are destroyed, and live gets
     // every request.
@@ -6914,7 +6910,7 @@ fn check_site(
     change: &mut dyn FnMut(Change),
 ) {
     let live_hash = files_hash_of(&site_objects(), "", &["builds/"]);
-    let reference = subject_in(0.0, 0.4);
+    let live_arm = subject_in(0.0, 0.4);
     let arm = subject_in(0.4, 0.8);
     let video = subject_in(0.8, 0.9);
     let live = subject_in(0.9, 1.0);
@@ -6955,7 +6951,7 @@ fn check_site(
         page_of(port, &arm, "/").as_deref() == Some("arm home\n")
     });
     assert_eq!(
-        page_of(port, &reference, "/").as_deref(),
+        page_of(port, &live_arm, "/").as_deref(),
         Some("live home\n")
     );
     assert_eq!(page_of(port, &video, "/").as_deref(), Some("live home\n"));
@@ -7081,7 +7077,7 @@ fn check_site(
     assert!(hero.events["about"] >= 1, "{hero:?}");
     assert_eq!(
         state_now.totals("hero", LIVE).visitors,
-        HashSet::from([hash(&reference)])
+        HashSet::from([hash(&live_arm)])
     );
     assert!(
         state_now
@@ -7126,7 +7122,7 @@ fn check_site(
     });
     assert_eq!(page_of(port, &arm, "/").as_deref(), Some("live home\n"));
     assert_eq!(
-        page_of(port, &reference, "/").as_deref(),
+        page_of(port, &live_arm, "/").as_deref(),
         Some("live home\n")
     );
 }
