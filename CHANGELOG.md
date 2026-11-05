@@ -12,8 +12,11 @@ tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** no arm is the reference. `ssp experiment update`, `show`, and `list`
   print no `(reference)`, and commit statuses say `running` on every arm.
 - **Breaking:** `ssp proxy` counts. For each request that an arm serves to an
-  assigned subject, it adds to that subject's counters in memory: requests, errors
-  (status 500 to 599), one of 11 latency buckets, and each event that matches. It
+  assigned subject, it adds to that subject's counters in memory: requests,
+  `requests_4xx` (status 400 to 499), `requests_5xx` (status 500 to 599), one of 17
+  latency buckets, and each event that matches. The buckets have the fixed upper
+  bounds 5, 10, 20, 35, 50, 75, 100, 150, 250, 400, 600, 1000, 1500, 2500, 5000, and
+  10000 ms, and the last bucket has no bound. It
   sends the changes every 60 seconds and when it stops, to
   `POST /v1/runtime/apps/{app}/counts`, in batches of at most 5,000 subjects with a
   UUID. It sends a failed batch again with the same UUID. It keeps at most 50,000
@@ -39,13 +42,17 @@ tools keep the detail, and each arm carries labels that they can filter by.
   The proxy evaluates the rules once per arm request, when the response headers
   arrive, and never reads a body. `request.status` and `request.ms` are now
   `response.status` and `response.ms`. Rules over `stdout` and `stderr` are gone.
-- **Breaking:** `[[metric]]` is gone. The results give, for each arm, the subjects,
-  latency p50 and p90, the error rate (100 × responses with status 500 to 599 /
-  requests), and the % of subjects with at least one match of each event, with 95%
-  margins. In the API and `--json`, each arm has `subjects`, `latency_p50_ms`,
-  `latency_p90_ms`, `error_rate {value, margin}`, and `events` with `name`,
-  `subjects`, `total` (all matches), and `rate {value, margin}`. Values are percents.
-  Commit statuses say, for example, `signup 2.61% (±0.91) · 1,188 subjects`.
+- **Breaking:** `[[metric]]` is gone. The results give, for each arm, latency p50,
+  p95, and p99 in whole ms, and events. The events are `requests_4xx` and
+  `requests_5xx` (the share of subjects with at least one response of that class),
+  then each `[[event]]` in file order (the share of subjects with at least one
+  match). Each share is a fraction with 4 decimals and its 95% Wilson interval.
+  Below 30 subjects in an arm, there is no interval. Commit statuses say, for
+  example, `signup 0.0261 [0.0184, 0.0368] · 1,188 subjects`, or `requests_5xx …`
+  without events.
+- **Breaking:** event names are snake_case (`^[a-z][a-z0-9_]*$`), and
+  `requests_4xx` and `requests_5xx` are reserved. The proxy leaves out an event
+  with another name, and says why.
 - **Breaking:** the proxy sends `ssp-experiment` and `ssp-arm` to an arm, in place of
   `x-statespace-experiment` and `x-statespace-arm`. It removes these headers when a
   client sends them. It sends no `x-statespace-subject`.
@@ -62,26 +69,38 @@ tools keep the detail, and each arm carries labels that they can filter by.
   `statespace_app`, `statespace_experiment`, `statespace_commit`, `statespace_image`,
   and `statespace_port`. A proxy of this version does not adopt the arms of an
   earlier version: stop the experiments before you upgrade.
-- **Breaking:** `ssp experiment show` prints the results of a version: a column for
-  each arm, and the rows `subjects`, `p50 latency (ms)`, `p90 latency (ms)`,
-  `error rate (%)`, one `<name> (%)` row for each event in file order, and `split`.
-  Percents and margins have 2 decimals, such as `2.61 (±0.91)`. Below 30 subjects,
-  the margin is `(–)`. Then it prints where to find the version in your own tools,
-  and the versions.
+- **Breaking:** `ssp experiment show` prints the results of a version, where to find
+  the arms in your own tools, and the versions:
 
   ```text
-  Results of version 1 · since 2026-11-04 09:12 UTC
-                       c0ffee1          a1b2c3d
-    subjects           1,204            1,188
-    p50 latency (ms)   41               44
-    p90 latency (ms)   120              131
-    error rate (%)     0.20 (±0.10)     0.30 (±0.12)
-    signup (%)         2.08 (±0.81)     2.61 (±0.91)
-    split              ok
+  checkout v1 · shop-prod · since 2026-11-04 09:12 UTC · 2,392 subjects · split ok
+
+  latency (ms)                 c0ffee1                   a1b2c3d
+    p50                        41                        44
+    p95                        180                       205
+    p99                        420                       610
+
+  events (estimate [95% CI])   c0ffee1                   a1b2c3d
+    requests_4xx               0.1121 [0.0950, 0.1318]   0.1178 [0.1003, 0.1378]
+    requests_5xx               0.0274 [0.0193, 0.0388]   0.0438 [0.0331, 0.0578]
+    signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
+    search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
+
+  Find it in your own tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
   ```
- `--version N` shows the results of
-  version N; a stopped version shows the results of its end. `--json` prints the
-  document of the API as it is.
+
+  The first line gives the version, the app, its time window (`<start> – <stop> UTC`
+  when it stopped), the subjects of all arms, and the split check (`ok`, `off`, or
+  `–` below 100 subjects). Below 30 subjects, an event is `0.0261 [–]`. Before the
+  first start, `show` prints `<experiment> · <app> · not started`. `--version N`
+  shows the results of version N; a stopped version shows the results of its end.
+  For the arms, use `ssp experiment update <experiment>` without `--arm`.
+- **Breaking:** `--json` carries exactly the information of the text output,
+  structured, and never more. `ssp experiment show --json` prints `experiment`,
+  `version`, `app`, `started_at`, `stopped_at`, `subjects`, `split {ok}`, `arms`,
+  `lookup {"statespace.arm": [...]}`, and `versions`. Each arm has `commit`,
+  `subjects`, `latency_ms {p50, p95, p99}`, and `events`, in order, each
+  `{"estimate", "ci95": [low, high]}`. `ci95` is null below 30 subjects.
 
 ### Removed
 

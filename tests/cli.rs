@@ -217,7 +217,7 @@ fn experiment(name: &str, state: &str, arms: &[(&str, f64, bool, Option<&str>)])
             "subject": if name == "us-landing" { json!("request.headers[\"x-user-id\"]") } else { Value::Null },
             "eligibility": null, "max_traffic": 0.2,
         },
-        "headline": {"label": "purchase (%)", "values": {LIVE: 2.8, ARM: 3.4}},
+        "headline": {"label": "purchase", "values": {LIVE: 0.028, ARM: 0.034}},
         "arms": arms.iter().map(|(commit, share, ready, reason)| json!({
             "commit": commit, "share": share, "image": digest('2'), "ready": ready,
             "reason": reason, "ahead": 1, "behind": 0, "live_contains": false,
@@ -237,7 +237,8 @@ impl Statespace {
     }
 
     /// The counts of one arm of an experiment, added up as Statespace adds
-    /// them: subjects (by subject hash), requests, errors, latency, events.
+    /// them: subjects (by subject hash), requests, 4xx and 5xx responses,
+    /// latency, events.
     fn totals(&self, experiment: &str, arm: &str) -> Totals {
         let mut totals = Totals::default();
         for entry in self.counts() {
@@ -251,7 +252,8 @@ impl Statespace {
             }
             totals.subjects.insert(subject);
             totals.requests += entry["requests"].as_u64().unwrap();
-            totals.errors += entry["errors"].as_u64().unwrap();
+            totals.requests_4xx += entry["requests_4xx"].as_u64().unwrap();
+            totals.requests_5xx += entry["requests_5xx"].as_u64().unwrap();
             for (bucket, count) in entry["latency"].as_array().unwrap().iter().enumerate() {
                 totals.latency[bucket] += count.as_u64().unwrap();
             }
@@ -284,8 +286,9 @@ struct Totals {
     /// The subject hashes of subjects whose arm was not ready.
     unavailable: HashSet<String>,
     requests: u64,
-    errors: u64,
-    latency: [u64; 11],
+    requests_4xx: u64,
+    requests_5xx: u64,
+    latency: [u64; 17],
     events: BTreeMap<String, u64>,
 }
 
@@ -454,7 +457,8 @@ fn check_counts(batch: &Value, config: &Value) -> Result<(), (u16, String)> {
         "last_at",
         "unavailable",
         "requests",
-        "errors",
+        "requests_4xx",
+        "requests_5xx",
         "latency",
         "events",
     ];
@@ -496,19 +500,20 @@ fn check_counts(batch: &Value, config: &Value) -> Result<(), (u16, String)> {
         }
         let number = |value: &Value| value.as_u64().ok_or_else(|| shape("invalid type".into()));
         let requests = number(&entry["requests"])?;
-        let errors = number(&entry["errors"])?;
+        let requests_4xx = number(&entry["requests_4xx"])?;
+        let requests_5xx = number(&entry["requests_5xx"])?;
         let latency = entry["latency"]
             .as_array()
             .ok_or_else(|| shape("missing field `latency`".into()))?;
-        if latency.len() != 11 {
-            return bad("latency must have 11 buckets".into());
+        if latency.len() != 17 {
+            return bad("latency must have 17 buckets".into());
         }
         let mut sum = 0;
         for bucket in latency {
             sum += number(bucket)?;
         }
-        if errors > requests {
-            return bad("errors must be at most requests".into());
+        if requests_4xx + requests_5xx > requests {
+            return bad("requests_4xx and requests_5xx must add up to at most requests".into());
         }
         if sum != requests {
             return bad("the latency buckets must add up to requests".into());
@@ -516,7 +521,10 @@ fn check_counts(batch: &Value, config: &Value) -> Result<(), (u16, String)> {
         let events = entry["events"]
             .as_object()
             .ok_or_else(|| shape("events: invalid type".into()))?;
-        for count in events.values() {
+        for (name, count) in events {
+            if name == "requests_4xx" || name == "requests_5xx" {
+                return bad(format!("event name {name:?} is reserved"));
+            }
             number(count)?;
         }
         if entry["unavailable"] == true && (requests > 0 || !events.is_empty()) {
@@ -812,8 +820,9 @@ fn stand_in_refuses_what_statespace_refuses() {
         json!({"experiment": "hero", "version": 4, "arm": ARM,
                "subject": subject_hash("s", "v_1"),
                "first_at": "2026-11-04T10:00:05Z", "last_at": "2026-11-04T10:00:58Z",
-               "unavailable": false, "requests": 3, "errors": 1,
-               "latency": [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0], "events": {"signup": 1}})
+               "unavailable": false, "requests": 3, "requests_4xx": 1, "requests_5xx": 1,
+               "latency": [0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+               "events": {"signup": 1}})
     };
     let batch = |entries: Vec<Value>| json!({"batch": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "counts": entries});
     assert_eq!(check_counts(&batch(vec![entry()]), &config), Ok(()));
@@ -837,7 +846,12 @@ fn stand_in_refuses_what_statespace_refuses() {
     refused(
         &|entry| entry["latency"] = json!([3]),
         400,
-        "latency must have 11 buckets",
+        "latency must have 17 buckets",
+    );
+    refused(
+        &|entry| entry["requests_5xx"] = json!(3),
+        400,
+        "requests_4xx and requests_5xx must add up to at most requests",
     );
     refused(
         &|entry| entry["requests"] = json!(4),
@@ -1662,11 +1676,40 @@ fn experiments_update_start_and_stop() {
     assert!(!ok && stdout.contains("checkout"), "{stdout}");
     assert!(stderr.contains("could not stop us-landing-x"), "{stderr}");
 
+    // Show before the first start: one line, and --json the same
+    // information, with only the fields that show prints.
+    let (ok, stdout, _) = run(&["experiment", "show", "checkout"]);
+    assert!(ok);
+    assert_eq!(stdout, "checkout · shop-prod · not started\n");
+    let (ok, stdout, _) = run(&["--json", "experiment", "show", "checkout"]);
+    assert!(ok);
+    let shown = parse(&stdout);
+    let keys: Vec<&String> = shown.as_object().unwrap().keys().collect();
+    assert_eq!(
+        keys,
+        [
+            "experiment",
+            "version",
+            "app",
+            "started_at",
+            "stopped_at",
+            "subjects",
+            "split",
+            "arms",
+            "lookup",
+            "versions"
+        ]
+    );
+    assert_eq!(
+        (&shown["experiment"], &shown["version"]),
+        (&json!("checkout"), &Value::Null)
+    );
+
     // List: --running and --all.
     let (ok, stdout, _) = run(&["experiment", "list"]);
     assert!(ok);
     assert!(
-        stdout.contains("checkout    running  3        9f1ce8a=0.05 a1b2c3d=0.05  purchase (%): 9f1ce8a 2.80, a1b2c3d 3.40"),
+        stdout.contains("checkout    running  3        9f1ce8a=0.05 a1b2c3d=0.05  purchase: 9f1ce8a 0.0280, a1b2c3d 0.0340"),
         "{stdout}"
     );
     assert!(!stdout.contains("pricing"));
@@ -2253,7 +2296,7 @@ fn cloudrun_proxies_run_units_as_services_and_count_them() {
     assert!(arm.subjects.len() <= 2, "{arm:?}");
     assert!(arm.requests >= 2, "{arm:?}");
     assert_eq!(arm.latency.iter().sum::<u64>(), arm.requests);
-    assert_eq!(arm.errors, 0);
+    assert_eq!((arm.requests_4xx, arm.requests_5xx), (0, 0));
     assert_eq!(arm.events["json"], arm.requests, "{arm:?}");
     let live_arm = state.totals("checkout", LIVE);
     assert!(live_arm.subjects.contains(&hash(&live_arm_subject)));

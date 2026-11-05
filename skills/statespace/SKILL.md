@@ -356,21 +356,22 @@ with `/`. The job needs read access to the folder.
    ssp experiment show <experiment> --app <app> --json
    ```
 
-   - `results` has, for each arm:
+   - `arms` has, for each arm:
      - `subjects`: the subjects that the arm served.
-     - `latency_p50_ms` and `latency_p90_ms`.
-     - `error_rate`: 100 × responses with status 500 to 599 / requests.
-     - `events`: for each event, `name`, `subjects` (subjects with at
-       least one match), `total` (all matches), and `rate` (the % of
+     - `latency_ms`: `p50`, `p95`, and `p99`, in whole ms.
+     - `events`: `requests_4xx` and `requests_5xx` (the share of subjects
+       with at least one response of 400 to 499, or 500 to 599), then
+       each event of `statespace.toml` in file order (the share of
        subjects with at least one match).
-   - A rate has a `value` and a 95% `margin`, both in percent. The margin
-     is null below 30 subjects.
-   - `split` tells whether the subjects match the shares. Do not trust
-     the results when `split.ok` is false.
-   - `lookup` gives the time window and the labels of the arms, to find the
-     version in the user's own tools.
+   - An event has an `estimate` and its 95% interval `ci95`
+     (`[low, high]`). Both are fractions. `ci95` is null below 30
+     subjects.
+   - `split.ok` tells whether the subjects match the shares. Do not trust
+     the results when it is false.
+   - `lookup` gives the label of the arms, to find the version in the
+     user's own tools.
    - `--version N` shows the results of an earlier version.
-   - `drift.live_commit` tells that live changed since the start.
+   - The text output gives the same information as `--json`.
 6. Decide with the user. Statespace gives evidence, not verdicts.
 7. Stop the experiment. Statespace keeps its evidence.
 
@@ -426,8 +427,10 @@ match = 'request.path == "/checkout/coupon" && response.status == 200'
 - A missing field is no match.
 - To count an event that no request shows, let the app name it in a
   response header, and match that header.
-- The results give, for each event, the % of subjects with at least one
-  match.
+- An event name is snake_case, such as `add_to_cart`. `requests_4xx`
+  and `requests_5xx` are reserved: the results always show them.
+- The results give, for each event, the share of subjects with at least
+  one match.
 - A release that changes a shared event, or the event, `subject`,
   `eligibility`, or `max_traffic` of an experiment, stops the experiment.
 
@@ -443,8 +446,8 @@ The proxy labels each arm. Live gets none of these labels.
 - The subject's browser: the cookie `ssp_arms`, such as
   `checkout:<commit>`, which JavaScript can read.
 
-`ssp experiment show` prints the keys to search for, under "Find it in your
-own tools".
+`ssp experiment show` prints the label to search for, under "Find it in
+your own tools": `statespace.arm`.
 
 ## Rules
 

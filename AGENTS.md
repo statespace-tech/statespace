@@ -22,6 +22,7 @@ checks the build folders, because each instance serves the files itself.
 - Run alongside live, never inside it: never change a resource that `ssp` did not
   create. Each unit is a resource that `ssp` creates, labels, and deletes.
 - Print text by default and exactly one JSON document with `--json`, except `ssp proxy`.
+  `--json` carries exactly the information of the text output, structured; never more.
   Send notes and warnings to standard error. Errors exit 1, as `{"error": "..."}` with
   `--json`.
 - Give `--note` (1 to 200 characters, one line) to every command that changes something.

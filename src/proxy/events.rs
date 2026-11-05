@@ -15,6 +15,33 @@ use super::{
     config::EventConfig,
 };
 
+/// The built-in events of every experiment. An `[[event]]` cannot have
+/// these names: Statespace counts them from the response status.
+pub const BUILT_IN_EVENTS: [&str; 2] = ["requests_4xx", "requests_5xx"];
+
+/// Why an event name is not valid: it must be snake_case
+/// (`^[a-z][a-z0-9_]*$`, at most 64 characters), and not a built-in event.
+pub fn check_name(name: &str) -> Result<(), String> {
+    let bytes = name.as_bytes();
+    let snake = (1..=64).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_');
+    if !snake {
+        return Err(format!(
+            "event name {name:?} must be lowercase snake_case, such as add_to_cart"
+        ));
+    }
+    if BUILT_IN_EVENTS.contains(&name) {
+        return Err(format!(
+            "event name {name:?} is reserved: Statespace shows requests_4xx and requests_5xx \
+             for every experiment"
+        ));
+    }
+    Ok(())
+}
+
 struct Rule {
     name: String,
     program: Program,
@@ -26,12 +53,16 @@ pub struct Events {
 }
 
 impl Events {
-    /// Compile every rule. A rule that does not compile is left out and
-    /// returned as an error.
+    /// Compile every rule. A rule with a name that is not valid, or that
+    /// does not compile, is left out and returned as an error.
     pub fn compile(configs: &[EventConfig]) -> (Self, Vec<String>) {
         let mut rules = Vec::new();
         let mut errors = Vec::new();
         for config in configs {
+            if let Err(error) = check_name(&config.name) {
+                errors.push(error);
+                continue;
+            }
             match compile(&config.rule) {
                 Ok(program) => rules.push(Rule {
                     name: config.name.clone(),
@@ -169,5 +200,30 @@ mod tests {
         let (events, errors) = Events::compile(&configs);
         assert_eq!(errors.len(), 1);
         assert!(events.is_empty());
+    }
+    #[test]
+    fn names_are_snake_case_and_not_built_in() {
+        let config = |name: &str| -> EventConfig {
+            serde_json::from_value(json!({"name": name, "match": "response.status == 201"}))
+                .unwrap()
+        };
+        let configs = vec![
+            config("signup"),
+            config("requests_5xx"),
+            config("Sign-Up"),
+            config("add_to_cart2"),
+        ];
+        let (events, errors) = Events::compile(&configs);
+        assert_eq!(events.rules.len(), 2);
+        assert_eq!(
+            errors,
+            [
+                "event name \"requests_5xx\" is reserved: Statespace shows requests_4xx and \
+                 requests_5xx for every experiment",
+                "event name \"Sign-Up\" must be lowercase snake_case, such as add_to_cart",
+            ]
+        );
+        assert!(check_name("_x").is_err() && check_name(&"a".repeat(65)).is_err());
+        assert!(check_name("requests_4xx").is_err() && check_name("requests").is_ok());
     }
 }

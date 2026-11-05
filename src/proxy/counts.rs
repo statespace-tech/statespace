@@ -1,7 +1,8 @@
 //! Counts per subject: what the proxy sends to Statespace. For each request
 //! that an arm serves to an assigned subject, the proxy adds to that
-//! subject's counters in memory: the requests, the 5xx errors, a latency
-//! bucket, and each event that matches. Live and overrides are never
+//! subject's counters in memory: the requests, the responses of 400 to 499
+//! (`requests_4xx`) and of 500 to 599 (`requests_5xx`), a latency bucket,
+//! and each event that matches. Live and overrides are never
 //! counted. A subject whose arm is not ready is counted with no requests and
 //! `unavailable: true`.
 //!
@@ -27,11 +28,12 @@ use tokio::sync::watch;
 
 use super::remote::{CountsError, Remote};
 
-/// The upper bounds of the latency buckets in milliseconds. The last bucket
+/// The upper bounds of the latency buckets in milliseconds. The 17th bucket
 /// has no bound. Never change them: Statespace adds the buckets of every
 /// proxy.
-pub const LATENCY_BOUNDS: [f64; 10] = [
-    5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+pub const LATENCY_BOUNDS: [f64; 16] = [
+    5.0, 10.0, 20.0, 35.0, 50.0, 75.0, 100.0, 150.0, 250.0, 400.0, 600.0, 1000.0, 1500.0, 2500.0,
+    5000.0, 10000.0,
 ];
 /// How many latency buckets a subject has.
 pub const BUCKETS: usize = LATENCY_BOUNDS.len() + 1;
@@ -85,7 +87,8 @@ pub struct Delta {
     /// Whether the subject's arm was not ready, and no arm request counted.
     unavailable: bool,
     requests: u64,
-    errors: u64,
+    requests_4xx: u64,
+    requests_5xx: u64,
     latency: [u64; BUCKETS],
     events: BTreeMap<String, u64>,
 }
@@ -97,7 +100,8 @@ impl Delta {
             last_at: now,
             unavailable: false,
             requests: 0,
-            errors: 0,
+            requests_4xx: 0,
+            requests_5xx: 0,
             latency: [0; BUCKETS],
             events: BTreeMap::new(),
         }
@@ -158,8 +162,10 @@ impl Counter {
         self.add(subject, |delta, _| {
             delta.unavailable = false;
             delta.requests += 1;
-            if (500..600).contains(&status) {
-                delta.errors += 1;
+            match status {
+                400..=499 => delta.requests_4xx += 1,
+                500..=599 => delta.requests_5xx += 1,
+                _ => {}
             }
             delta.latency[latency_bucket(ms)] += 1;
             for name in events {
@@ -360,7 +366,8 @@ fn body(batch: &Batch) -> Value {
                 "last_at": time(&delta.last_at),
                 "unavailable": delta.unavailable,
                 "requests": delta.requests,
-                "errors": delta.errors,
+                "requests_4xx": delta.requests_4xx,
+                "requests_5xx": delta.requests_5xx,
                 "latency": delta.latency,
                 "events": delta.events,
             })
@@ -410,18 +417,20 @@ mod tests {
 
     #[test]
     fn latency_buckets_hold_their_upper_bounds() {
-        assert_eq!(BUCKETS, 11);
+        assert_eq!(BUCKETS, 17);
         assert_eq!(latency_bucket(0.0), 0);
         assert_eq!(latency_bucket(5.0), 0);
         assert_eq!(latency_bucket(5.001), 1);
         assert_eq!(latency_bucket(10.0), 1);
-        assert_eq!(latency_bucket(25.0), 2);
-        assert_eq!(latency_bucket(84.0), 4);
-        assert_eq!(latency_bucket(1000.0), 7);
-        assert_eq!(latency_bucket(5000.0), 9);
-        assert_eq!(latency_bucket(5000.1), 10);
-        assert_eq!(latency_bucket(f64::INFINITY), 10);
-        assert_eq!(latency_bucket(f64::NAN), 10);
+        assert_eq!(latency_bucket(20.0), 2);
+        assert_eq!(latency_bucket(35.0), 3);
+        assert_eq!(latency_bucket(84.0), 6);
+        assert_eq!(latency_bucket(1000.0), 11);
+        assert_eq!(latency_bucket(5000.0), 14);
+        assert_eq!(latency_bucket(10000.0), 15);
+        assert_eq!(latency_bucket(10000.1), 16);
+        assert_eq!(latency_bucket(f64::INFINITY), 16);
+        assert_eq!(latency_bucket(f64::NAN), 16);
     }
 
     #[test]
@@ -429,6 +438,7 @@ mod tests {
         let counter = Counter::default();
         counter.served(subject("hero", "v_1"), 201, 3.0, &["signup"]);
         counter.served(subject("hero", "v_1"), 503, 120.0, &[]);
+        counter.served(subject("hero", "v_1"), 404, 30.0, &[]);
         counter.served(subject("hero", "v_1"), 200, 7000.0, &["signup", "view"]);
         counter.unavailable(subject("hero", "v_2"));
         // A subject that an arm serves later is no longer unavailable.
@@ -444,11 +454,12 @@ mod tests {
         let body = body(&batch);
         let counts = body["counts"].as_array().unwrap();
         assert_eq!(counts[0]["subject"], subject_hash("s", "v_1"));
-        assert_eq!(counts[0]["requests"], 3);
-        assert_eq!(counts[0]["errors"], 1);
+        assert_eq!(counts[0]["requests"], 4);
+        assert_eq!(counts[0]["requests_4xx"], 1);
+        assert_eq!(counts[0]["requests_5xx"], 1);
         assert_eq!(
             counts[0]["latency"],
-            json!([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
+            json!([1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0])
         );
         assert_eq!(counts[0]["events"], json!({"signup": 2, "view": 1}));
         assert_eq!(counts[0]["unavailable"], false);
@@ -468,13 +479,14 @@ mod tests {
             keys,
             [
                 "arm",
-                "errors",
                 "events",
                 "experiment",
                 "first_at",
                 "last_at",
                 "latency",
                 "requests",
+                "requests_4xx",
+                "requests_5xx",
                 "subject",
                 "unavailable",
                 "version"

@@ -105,15 +105,20 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 
    ```text
    $ ssp experiment show checkout
-   Results of version 1 · since 2026-11-04 09:12 UTC
-                        c0ffee1          a1b2c3d
-     subjects           1,204            1,188
-     p50 latency (ms)   41               44
-     p90 latency (ms)   120              131
-     error rate (%)     0.20 (±0.10)     0.30 (±0.12)
-     signup (%)         2.08 (±0.81)     2.61 (±0.91)
-     search (%)         28.04 (±2.54)    27.53 (±2.54)
-     split              ok
+   checkout v1 · shop-prod · since 2026-11-04 09:12 UTC · 2,392 subjects · split ok
+
+   latency (ms)                 c0ffee1                   a1b2c3d
+     p50                        41                        44
+     p95                        180                       205
+     p99                        420                       610
+
+   events (estimate [95% CI])   c0ffee1                   a1b2c3d
+     requests_4xx               0.1121 [0.0950, 0.1318]   0.1178 [0.1003, 0.1378]
+     requests_5xx               0.0274 [0.0193, 0.0388]   0.0438 [0.0331, 0.0578]
+     signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
+     search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
+
+   Find it in your own tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
    ```
 
 ## Community
