@@ -1,4 +1,4 @@
-# The ssp image, for `ssp proxy cloudrun` and `ssp proxy kubernetes`. The release
+# The ssp image, for `ssp proxy` in a container on every runtime. The release
 # workflow builds it from the musl binaries in image/<arch>/ssp.
 #
 # The image has no shell. It holds the static binary, CA certificates, and the user
