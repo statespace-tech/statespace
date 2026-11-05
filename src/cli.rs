@@ -217,8 +217,9 @@ pub enum ExperimentCommand {
         #[arg(long)]
         all: bool,
     },
-    /// Show an experiment: its definition, arms, history, the results of a
-    /// version per arm, where to find it in your own data tools, and its versions.
+    /// Show an experiment: the results of a version per arm, where to find
+    /// it in your own data tools, its override links while it runs, and its
+    /// versions.
     Show {
         #[arg(value_parser = experiment_name)]
         name: String,

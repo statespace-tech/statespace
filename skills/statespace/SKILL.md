@@ -370,6 +370,8 @@ with `/`. The job needs read access to the folder.
      the results when it is false.
    - `lookup` gives the label of the arms, to find the version in the
      user's own data tools.
+   - `override_links` gives the override link of each arm, by commit,
+     while the version runs. It is null when the version does not run.
    - `--version N` shows the results of an earlier version.
    - The text output gives the same information as `--json`.
 6. Decide with the user. Statespace gives evidence, not verdicts.

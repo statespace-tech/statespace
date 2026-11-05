@@ -70,7 +70,8 @@ data tools keep the detail, and each arm carries labels that they can filter by.
   and `statespace_port`. A proxy of this version does not adopt the arms of an
   earlier version: stop the experiments before you upgrade.
 - **Breaking:** `ssp experiment show` prints the results of a version, where to find
-  the arms in your own data tools, and the versions:
+  the arms in your own data tools, the override links while the version runs, and
+  the versions:
 
   ```text
   checkout v1 · shop-prod · since 2026-11-04 09:12 UTC · 2,392 subjects · split ok
@@ -87,6 +88,10 @@ data tools keep the detail, and each arm carries labels that they can filter by.
     search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
 
   Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+
+  Override links:
+    c0ffee1  ?ssp=checkout:c0ffee1
+    a1b2c3d  ?ssp=checkout:a1b2c3d
   ```
 
   The first line gives the version, the app, its time window (`<start> – <stop> UTC`
@@ -98,7 +103,8 @@ data tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** `--json` carries exactly the information of the text output,
   structured, and never more. `ssp experiment show --json` prints `experiment`,
   `version`, `app`, `started_at`, `stopped_at`, `subjects`, `split {ok}`, `arms`,
-  `lookup {"statespace.arm": [...]}`, and `versions`. Each arm has `commit`,
+  `lookup {"statespace.arm": [...]}`, `override_links` (`{"<commit>": "<link>"}`
+  while the version runs, else null), and `versions`. Each arm has `commit`,
   `subjects`, `latency_ms {p50, p95, p99}`, and `events`, in order, each
   `{"estimate", "ci95": [low, high]}`. `ci95` is null below 30 subjects.
   The other commands follow the same rule: `app list`, `app show`, `app add`,

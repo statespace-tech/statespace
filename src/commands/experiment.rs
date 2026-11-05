@@ -609,6 +609,11 @@ fn shown(experiment: &Value) -> Value {
             })
         })
         .collect();
+    let lookup: Vec<Value> = results["lookup"]["statespace.arm"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let links = override_links(experiment, &lookup);
     json!({
         "experiment": experiment["name"],
         "version": results["version"],
@@ -622,13 +627,37 @@ fn shown(experiment: &Value) -> Value {
         },
         "arms": arms,
         "lookup": {
-            "statespace.arm": results["lookup"]["statespace.arm"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default(),
+            "statespace.arm": lookup,
         },
+        "override_links": links,
         "versions": versions,
     })
+}
+
+/// The override link of each arm, by full commit, in the order of the arms,
+/// while the shown version runs; null without links.
+fn override_links(experiment: &Value, arms: &[Value]) -> Value {
+    let results = &experiment["results"];
+    if results["version"].is_null() || !results["stopped_at"].is_null() {
+        return Value::Null;
+    }
+    let Some(urls) = experiment["override_urls"].as_object() else {
+        return Value::Null;
+    };
+    let mut links: Vec<(&String, &Value)> = urls.iter().collect();
+    links.sort_by_key(|(commit, _)| {
+        arms.iter()
+            .position(|arm| arm.as_str() == Some(commit.as_str()))
+            .unwrap_or(usize::MAX)
+    });
+    let links: serde_json::Map<String, Value> = links
+        .into_iter()
+        .map(|(commit, url)| (commit.clone(), url.clone()))
+        .collect();
+    match links.is_empty() {
+        true => Value::Null,
+        false => Value::Object(links),
+    }
 }
 
 /// The text of `show`, from the document of [`shown`]:
@@ -645,6 +674,10 @@ fn shown(experiment: &Value) -> Value {
 ///   ...
 ///
 /// Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+///
+/// Override links:
+///   c0ffee1  ?ssp=checkout:c0ffee1
+///   a1b2c3d  ?ssp=checkout:a1b2c3d
 ///
 /// Versions:
 ///   ...
@@ -692,6 +725,12 @@ fn show(shown: &Value) -> String {
             "\nFind it in your own data tools: statespace.arm = {}\n",
             commits.join(" | ")
         ));
+    }
+    if let Some(links) = shown["override_links"].as_object() {
+        out.push_str("\nOverride links:\n");
+        for (commit, url) in links {
+            out.push_str(&format!("  {}  {}\n", short(commit), text(url)));
+        }
     }
     if let Some(versions) = shown["versions"].as_array().filter(|list| !list.is_empty()) {
         let rows = versions
@@ -934,7 +973,8 @@ mod tests {
             "lookup": {"statespace.arm": [FIRST, ARM]},
         });
         detail["drift"] = json!({"live_commit": "f2f2f2f000"});
-        detail["override_urls"] = json!({ARM: "https://shop.example.com/?ssp=checkout:a1b2c3d"});
+        detail["override_urls"] =
+            json!({ARM: "?ssp=checkout:a1b2c3d", FIRST: "?ssp=checkout:c0ffee1"});
         detail["versions"] = json!([{"version": 1, "arms": {FIRST: 0.05, ARM: 0.05},
             "started_at": "2026-11-04T09:12:00+00:00", "started_by": "octo",
             "stopped_at": null, "stopped_by": null, "stop_note": null}]);
@@ -964,6 +1004,10 @@ events (estimate [95% CI])   c0ffee1                   a1b2c3d
 
 Find it in your own data tools: statespace.arm = \"c0ffee1…\" | \"a1b2c3d…\"
 
+Override links:
+  c0ffee1  ?ssp=checkout:c0ffee1
+  a1b2c3d  ?ssp=checkout:a1b2c3d
+
 Versions:
   VERSION  ARMS                       STARTED                       STOPPED  NOTE
   1        a1b2c3d=0.05 c0ffee1=0.05  2026-11-04 09:12 UTC by octo  -        -
@@ -992,8 +1036,14 @@ Versions:
                 "split",
                 "arms",
                 "lookup",
+                "override_links",
                 "versions"
             ]
+        );
+        assert_eq!(
+            shown["override_links"],
+            json!({"c0ffee1000000000000000000000000000000000": "?ssp=checkout:c0ffee1",
+                "a1b2c3d000000000000000000000000000000000": "?ssp=checkout:a1b2c3d"})
         );
         assert_eq!(
             shown["arms"][1],
@@ -1042,6 +1092,9 @@ Versions:
         results["subjects"] = json!(1);
         results["stopped_at"] = json!("2026-11-05T10:00:00+00:00");
         let text = show(&shown(&detail));
+        // A stopped version has no override links.
+        assert!(!text.contains("Override links"), "{text}");
+        assert!(shown(&detail)["override_links"].is_null());
         assert!(
             text.starts_with(
                 "checkout v1 · shop-prod · 2026-11-04 09:12 – 2026-11-05 10:00 UTC · 1 subject \
