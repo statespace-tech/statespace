@@ -34,7 +34,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
-        self.send_header("x-statespace-event", "visit")
+        self.send_header("x-app-event", "visit")
         self.end_headers()
         self.wfile.write(body)
 

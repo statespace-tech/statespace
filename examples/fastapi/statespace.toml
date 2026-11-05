@@ -13,7 +13,7 @@ request.method == "POST"
 
 [[event]]
 name = "purchase"
-match = 'response.headers["x-statespace-event"] == "purchase"'
+match = 'response.headers["x-app-event"] == "purchase"'
 
 # Experiments, in priority order. Set the arms with
 # ssp experiment update price --arm <commit>=<share>.

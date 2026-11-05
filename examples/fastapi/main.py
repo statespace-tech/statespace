@@ -1,7 +1,7 @@
 """A small shop for trying Statespace with FastAPI.
 
 Run it behind `ssp proxy`. A purchase names itself in the response header
-`x-statespace-event`. The `[[event]]` rules in statespace.toml count signups and
+`x-app-event`. The `[[event]]` rules in statespace.toml count signups and
 purchases for each arm of an experiment. An arm is a commit of this file, built
 into an image in CI.
 """
@@ -50,5 +50,5 @@ def checkout(body: Order, response: Response):
     amount = PRICE * body.quantity
     log.info("charged %s", amount)
     # The rule of the event `purchase` matches this header.
-    response.headers["x-statespace-event"] = "purchase"
+    response.headers["x-app-event"] = "purchase"
     return {"amount": amount}

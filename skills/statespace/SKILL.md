@@ -412,7 +412,7 @@ ssp experiment stop <name> <name> --app <app> --note "<why>"
 ```toml
 [[event]]
 name = "account"
-match = 'response.headers["x-statespace-event"] == "account_created"'
+match = 'response.headers["x-app-event"] == "account_created"'
 
 [[experiment.checkout.event]]
 name = "coupon"

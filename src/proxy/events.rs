@@ -149,7 +149,7 @@ mod tests {
     fn response(status: u16, ms: f64, event: Option<&str>) -> Value {
         let mut headers = http::HeaderMap::new();
         if let Some(event) = event {
-            headers.insert("x-statespace-event", event.parse().unwrap());
+            headers.insert("x-app-event", event.parse().unwrap());
         }
         response_value(status, &headers, ms)
     }
@@ -168,7 +168,7 @@ mod tests {
             ),
             (
                 "account",
-                r#"response.headers["x-statespace-event"] == "account_created""#,
+                r#"response.headers["x-app-event"] == "account_created""#,
             ),
             ("missing", r#"request.headers["x-missing"] == "1""#),
             // Removed in 0.5.0: these fields are missing, so no match.

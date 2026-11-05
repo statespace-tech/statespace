@@ -3016,7 +3016,7 @@ fn docker_proxies_forward_to_live_and_run_each_unit() {
                 "name": "checkout", "version": 1, "state": "running",
                 "subject": "request.cookies.ssp_sid", "eligibility": null,
                 "events": [{"name": "visit", "source": "request",
-                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
+                            "match": "response.headers[\"x-app-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -4273,7 +4273,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         "name": "checkout", "version": 1, "state": "running",
         "subject": "request.cookies.ssp_sid", "eligibility": null,
         "events": [{"name": "visit", "source": "request",
-                    "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
+                    "match": "response.headers[\"x-app-event\"] == \"visit\""}],
         "arms": [
             {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
             {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -5909,7 +5909,7 @@ fn aws_fargate_proxies_run_arms_as_services() {
                 "name": "checkout", "version": 1, "state": "running",
                 "subject": "request.cookies.ssp_sid", "eligibility": null,
                 "events": [{"name": "visit", "source": "request",
-                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
+                            "match": "response.headers[\"x-app-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
@@ -6567,7 +6567,7 @@ primary_region = "{region}"
                 "name": "checkout", "version": 1, "state": "running",
                 "subject": "request.cookies.ssp_sid", "eligibility": null,
                 "events": [{"name": "visit", "source": "request",
-                            "match": "response.headers[\"x-statespace-event\"] == \"visit\""}],
+                            "match": "response.headers[\"x-app-event\"] == \"visit\""}],
                 "arms": [
                     {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
                     {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
