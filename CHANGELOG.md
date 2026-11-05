@@ -5,7 +5,7 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 ## Unreleased
 
 Statespace records counts per subject, not requests, log lines, or bodies. Your own
-tools keep the detail, and each arm carries labels that they can filter by.
+data tools keep the detail, and each arm carries labels that they can filter by.
 
 ### Changed
 
@@ -56,7 +56,7 @@ tools keep the detail, and each arm carries labels that they can filter by.
 - **Breaking:** the proxy sends `ssp-experiment` and `ssp-arm` to an arm, in place of
   `x-statespace-experiment` and `x-statespace-arm`. It removes these headers when a
   client sends them. It sends no `x-statespace-subject`.
-- Each arm carries labels for your own tools. Its environment has `SSP_EXPERIMENT`,
+- Each arm carries labels for your own data tools. Its environment has `SSP_EXPERIMENT`,
   `SSP_ARM` (the full commit), and `OTEL_RESOURCE_ATTRIBUTES` with live's attributes
   and `statespace.experiment`, `statespace.arm`, and `service.version` of the arm. A
   subject that an arm serves gets the cookie `ssp_arms=<experiment>:<commit>`, which
@@ -70,7 +70,7 @@ tools keep the detail, and each arm carries labels that they can filter by.
   and `statespace_port`. A proxy of this version does not adopt the arms of an
   earlier version: stop the experiments before you upgrade.
 - **Breaking:** `ssp experiment show` prints the results of a version, where to find
-  the arms in your own tools, and the versions:
+  the arms in your own data tools, and the versions:
 
   ```text
   checkout v1 · shop-prod · since 2026-11-04 09:12 UTC · 2,392 subjects · split ok
@@ -86,7 +86,7 @@ tools keep the detail, and each arm carries labels that they can filter by.
     signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
     search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
 
-  Find it in your own tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+  Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
   ```
 
   The first line gives the version, the app, its time window (`<start> – <stop> UTC`

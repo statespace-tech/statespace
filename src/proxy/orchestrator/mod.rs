@@ -142,7 +142,7 @@ pub const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const ARM_ATTRIBUTES: [&str; 3] = ["statespace.experiment", "statespace.arm", "service.version"];
 
 impl UnitKey {
-    /// The variables that label a unit for the customer's own tools:
+    /// The variables that label a unit for the customer's own data tools:
     /// `SSP_EXPERIMENT`, `SSP_ARM` (the full commit), and
     /// `OTEL_RESOURCE_ATTRIBUTES`. `live_attributes` is live's value of
     /// `OTEL_RESOURCE_ATTRIBUTES`, if it has one: the unit keeps its other

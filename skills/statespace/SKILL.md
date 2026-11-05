@@ -369,7 +369,7 @@ with `/`. The job needs read access to the folder.
    - `split.ok` tells whether the subjects match the shares. Do not trust
      the results when it is false.
    - `lookup` gives the label of the arms, to find the version in the
-     user's own tools.
+     user's own data tools.
    - `--version N` shows the results of an earlier version.
    - The text output gives the same information as `--json`.
 6. Decide with the user. Statespace gives evidence, not verdicts.
@@ -434,7 +434,7 @@ match = 'request.path == "/checkout/coupon" && response.status == 200'
 - A release that changes a shared event, or the event, `subject`,
   `eligibility`, or `max_traffic` of an experiment, stops the experiment.
 
-## Find an arm in your own tools
+## Find an arm in your own data tools
 
 The proxy labels each arm. Live gets none of these labels.
 
@@ -447,7 +447,7 @@ The proxy labels each arm. Live gets none of these labels.
   `checkout:<commit>`, which JavaScript can read.
 
 `ssp experiment show` prints the label to search for, under "Find it in
-your own tools": `statespace.arm`.
+your own data tools": `statespace.arm`.
 
 ## Rules
 

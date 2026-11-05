@@ -644,7 +644,7 @@ fn shown(experiment: &Value) -> Value {
 ///   requests_4xx               0.1121 [0.0950, 0.1318]   0.1178 [0.1003, 0.1378]
 ///   ...
 ///
-/// Find it in your own tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
+/// Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
 ///
 /// Versions:
 ///   ...
@@ -689,7 +689,7 @@ fn show(shown: &Value) -> String {
         .collect();
     if !commits.is_empty() {
         out.push_str(&format!(
-            "\nFind it in your own tools: statespace.arm = {}\n",
+            "\nFind it in your own data tools: statespace.arm = {}\n",
             commits.join(" | ")
         ));
     }
@@ -962,7 +962,7 @@ events (estimate [95% CI])   c0ffee1                   a1b2c3d
   signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
   search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
 
-Find it in your own tools: statespace.arm = \"c0ffee1…\" | \"a1b2c3d…\"
+Find it in your own data tools: statespace.arm = \"c0ffee1…\" | \"a1b2c3d…\"
 
 Versions:
   VERSION  ARMS                       STARTED                       STOPPED  NOTE
