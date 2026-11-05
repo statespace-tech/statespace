@@ -20,9 +20,9 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "create", "update", "delete"]
-  # Read live's image digest from pod status, and the copies' output.
+  # Read live's image digest, and why a copy does not start, from pod status.
   - apiGroups: [""]
-    resources: ["pods", "pods/log"]
+    resources: ["pods"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

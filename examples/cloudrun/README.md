@@ -30,9 +30,6 @@ service, a copy of `shop` with another image. The proxy never changes `shop`.
    # Deploy the images of the arms. Cloud Run checks that the caller can read them.
    gcloud artifacts repositories add-iam-policy-binding shop --location us-east1 \
      --member "serviceAccount:$proxy" --role roles/artifactregistry.reader
-   # Read the output of the arms.
-   gcloud projects add-iam-policy-binding acme \
-     --member "serviceAccount:$proxy" --role roles/logging.viewer
    ```
 
 3. Store a runtime token in Secret Manager. The proxy asks Statespace which app the
@@ -56,7 +53,7 @@ service, a copy of `shop` with another image. The proxy never changes `shop`.
    ```
 
    The proxy works between requests: it renews its lease, starts and stops arms, and
-   sends records. Thus it needs CPU that is always allocated, and one instance at
+   sends counts. Thus it needs CPU that is always allocated, and one instance at
    minimum.
 
 5. Point the load balancer or the domain mapping at `statespace-proxy` instead of
@@ -81,9 +78,6 @@ service, a copy of `shop` with another image. The proxy never changes `shop`.
 - The proxy sends each request to the arm's URL, with an ID token for that URL in
   the header `X-Serverless-Authorization`. The app keeps its own `Authorization`
   header.
-- The proxy reads the output of the arms from Cloud Logging, with one query for all
-  arms every 5 seconds. When Cloud Logging asks it to slow down, it waits and loses
-  no line.
 - When an experiment stops, the proxy deletes the services of its arms.
 
 Deploy a new live as usual, with `gcloud run deploy`, Terraform, or any other tool.

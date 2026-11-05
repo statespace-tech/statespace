@@ -32,12 +32,6 @@
       "Condition": {
         "StringEquals": {"iam:PassedToService": "ecs-tasks.amazonaws.com"}
       }
-    },
-    {
-      "Sid": "ReadTheOutputOfTheArms",
-      "Effect": "Allow",
-      "Action": "logs:FilterLogEvents",
-      "Resource": "arn:aws:logs:us-east-1:123456789012:log-group:/ecs/shop:*"
     }
   ]
 }

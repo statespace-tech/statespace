@@ -17,7 +17,7 @@ roles, and the load balancer with yours.
 
 1. Make the task role `statespace-proxy` with the policy
    `proxy-policy.json`. In the policy, use the task role and the execution
-   role of `shop`, and the log group of `shop`.
+   role of `shop`.
 2. Store a runtime token in Secrets Manager:
 
    ```shell
@@ -73,8 +73,6 @@ roles, and the load balancer with yours.
 - The proxy sends each request to the private IP address of a task of the
   arm. Arms with more tasks get requests on a different task after each
   poll.
-- The proxy reads the output of the arms from CloudWatch Logs. Live's
-  container must log with `awslogs`.
 - When an experiment stops, the proxy deletes the services of its arms, and
   deregisters and deletes their task definitions.
 

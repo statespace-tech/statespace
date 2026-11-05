@@ -1,14 +1,14 @@
 # FastAPI shop
 
-A small FastAPI shop that runs behind `ssp proxy`. It prints a JSON line for each signup
-and purchase. An arm is a commit of `main.py`, such as one that lowers `PRICE`, built
+A small FastAPI shop that runs behind `ssp proxy`. It names each purchase in a response
+header. An arm is a commit of `main.py`, such as one that lowers `PRICE`, built
 into an image.
 
 | File | Purpose |
 | --- | --- |
 | `main.py` | The app |
 | `Dockerfile` | The shop's image. CI builds it for every commit |
-| `statespace.toml` | The settings, the events, the metrics, and the experiment `price` |
+| `statespace.toml` | The settings, the events, and the experiment `price` |
 | `build.yml` | A GitHub Actions workflow that builds every commit and records the build |
 | `compose.yaml` | The shop and `ssp proxy docker` with Docker Compose |
 

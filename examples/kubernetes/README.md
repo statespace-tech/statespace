@@ -51,6 +51,3 @@ kubectl get deployments -l statespace.com/experiment=checkout
 
 When an experiment stops, the proxy deletes the Deployments and Services of its
 arms.
-
-Kubernetes joins a container's standard output and standard error, so the proxy records
-every line of a copy as `stdout`.

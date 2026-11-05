@@ -63,7 +63,6 @@ the secrets of `shop`.
   not change it.
 - The proxy sends each request of an arm to the Machine's private IPv6
   address.
-- The proxy reads the output of the arms from the logs of `shop`.
 - When an experiment stops, the proxy destroys the Machines of its arms.
 
 `fly deploy` of `shop` changes live only. The arms are fixed commits. A new

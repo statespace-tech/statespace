@@ -1,29 +1,19 @@
 # The shop's settings. Copy this file to the root of the shop's repository.
 # The settings of the build that live runs apply.
 
-# Logs can hold payment keys. Remove them before lines leave the machine.
-redact = ['sk_live_\w+']
-
-# Shared events and metrics: in every experiment.
+# Shared events: in every experiment. Each rule sees one request and its
+# response. The first event is the headline.
 [[event]]
 name = "signup"
 match = '''
 request.method == "POST"
   && request.path == "/signup"
-  && request.status < 300
+  && response.status < 300
 '''
 
 [[event]]
 name = "purchase"
-match = 'stdout.json.event == "purchase"'
-
-[[metric]]
-label = "signup rate %"
-value = '100.0 * events["signup"].subjects / subjects'
-
-[[metric]]
-label = "purchases per request"
-value = 'events["purchase"].lines / requests'
+match = 'response.headers["x-statespace-event"] == "purchase"'
 
 # Experiments, in priority order. Set the arms with
 # ssp experiment update price --arm <commit>=<share>.

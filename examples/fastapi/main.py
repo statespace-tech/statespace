@@ -1,15 +1,14 @@
 """A small shop for trying Statespace with FastAPI.
 
-Run it behind `ssp proxy`. It prints a JSON line for each signup and purchase.
-The `[[event]]` rules in statespace.toml count them for each arm of an experiment.
-An arm is a commit of this file, built into an image in CI.
+Run it behind `ssp proxy`. A purchase names itself in the response header
+`x-statespace-event`. The `[[event]]` rules in statespace.toml count signups and
+purchases for each arm of an experiment. An arm is a commit of this file, built
+into an image in CI.
 """
 
-import json
 import logging
-import os
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 # The change an arm tests. A commit might lower the price or rewrite checkout.
@@ -18,11 +17,6 @@ PRICE = 40
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("shop")
 app = FastAPI()
-
-
-def event(name: str, subject: str | None, **data: object) -> None:
-    """Print one JSON line, which an `[[event]]` rule can match."""
-    print(json.dumps({"event": name, "subject": subject, **data}), flush=True)
 
 
 class Signup(BaseModel):
@@ -44,18 +38,17 @@ def home() -> dict[str, object]:
 
 
 @app.post("/signup")
-def signup(body: Signup, subject: str | None = Header(None, alias="x-statespace-subject")):
-    log.info("signup for %s", body.email)
-    event("signup", subject)
+def signup(body: Signup):
+    log.info("signup")
     return {"welcome": body.email}
 
 
 @app.post("/checkout")
-def checkout(body: Order, subject: str | None = Header(None, alias="x-statespace-subject")):
+def checkout(body: Order, response: Response):
     if body.quantity < 1:
         raise HTTPException(422, "quantity must be at least 1")
     amount = PRICE * body.quantity
-    # Logs can hold secrets. `redact` in statespace.toml removes them before they leave.
-    log.info("charged %s with key %s", amount, os.environ.get("PAYMENT_KEY", "sk_test_local"))
-    event("purchase", subject, amount=amount, quantity=body.quantity)
+    log.info("charged %s", amount)
+    # The rule of the event `purchase` matches this header.
+    response.headers["x-statespace-event"] = "purchase"
     return {"amount": amount}
