@@ -34,9 +34,6 @@ pub enum Command {
     /// Add, list, and remove runtime tokens for `ssp proxy`.
     #[command(subcommand)]
     Token(TokenCommand),
-    /// Read the data of your apps with SQL: your PostgreSQL login.
-    #[command(subcommand)]
-    Db(DbCommand),
     /// Run the proxy in front of an app's live service.
     #[command(subcommand)]
     Proxy(Box<ProxyCommand>),
@@ -281,47 +278,6 @@ pub enum TokenCommand {
         #[arg(long, value_parser = app_name)]
         app: Option<String>,
     },
-}
-
-#[derive(Args)]
-pub struct AccountFlag {
-    /// The workspace, such as `acme`. Defaults to your only workspace.
-    #[arg(long, env = "STATESPACE_ACCOUNT")]
-    pub account: Option<String>,
-}
-
-#[derive(Subcommand)]
-pub enum DbCommand {
-    /// Print the connection string of your SQL login. It reads the apps
-    /// whose repository you can read. The password stays the same until
-    /// `ssp db rotate`.
-    Url {
-        #[command(flatten)]
-        account: AccountFlag,
-        #[command(flatten)]
-        verify: VerifyFlag,
-    },
-    /// Give your SQL login a new password. The old password stops at once,
-    /// and its sessions end.
-    Rotate {
-        #[command(flatten)]
-        account: AccountFlag,
-        #[command(flatten)]
-        verify: VerifyFlag,
-        #[command(flatten)]
-        note: Note,
-    },
-}
-
-/// How the client checks the server.
-#[derive(Args)]
-pub struct VerifyFlag {
-    /// Verify the server's certificate with the system trust store
-    /// (`sslmode=verify-full&sslrootcert=system`, libpq 16 and later). By
-    /// default the connection string has `sslmode=require`: encrypted, and
-    /// the server is not verified.
-    #[arg(long)]
-    pub verify: bool,
 }
 
 /// What every `ssp proxy` subcommand takes.

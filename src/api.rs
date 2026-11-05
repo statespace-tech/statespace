@@ -18,12 +18,7 @@ pub struct Api {
     credential: Option<Found>,
     /// The secret of the credential, once read.
     secret: OnceCell<String>,
-    /// The workspace that requests act on, when the person has several.
-    workspace: Option<String>,
 }
-
-/// The header that names the workspace a request acts on.
-const WORKSPACE_HEADER: &str = "Statespace-Workspace";
 
 impl Api {
     pub fn new(endpoint: &str, credential: Option<Found>) -> anyhow::Result<Self> {
@@ -36,14 +31,7 @@ impl Api {
             endpoint: endpoint.trim_end_matches('/').to_owned(),
             credential,
             secret: OnceCell::new(),
-            workspace: None,
         })
-    }
-
-    /// The same API, acting on `workspace` when it is given.
-    pub fn in_workspace(mut self, workspace: Option<String>) -> Self {
-        self.workspace = workspace;
-        self
     }
 
     pub fn endpoint(&self) -> &str {
@@ -61,7 +49,6 @@ impl Api {
             endpoint: self.endpoint.clone(),
             credential: Some(credential),
             secret: OnceCell::new(),
-            workspace: self.workspace.clone(),
         }
     }
 
@@ -82,11 +69,7 @@ impl Api {
                 self.secret.get_or_init(|| secret).clone()
             }
         };
-        let request = self.anonymous(method, path).bearer_auth(secret);
-        Ok(match &self.workspace {
-            Some(workspace) => request.header(WORKSPACE_HEADER, workspace),
-            None => request,
-        })
+        Ok(self.anonymous(method, path).bearer_auth(secret))
     }
 
     pub fn get<T: DeserializeOwned>(&self, path: &str) -> anyhow::Result<T> {

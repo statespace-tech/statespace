@@ -3,7 +3,6 @@
 
 mod app;
 mod auth;
-mod db;
 mod experiment;
 mod token;
 
@@ -30,7 +29,6 @@ pub fn run(cli: Cli) -> anyhow::Result<()> {
     let found = credential::find(|name| std::env::var(name).ok(), settings.token);
     let api = Api::new(&endpoint, found)?;
     match cli.command {
-        Command::Db(command) => db::run(api, command),
         Command::App(command) => app::run(&api, command),
         Command::Experiment(command) => experiment::run(&api, command),
         Command::Token(command) => token::run(&api, command),
