@@ -996,7 +996,7 @@ fn statespace_on(port: u16, state: Arc<Mutex<Statespace>>) -> String {
             }
             ("GET", "/v1/whoami") => json_answer(
                 200,
-                &json!({"person": {"login": "octo"}, "kind": "person", "workspaces": [{"login": "acme"}]}),
+                &json!({"person": {"login": "octo"}, "kind": "session"}),
             ),
             ("POST", "/v1/apps") => json_answer(
                 201,

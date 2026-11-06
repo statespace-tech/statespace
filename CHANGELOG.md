@@ -2,6 +2,17 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Fixed
+
+- `ssp app remove` says that it deletes the experiments, versions, and results of the
+  app.
+- `ssp whoami` prints no `Workspaces` row, and its `--json` has no `workspaces`: the
+  API does not send them.
+- The help of `--health` on `ssp proxy docker` says that any 2xx status makes a unit
+  ready.
+
 ## 0.5.0 - 2026-11-04
 
 Statespace records counts per subject, not requests, log lines, or bodies. Your own

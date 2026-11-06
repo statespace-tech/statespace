@@ -36,8 +36,8 @@ pub fn run(api: &Api, command: AppCommand) -> anyhow::Result<()> {
             });
             emit(&document, || {
                 format!(
-                    "Removed app {name} ({}, {}) and all its data: experiments, versions, runs, \
-                     requests, output, and events.",
+                    "Removed app {name} ({}, {}) and all its data: experiments, versions, and \
+                     results.",
                     text(&app["repo"]),
                     folder_label(&app["path"]),
                 )

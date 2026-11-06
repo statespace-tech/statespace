@@ -13,7 +13,7 @@ use crate::{
     cli::{Cli, Command},
     config::{DEFAULT_ENDPOINT, Settings},
     credential,
-    output::{emit, fields, list, text},
+    output::{emit, fields, text},
     proxy,
 };
 
@@ -45,17 +45,6 @@ fn whoami(api: &Api) -> anyhow::Result<()> {
     let login = server["person"]["login"]
         .as_str()
         .or_else(|| server["login"].as_str());
-    let workspaces: Option<Vec<Value>> = server["workspaces"].as_array().map(|workspaces| {
-        workspaces
-            .iter()
-            .map(|workspace| {
-                workspace
-                    .get("login")
-                    .cloned()
-                    .unwrap_or_else(|| workspace.clone())
-            })
-            .collect()
-    });
     let document = json!({
         "login": login,
         "credential": {
@@ -64,7 +53,6 @@ fn whoami(api: &Api) -> anyhow::Result<()> {
         },
         "kind": server["kind"],
         "app": server["app"],
-        "workspaces": workspaces,
         "api": api.endpoint(),
     });
     emit(&document, || {
@@ -81,9 +69,6 @@ fn whoami(api: &Api) -> anyhow::Result<()> {
         }
         if !server["app"].is_null() {
             rows.push(("App", text(&server["app"])));
-        }
-        if let Some(names) = &workspaces {
-            rows.push(("Workspaces", list(&json!(names))));
         }
         rows.push(("API", api.endpoint().to_owned()));
         fields(&rows)

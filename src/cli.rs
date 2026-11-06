@@ -441,7 +441,7 @@ pub struct DockerArgs {
     /// port the container exposes.
     #[arg(long, value_name = "PORT")]
     pub live_port: Option<u16>,
-    /// A path that must answer 200 before a unit's container gets traffic.
+    /// A path that must answer with a 2xx status before a unit's container gets traffic.
     /// Without it, a container is ready when its port accepts connections.
     #[arg(long)]
     pub health: Option<String>,

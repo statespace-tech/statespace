@@ -107,14 +107,6 @@ pub fn folder_cell(path: &Value) -> String {
     }
 }
 
-/// A list of strings, joined with commas.
-pub fn list(value: &Value) -> String {
-    match value.as_array() {
-        Some(items) if !items.is_empty() => items.iter().map(text).collect::<Vec<_>>().join(", "),
-        _ => "-".into(),
-    }
-}
-
 /// A timestamp in UTC to the minute, such as `2026-10-15 17:40 UTC`.
 pub fn time(value: &Value) -> String {
     value
@@ -160,7 +152,6 @@ mod tests {
         assert_eq!(folder_cell(&json!("")), "the root");
         assert_eq!(folder_cell(&json!("shop")), "shop");
         assert_eq!(short("a1b2c3d4e5"), "a1b2c3d");
-        assert_eq!(list(&json!(["a", "b"])), "a, b");
     }
 
     #[test]
