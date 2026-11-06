@@ -20,6 +20,9 @@ ignore = [
     # paste is unmaintained, with no known vulnerability. It is a proc macro of
     # cel-interpreter 0.10 and runs only at compile time.
     { id = "RUSTSEC-2024-0436", reason = "compile-time proc macro of cel-interpreter, no known vulnerability" },
+    # pin-utils is unmaintained, with no known vulnerability. aws-smithy-http, which
+    # the AWS SDK uses, still depends on it in its latest version.
+    { id = "RUSTSEC-2026-0441", reason = "dependency of the AWS SDK, no known vulnerability" },
 ]
 
 [licenses]
