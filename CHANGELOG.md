@@ -4,6 +4,23 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
 
 ## Unreleased
 
+### Added
+
+- `ssp proxy lambda --function <name>` runs the arms of experiments on AWS Lambda. Live
+  is a function that deploys from a container image, at `--qualifier`, such as the
+  alias `live`, or at `$LATEST`. Each arm is the function
+  `<function>-ssp-<experiment>-<commit 12>`, with the configuration of live and the
+  arm's image, tagged `statespace.com/app`, `statespace.com/experiment`, and
+  `statespace.com/commit`. It gets no trigger and no function URL, and logs to its own
+  log group.
+- The proxy invokes live and each arm with the event of a function URL (payload format
+  2.0), and turns the answer into the response, as a function URL does. With
+  `--live-url`, live traffic goes to that HTTP address instead. A request body can be
+  at most 6 MB. An arm that fails sends a request without a body to live, as on the
+  other runtimes.
+- `examples/lambda` has the tiny app as a function with the AWS Lambda Web Adapter,
+  and the policy, task definition, and service of a proxy on ECS Fargate.
+
 ### Fixed
 
 - `ssp app remove` says that it deletes the experiments, versions, and results of the

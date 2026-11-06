@@ -207,6 +207,7 @@ impl Fargate {
             Endpoints {
                 ecs: arguments.ecs_api.clone(),
                 ec2: arguments.ec2_api.clone(),
+                lambda: None,
                 s3: None,
             },
         )

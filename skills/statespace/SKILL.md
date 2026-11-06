@@ -104,6 +104,7 @@ subcommand from where live runs:
 | Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
 | ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
 | Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
+| AWS Lambda (from an image) | `ssp proxy lambda` | A Lambda function with live's configuration |
 | S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
 | Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
 
@@ -122,6 +123,7 @@ ssp proxy kubernetes --deployment shop --namespace prod
 ssp proxy fargate    --cluster shop --service shop \
                      --live-url http://internal-shop.example.com
 ssp proxy fly        --fly-app shop
+ssp proxy lambda     --function shop --qualifier live
 ssp proxy s3         --bucket acme-site
 ssp proxy gcs        --bucket acme-site
 ```
@@ -218,6 +220,30 @@ Gotchas:
   `STATESPACE_` on the app.
 - Remove the public addresses of the app, so that all requests go through
   the proxy.
+
+### AWS Lambda
+
+The proxy runs as its own ECS service, as on ECS Fargate, in front of the
+function. Live is the function at `--qualifier`, such as the alias `live`.
+Each arm is its own function, `<function>-ssp-<experiment>-<commit 12>`,
+with live's configuration and another image. Its task role needs:
+
+1. The Lambda actions `CreateFunction`, `DeleteFunction`, `GetFunction`,
+   `InvokeFunction`, `ListTags`, `TagResource`, and `UpdateFunctionCode` on
+   live's function and on `<function>-ssp-*`, and `ListFunctions`.
+2. `iam:PassRole` on the execution role of live, for
+   `lambda.amazonaws.com`.
+
+Gotchas:
+
+- The function must deploy from a container image in Amazon ECR. A function
+  from a .zip file does not work.
+- The proxy invokes live and each arm with the event of a function URL
+  (payload format 2.0). An app behind an API Gateway REST API or an ALB
+  must take that event too. The AWS Lambda Web Adapter takes it.
+- Point the API Gateway, load balancer, or DNS name at the proxy. Then all
+  requests go through the proxy.
+- A request body can be at most 6 MB.
 
 ### S3 and Cloud Storage
 

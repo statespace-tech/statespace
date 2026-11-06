@@ -42,6 +42,7 @@ use self::{
         files::{gcs::Gcs, s3::S3},
         fly::Fly,
         kubernetes::Kubernetes,
+        lambda::Lambda,
     },
     remote::{ConfigError, Remote},
 };
@@ -81,6 +82,10 @@ pub fn run(endpoint: &str, command: ProxyCommand) -> anyhow::Result<()> {
                 }
                 ProxyCommand::Fargate { common, fargate } => {
                     let orchestrator = Fargate::new(fargate).await?;
+                    serve(Arc::new(orchestrator), common, endpoint).await
+                }
+                ProxyCommand::Lambda { common, lambda } => {
+                    let orchestrator = Lambda::new(lambda).await?;
                     serve(Arc::new(orchestrator), common, endpoint).await
                 }
                 ProxyCommand::Fly { common, fly } => {

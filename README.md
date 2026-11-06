@@ -36,6 +36,7 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
   <a href="https://docs.statespace.com/runtimes/cloud-run">Cloud Run</a> ·
   <a href="https://docs.statespace.com/runtimes/fargate">ECS Fargate</a> ·
   <a href="https://docs.statespace.com/runtimes/fly">Fly.io</a> ·
+  <a href="https://docs.statespace.com/runtimes/lambda">AWS Lambda</a> ·
   <a href="https://docs.statespace.com/runtimes/s3">S3</a> ·
   <a href="https://docs.statespace.com/runtimes/gcs">Cloud Storage</a>
 </p>

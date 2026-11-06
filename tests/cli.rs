@@ -4,7 +4,8 @@
 //! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
 //! Fargate test runs in a sandbox account of AWS when
-//! `STATESPACE_FARGATE_TESTS=1`; the real Fly.io test runs in a dedicated
+//! `STATESPACE_FARGATE_TESTS=1`, and the real Lambda test there when
+//! `STATESPACE_LAMBDA_TESTS=1`; the real Fly.io test runs in a dedicated
 //! Fly.io app when `STATESPACE_FLY_TESTS=1`. The file runtimes run against
 //! stand-ins for S3 and Cloud Storage; the real S3 test runs in the sandbox
 //! account of AWS when `STATESPACE_S3_TESTS=1`, and the real Cloud Storage
@@ -5118,6 +5119,355 @@ fn fargate_proxies_run_units_as_services() {
     });
 }
 
+#[derive(Default)]
+struct LambdaApi {
+    /// `GetFunction` answers by function name.
+    functions: HashMap<String, Value>,
+    /// What the proxy created, as it sent it, and what it deleted.
+    creations: Vec<Value>,
+    deletions: Vec<String>,
+    /// Each invocation: the function, its qualifier, and the event.
+    invocations: Vec<(String, String, Value)>,
+}
+
+fn lambda_digest(character: char) -> String {
+    format!("{ECR}@sha256:{}", character.to_string().repeat(64))
+}
+
+/// A stand-in Lambda API. A function answers with its name, the variables
+/// that label an arm, and the event it got; a request for `/fail` makes an
+/// arm fail.
+fn lambda_api(state: Arc<Mutex<LambdaApi>>) -> String {
+    let port = serve_replies(move |received| {
+        let mut api = state.lock().unwrap();
+        let authorization = received
+            .headers
+            .get("authorization")
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            authorization.starts_with("AWS4-HMAC-SHA256 Credential=AKIDSTANDIN/")
+                && authorization.contains("/us-east-1/lambda/aws4_request"),
+            "{authorization}"
+        );
+        let json = |status: u16, body: &Value| -> Reply { json_answer(status, body).into() };
+        let not_found = || {
+            json(
+                404,
+                &json!({"Type": "User", "Message": "Function not found"}),
+            )
+        };
+        let path = received
+            .path
+            .strip_prefix("/2015-03-31/functions/")
+            .unwrap_or_default()
+            .to_owned();
+        let segments: Vec<&str> = path.split('/').collect();
+        match (received.method.as_str(), segments.as_slice()) {
+            ("GET", [""]) => {
+                let functions: Vec<Value> = api
+                    .functions
+                    .keys()
+                    .map(|name| json!({"FunctionName": name}))
+                    .collect();
+                json(200, &json!({"Functions": functions}))
+            }
+            ("GET", [name]) => match api.functions.get(*name) {
+                // As Lambda, give the tags only without a qualifier.
+                Some(function) if received.query.contains("Qualifier=") => {
+                    let mut function = function.clone();
+                    function.as_object_mut().unwrap().remove("Tags");
+                    json(200, &function)
+                }
+                Some(function) => json(200, function),
+                None => not_found(),
+            },
+            ("POST", [name, "invocations"]) => {
+                let name = (*name).to_owned();
+                let Some(function) = api.functions.get(&name).cloned() else {
+                    return not_found();
+                };
+                let qualifier = received
+                    .query
+                    .strip_prefix("Qualifier=")
+                    .unwrap_or_default()
+                    .to_owned();
+                let event = received.body.clone();
+                api.invocations
+                    .push((name.clone(), qualifier, event.clone()));
+                if event["rawPath"] == "/fail" && name != "shop" {
+                    return Reply {
+                        status: 200,
+                        headers: vec![
+                            ("content-type".into(), "application/json".into()),
+                            ("x-amz-function-error".into(), "Unhandled".into()),
+                        ],
+                        body: br#"{"errorType": "Error", "errorMessage": "boom"}"#.to_vec(),
+                    };
+                }
+                let variables = &function["Configuration"]["Environment"]["Variables"];
+                let body = json!({
+                    "name": name,
+                    "path": event["rawPath"],
+                    "headers": event["headers"],
+                    "cookies": event["cookies"],
+                    "body": event["body"],
+                    "labels": {"SSP_ARM": variables["SSP_ARM"],
+                               "SSP_EXPERIMENT": variables["SSP_EXPERIMENT"]},
+                });
+                json(
+                    200,
+                    &json!({
+                        "statusCode": 200,
+                        "headers": {"content-type": "application/json", "x-app-event": "visit"},
+                        "cookies": ["seen=1; Path=/"],
+                        "body": body.to_string(),
+                    }),
+                )
+            }
+            ("POST", [""]) | ("POST", []) => {
+                let body = received.body.clone();
+                api.creations.push(body.clone());
+                let name = body["FunctionName"].as_str().unwrap().to_owned();
+                let mut configuration = body.clone();
+                let fields = configuration.as_object_mut().unwrap();
+                let code = fields.remove("Code").unwrap();
+                let tags = fields.remove("Tags").unwrap();
+                fields.remove("Publish");
+                configuration["State"] = json!("Active");
+                configuration["LastUpdateStatus"] = json!("Successful");
+                api.functions.insert(
+                    name,
+                    json!({"Configuration": configuration, "Code": code, "Tags": tags}),
+                );
+                json(201, &configuration)
+            }
+            ("DELETE", [name]) => match api.functions.remove(*name) {
+                Some(_) => {
+                    api.deletions.push((*name).to_owned());
+                    Reply {
+                        status: 204,
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    }
+                }
+                None => not_found(),
+            },
+            _ => json(
+                400,
+                &json!({"Type": "User", "Message": format!("{} {}", received.method, received.path)}),
+            ),
+        }
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// A proxy on Lambda runs each unit as a function with live's configuration,
+/// invokes live and the units with the events of a function URL, counts
+/// the arms' subjects, fails open to live, and deletes the functions of an
+/// experiment that stops.
+#[test]
+fn lambda_proxies_run_units_as_functions() {
+    let live_function = json!({
+        "Configuration": {
+            "FunctionName": "shop", "PackageType": "Image",
+            "Role": "arn:aws:iam::123456789012:role/shop",
+            "MemorySize": 512, "Timeout": 30, "Architectures": ["x86_64"],
+            "Environment": {"Variables": {"MODE": "prod", "STATESPACE_TOKEN": "never"}},
+            "State": "Active", "LastUpdateStatus": "Successful",
+        },
+        "Code": {"ImageUri": format!("{ECR}:main"), "ResolvedImageUri": lambda_digest('1')},
+        "Tags": {"team": "web"},
+    });
+    let api = Arc::new(Mutex::new(LambdaApi {
+        functions: HashMap::from([("shop".to_owned(), live_function)]),
+        ..LambdaApi::default()
+    }));
+    let endpoint = lambda_api(api.clone());
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "settings-1",
+            "live": {"commit": LIVE, "image": lambda_digest('1')},
+            "experiments": [{
+                "name": "checkout", "version": 3, "state": "running",
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "visit", "source": "request",
+                            "match": "response.headers[\"x-app-event\"] == \"visit\""}],
+                "arms": [
+                    {"commit": LIVE, "image": lambda_digest('1'), "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": lambda_digest('2'), "ranges": [[0.4, 0.8]]},
+                ],
+            }],
+            "lease": null, "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let statespace_api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &statespace_api)
+        .env("STATESPACE_TOKEN", "runtime-1")
+        .env("AWS_ACCESS_KEY_ID", "AKIDSTANDIN")
+        .env("AWS_SECRET_ACCESS_KEY", "secret-standin")
+        .env_remove("AWS_SESSION_TOKEN")
+        .env_remove("AWS_PROFILE")
+        .env("AWS_CONFIG_FILE", directory.path().join("aws-config"))
+        .env(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            directory.path().join("aws-credentials"),
+        )
+        .env("AWS_EC2_METADATA_DISABLED", "true")
+        .env("AWS_ENDPOINT_URL_LAMBDA", &endpoint)
+        .env("STATESPACE_COUNTS_EVERY", "1")
+        .env("AWS_REGION", "us-east-1")
+        .args([
+            "proxy",
+            "lambda",
+            "--function",
+            "shop",
+            "--qualifier",
+            "live",
+        ]);
+    let (_proxy, port) = spawn_proxy(command);
+    let live_arm_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+    let get = |subject: &str, path: &str| -> Option<Value> {
+        send(
+            port,
+            "GET",
+            path,
+            &[
+                ("cookie", &format!("ssp_sid={subject}")),
+                ("ssp-arm", "spoofed"),
+            ],
+        )?
+        .json()
+        .ok()
+    };
+    let live_arm_name = format!("shop-ssp-checkout-{}", &LIVE[..12]);
+    let arm_name = format!("shop-ssp-checkout-{}", &ARM[..12]);
+    wait_until(60, "both arms of checkout serve", || {
+        get(&arm_subject, "/checkout").is_some_and(|body| body["name"] == arm_name.as_str())
+            && get(&live_arm_subject, "/checkout")
+                .is_some_and(|body| body["name"] == live_arm_name.as_str())
+    });
+
+    // Each unit is a function with live's configuration, its own image, and
+    // the tags of the app, experiment, and commit.
+    {
+        let api = api.lock().unwrap();
+        assert_eq!(api.creations.len(), 2, "{:?}", api.creations);
+        let creation = api
+            .creations
+            .iter()
+            .find(|creation| creation["FunctionName"] == arm_name.as_str())
+            .unwrap();
+        assert_eq!(creation["PackageType"], "Image");
+        assert_eq!(creation["Code"]["ImageUri"], lambda_digest('2'));
+        assert_eq!(creation["Role"], "arn:aws:iam::123456789012:role/shop");
+        assert_eq!(creation["MemorySize"], 512);
+        assert_eq!(
+            creation["Tags"],
+            json!({
+                "team": "web",
+                "statespace.com/app": "shop-prod",
+                "statespace.com/experiment": "checkout",
+                "statespace.com/commit": ARM,
+            })
+        );
+        assert_eq!(
+            creation["Environment"]["Variables"],
+            json!({
+                "MODE": "prod",
+                "SSP_EXPERIMENT": "checkout",
+                "SSP_ARM": ARM,
+                "OTEL_RESOURCE_ATTRIBUTES": format!(
+                    "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}"),
+            })
+        );
+        assert!(!creation.to_string().contains("STATESPACE_"));
+    }
+
+    // The arm gets the experiment and arm headers and the cookies; live,
+    // invoked at its qualifier, gets neither header.
+    let body = get(&arm_subject, "/checkout").unwrap();
+    assert_eq!(body["path"], "/checkout");
+    assert_eq!(body["headers"]["ssp-experiment"], "checkout");
+    assert_eq!(body["headers"]["ssp-arm"], ARM);
+    assert_eq!(body["labels"]["SSP_ARM"], ARM);
+    assert!(
+        body["cookies"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(format!("ssp_sid={arm_subject}")))
+    );
+    let body = get(&live_subject, "/checkout").unwrap();
+    assert_eq!(body["name"], "shop");
+    assert!(body["headers"].get("ssp-arm").is_none());
+    assert_eq!(body["labels"]["SSP_ARM"], Value::Null);
+    assert!(
+        api.lock()
+            .unwrap()
+            .invocations
+            .iter()
+            .filter(|(name, _, _)| name == "shop")
+            .all(|(_, qualifier, _)| qualifier == "live")
+    );
+    // A body reaches the function, and its cookies reach the client.
+    let response = client()
+        .post(format!("http://127.0.0.1:{port}/pay"))
+        .header("cookie", format!("ssp_sid={arm_subject}"))
+        .body("{\"total\": 3}")
+        .send()
+        .unwrap();
+    assert!(set_cookies(&response).contains(&"seen=1; Path=/".to_owned()));
+    let body: Value = response.json().unwrap();
+    assert_eq!(body["name"], arm_name.as_str());
+    assert_eq!(body["body"], "{\"total\": 3}");
+
+    // The report names live's digest and every unit ready. The arms'
+    // subjects are counted with their events.
+    wait_until(30, "a report with both units ready, and counts", || {
+        let state = state.lock().unwrap();
+        let ready = state.reports().iter().any(|report| {
+            report["orchestrator"] == "lambda"
+                && report["live_image"] == lambda_digest('1').as_str()
+                && report["units"].as_array().is_some_and(|units| {
+                    units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
+                })
+        });
+        ready && state.totals("checkout", ARM).events.contains_key("visit")
+    });
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.totals("checkout", ARM).subjects,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+    }
+
+    // An arm that fails sends a request without a body to live.
+    let body = get(&arm_subject, "/fail").unwrap();
+    assert_eq!(body["name"], "shop");
+
+    // When checkout stops, its functions go, and its subjects go to live.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(30, "the units are deleted", || {
+        api.lock().unwrap().deletions.len() == 2
+    });
+    assert!(
+        api.lock().unwrap().functions.contains_key("shop"),
+        "live stays"
+    );
+    wait_until(30, "the arm's subjects go to live", || {
+        get(&arm_subject, "/checkout").is_some_and(|body| body["name"] == "shop")
+    });
+}
+
 // ---------------------------------------------------------------------------
 // The proxy on ECS Fargate, in the AWS sandbox account. It runs when
 // `STATESPACE_FARGATE_TESTS=1`, with `STATESPACE_TEST_AWS_ACCOUNT` and AWS
@@ -5231,14 +5581,74 @@ impl AwsSandbox {
             "examples/app",
         ]);
         docker(&["push", "--quiet", &reference]);
-        let digest = docker(&[
+        let digest = self.digest(repository, &reference);
+        (reference, digest)
+    }
+
+    /// The digest reference of a pushed image in `repository`. An image
+    /// that another run pushed too has the digests of both repositories.
+    fn digest(&self, repository: &str, reference: &str) -> String {
+        let digests: Vec<String> = serde_json::from_str(&docker(&[
             "image",
             "inspect",
             "--format",
-            "{{index .RepoDigests 0}}",
+            "{{json .RepoDigests}}",
+            reference,
+        ]))
+        .unwrap();
+        let prefix = format!("{}/{repository}@", self.registry());
+        digests
+            .into_iter()
+            .find(|digest| digest.starts_with(&prefix))
+            .unwrap_or_else(|| panic!("{reference} has no digest in {repository}"))
+    }
+
+    /// Build the example app as a Lambda function with a greeting, push it
+    /// with a tag, and return the tag reference and the digest reference.
+    /// Lambda takes only an image of one platform: with BuildKit, the build
+    /// leaves out the provenance attestation.
+    fn push_function(&self, repository: &str, tag: &str, greeting: &str) -> (String, String) {
+        let reference = format!("{}/{repository}:{tag}", self.registry());
+        let buildkit = std::process::Command::new("docker")
+            .args(["buildx", "version"])
+            .output()
+            .is_ok_and(|output| output.status.success());
+        let mut arguments = vec!["build", "--quiet", "--platform", "linux/amd64"];
+        if buildkit {
+            arguments.push("--provenance=false");
+        }
+        let greeting = format!("GREETING={greeting}");
+        arguments.extend([
+            "--build-arg",
+            &greeting,
+            "--tag",
             &reference,
+            "--file",
+            "examples/lambda/Dockerfile",
+            "examples",
         ]);
+        docker(&arguments);
+        docker(&["push", "--quiet", &reference]);
+        let digest = self.digest(repository, &reference);
         (reference, digest)
+    }
+
+    /// The functions whose names start with `prefix`, other than `prefix`
+    /// itself, as `aws lambda get-function` gives them.
+    fn functions(&self, prefix: &str) -> Vec<Value> {
+        let listed = self
+            .try_aws(&["lambda", "list-functions"])
+            .map(|listed| listed["Functions"].as_array().cloned().unwrap_or_default())
+            .unwrap_or_default();
+        listed
+            .iter()
+            .filter_map(|function| function["FunctionName"].as_str())
+            .filter(|name| name.starts_with(prefix) && *name != prefix)
+            .filter_map(|name| {
+                self.try_aws(&["lambda", "get-function", "--function-name", name])
+                    .ok()
+            })
+            .collect()
     }
 
     /// The services of a cluster that are not deleted yet.
@@ -5339,8 +5749,9 @@ impl AwsSandbox {
     }
 
     /// Delete the resources of every test run that `select` picks: ECS
-    /// services and clusters, task definitions, security groups, ECR
-    /// repositories, and VPCs that a test made.
+    /// services and clusters, task definitions, security groups, Lambda
+    /// functions and their log groups, ECR repositories, and VPCs that a
+    /// test made.
     fn sweep(&self, select: impl Fn(&str) -> bool) {
         // Clusters, after their services.
         let clusters = self.aws(&["ecs", "list-clusters"])["clusterArns"]
@@ -5447,6 +5858,34 @@ impl AwsSandbox {
                     Err(error) if error.contains("NotFound") => break,
                     Err(_) => std::thread::sleep(Duration::from_secs(10)),
                 }
+            }
+        }
+        // Lambda functions, and the log groups of their invocations.
+        let functions = self
+            .try_aws(&["lambda", "list-functions"])
+            .map(|listed| listed["Functions"].as_array().cloned().unwrap_or_default())
+            .unwrap_or_default();
+        for function in &functions {
+            let name = function["FunctionName"].as_str().unwrap_or_default();
+            if name.starts_with("statespace-test-") && select(name) {
+                eprintln!("sweeping function {name}");
+                let _ = self.try_aws(&["lambda", "delete-function", "--function-name", name]);
+            }
+        }
+        let groups = self
+            .try_aws(&[
+                "logs",
+                "describe-log-groups",
+                "--log-group-name-prefix",
+                "/aws/lambda/statespace-test-",
+            ])
+            .map(|listed| listed["logGroups"].as_array().cloned().unwrap_or_default())
+            .unwrap_or_default();
+        for group in &groups {
+            let name = group["logGroupName"].as_str().unwrap_or_default();
+            if select(name.trim_start_matches("/aws/lambda/")) {
+                eprintln!("sweeping log group {name}");
+                let _ = self.try_aws(&["logs", "delete-log-group", "--log-group-name", name]);
             }
         }
         // ECR repositories with their images.
@@ -6155,6 +6594,332 @@ fn aws_fargate_proxies_run_arms_as_services() {
         ]);
         assert_eq!(active["taskDefinitionArns"], json!([]), "{family}");
     }
+    wait_until(60, "the holder reports no unit", || {
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .last()
+            .is_some_and(|report| report["units"] == json!([]))
+    });
+
+    // The proxy stops before the cleanup deletes the rest.
+    drop(proxy);
+    drop(cleanup);
+}
+
+#[test]
+fn aws_lambda_sweeper_deletes_old_test_resources() {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_LAMBDA_TESTS", "Lambda") else {
+        return;
+    };
+    sandbox.sweep(old_aws_run);
+}
+
+/// The proxy on the CI runner orchestrates a real Lambda function: it reads
+/// the digest of live's alias, starts both arms of an experiment as
+/// functions, invokes each arm with its requests and the right headers,
+/// keeps the arms through a redeploy of live, counts the arms' subjects,
+/// and deletes them when the experiment stops. The functions run the
+/// example app with the AWS Lambda Web Adapter.
+#[test]
+fn aws_lambda_proxies_run_arms_as_functions() {
+    let Some(sandbox) = AwsSandbox::connect("STATESPACE_LAMBDA_TESTS", "Lambda") else {
+        return;
+    };
+    let run = aws_run_name();
+    eprintln!("test run {run} in {}", sandbox.region);
+    let cleanup = AwsCleanup {
+        sandbox: &sandbox,
+        run: run.clone(),
+    };
+
+    // Images of live, the arm, and the next live.
+    sandbox.aws(&[
+        "ecr",
+        "create-repository",
+        "--repository-name",
+        &run,
+        "--tags",
+        &format!("Key={AWS_TEST_TAG},Value={run}"),
+    ]);
+    sandbox.docker_login();
+    let (live_tag, live_digest) = sandbox.push_function(&run, "live", "hello");
+    let (_, arm_digest) = sandbox.push_function(&run, "arm", "hi");
+    let (next_tag, next_digest) = sandbox.push_function(&run, "next", "hey");
+    eprintln!("pushed {live_digest}, {arm_digest}, and {next_digest}");
+
+    // Live deploys a tag, as many customers do, and runs at the alias
+    // `live`; the proxy reports the digest.
+    let role = format!(
+        "arn:aws:iam::{}:role/statespace-test-lambda",
+        sandbox.account
+    );
+    sandbox.aws(&[
+        "lambda",
+        "create-function",
+        "--function-name",
+        &run,
+        "--package-type",
+        "Image",
+        "--code",
+        &format!("ImageUri={live_tag}"),
+        "--role",
+        &role,
+        "--timeout",
+        "30",
+        "--memory-size",
+        "512",
+        "--environment",
+        "Variables={SHARED=from-live}",
+        "--tags",
+        &format!("{AWS_TEST_TAG}={run}"),
+    ]);
+    sandbox.aws(&[
+        "lambda",
+        "wait",
+        "function-active-v2",
+        "--function-name",
+        &run,
+    ]);
+    let version = sandbox.aws(&["lambda", "publish-version", "--function-name", &run])["Version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sandbox.aws(&[
+        "lambda",
+        "create-alias",
+        "--function-name",
+        &run,
+        "--name",
+        "live",
+        "--function-version",
+        &version,
+    ]);
+
+    let state = Arc::new(Mutex::new(Statespace {
+        lease: true,
+        config: json!({
+            "app": "shop-prod", "salt": "salt-1", "settings_hash": "h",
+            "live": {"commit": LIVE, "image": live_digest},
+            "experiments": [{
+                "name": "checkout", "version": 1, "state": "running",
+                "subject": "request.cookies.ssp_sid", "eligibility": null,
+                "events": [{"name": "visit", "source": "request",
+                            "match": "response.headers[\"x-app-event\"] == \"visit\""}],
+                "arms": [
+                    {"commit": LIVE, "image": live_digest, "ranges": [[0.0, 0.4]]},
+                    {"commit": ARM, "image": arm_digest, "ranges": [[0.4, 0.8]]},
+                ],
+            }],
+            "lease": null, "poll_interval_seconds": 1,
+        }),
+        ..Statespace::default()
+    }));
+    let api = statespace(state.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(cargo_bin("ssp"));
+    command
+        .env("STATESPACE_CONFIG", directory.path().join("config.toml"))
+        .env("STATESPACE_API", &api)
+        .env("STATESPACE_TOKEN", "runtime-secret")
+        .env("STATESPACE_COUNTS_EVERY", "5")
+        .env("AWS_REGION", &sandbox.region)
+        .args(["proxy", "lambda", "--function", &run, "--qualifier", "live"]);
+    let (proxy, port) = spawn_proxy(command);
+    let get = |subject: &str| -> Option<Value> {
+        send(
+            port,
+            "GET",
+            "/checkout",
+            &[
+                ("cookie", &format!("ssp_sid={subject}")),
+                ("ssp-arm", "spoofed"),
+                ("authorization", "Bearer app-token"),
+            ],
+        )?
+        .json()
+        .ok()
+    };
+    let live_arm_subject = subject_in(0.0, 0.4);
+    let arm_subject = subject_in(0.4, 0.8);
+    let live_subject = subject_in(0.8, 1.0);
+
+    // Live's image is reported by the digest of its alias.
+    wait_until(120, "the report names live's digest", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["orchestrator"] == "lambda" && report["live_image"] == live_digest.as_str()
+        })
+    });
+
+    // Each arm runs as its own function, with live's configuration, tagged
+    // with the app, experiment, and commit.
+    let prefix = format!("{run}-");
+    wait_until(180, "both arms are functions", || {
+        let found = sandbox.functions(&prefix).len() == 2;
+        if !found {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        found
+    });
+    let arm_function = sandbox
+        .functions(&prefix)
+        .into_iter()
+        .find(|function| function["Tags"]["statespace.com/commit"] == ARM)
+        .expect("the arm's function");
+    for (key, value) in [
+        ("statespace.com/app", "shop-prod"),
+        ("statespace.com/experiment", "checkout"),
+        ("statespace.com/commit", ARM),
+        (AWS_TEST_TAG, run.as_str()),
+    ] {
+        assert_eq!(arm_function["Tags"][key], value, "{key}");
+    }
+    let configuration = &arm_function["Configuration"];
+    assert_eq!(configuration["Role"], role.as_str());
+    assert_eq!(configuration["MemorySize"], 512);
+    assert_eq!(configuration["Timeout"], 30);
+    assert_eq!(arm_function["Code"]["ImageUri"], arm_digest.as_str());
+    assert_eq!(
+        configuration["Environment"]["Variables"],
+        json!({
+            "SHARED": "from-live",
+            "SSP_EXPERIMENT": "checkout",
+            "SSP_ARM": ARM,
+            "OTEL_RESOURCE_ATTRIBUTES": format!(
+                "statespace.experiment=checkout,statespace.arm={ARM},service.version={ARM}"),
+        })
+    );
+
+    // The arms become ready and get their requests with the right headers.
+    // The app's own credential reaches each function.
+    wait_until(600, "both arms serve", || {
+        let served = get(&arm_subject).is_some_and(|body| body["arm"] == ARM)
+            && get(&live_arm_subject).is_some_and(|body| body["arm"] == LIVE);
+        if !served {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        served
+    });
+    let arm = get(&arm_subject).unwrap();
+    let live_arm = get(&live_arm_subject).unwrap();
+    let live = get(&live_subject).unwrap();
+    assert_eq!(arm["experiment"], "checkout");
+    assert_eq!(arm["labels"]["SSP_ARM"], ARM);
+    assert_eq!(live_arm["experiment"], "checkout");
+    assert_eq!(live["labels"]["SSP_ARM"], Value::Null);
+    assert_eq!(live["arm"], Value::Null, "clients cannot pick an arm");
+    assert_eq!(live["experiment"], Value::Null);
+    assert_eq!(
+        (
+            live_arm["greeting"].as_str(),
+            arm["greeting"].as_str(),
+            live["greeting"].as_str()
+        ),
+        (Some("hello"), Some("hi"), Some("hello"))
+    );
+    for body in [&live_arm, &arm, &live] {
+        assert_eq!(body["shared"], "from-live");
+        assert_eq!(body["authorization"], "Bearer app-token");
+        assert_eq!(body["statespace_variables"], json!([]), "{body}");
+    }
+    wait_until(60, "the holder reports both units ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units.len() == 2 && units.iter().all(|unit| unit["ready"] == true)
+            })
+        })
+    });
+
+    // The arm's subject is counted, with the event of the app's response
+    // header; live's subject is not.
+    wait_until(180, "the counts of the arm arrive", || {
+        let _ = get(&arm_subject);
+        let found = state
+            .lock()
+            .unwrap()
+            .totals("checkout", ARM)
+            .events
+            .contains_key("visit");
+        if !found {
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        found
+    });
+    {
+        let state = state.lock().unwrap();
+        assert_eq!(
+            state.totals("checkout", ARM).subjects,
+            HashSet::from([subject_hash("salt-1", &arm_subject)])
+        );
+        let live = subject_hash("salt-1", &live_subject);
+        assert!(
+            state
+                .counts()
+                .iter()
+                .all(|entry| entry["subject"] != live.as_str())
+        );
+    }
+
+    // The customer deploys a new live and moves the alias. The arms keep
+    // serving, and the proxy reports the new digest.
+    sandbox.aws(&[
+        "lambda",
+        "update-function-code",
+        "--function-name",
+        &run,
+        "--image-uri",
+        &next_tag,
+    ]);
+    sandbox.aws(&[
+        "lambda",
+        "wait",
+        "function-updated-v2",
+        "--function-name",
+        &run,
+    ]);
+    let version = sandbox.aws(&["lambda", "publish-version", "--function-name", &run])["Version"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    sandbox.aws(&[
+        "lambda",
+        "update-alias",
+        "--function-name",
+        &run,
+        "--name",
+        "live",
+        "--function-version",
+        &version,
+    ]);
+    wait_until(120, "the report names the new live digest", || {
+        assert!(
+            get(&arm_subject).is_some_and(|body| body["arm"] == ARM && body["greeting"] == "hi"),
+            "the arm stops serving while live deploys"
+        );
+        std::thread::sleep(Duration::from_secs(2));
+        state
+            .lock()
+            .unwrap()
+            .reports()
+            .iter()
+            .any(|report| report["live_image"] == next_digest.as_str())
+    });
+    assert_eq!(
+        get(&live_subject).unwrap()["greeting"],
+        "hey",
+        "live traffic goes to the alias"
+    );
+
+    // The experiment stops: the arms' functions go.
+    state.lock().unwrap().config["experiments"] = json!([]);
+    wait_until(180, "the arms' functions are deleted", || {
+        let gone = sandbox.functions(&prefix).is_empty();
+        if !gone {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        gone
+    });
     wait_until(60, "the holder reports no unit", || {
         state
             .lock()

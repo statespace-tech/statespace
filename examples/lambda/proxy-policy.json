@@ -1,0 +1,38 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageTheArmsOfTheShop",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:InvokeFunction",
+        "lambda:ListTags",
+        "lambda:TagResource",
+        "lambda:UpdateFunctionCode"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-1:123456789012:function:shop",
+        "arn:aws:lambda:us-east-1:123456789012:function:shop:*",
+        "arn:aws:lambda:us-east-1:123456789012:function:shop-ssp-*"
+      ]
+    },
+    {
+      "Sid": "FindTheArms",
+      "Effect": "Allow",
+      "Action": "lambda:ListFunctions",
+      "Resource": "*"
+    },
+    {
+      "Sid": "RunTheArmsAsTheShopRuns",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::123456789012:role/shop-lambda",
+      "Condition": {
+        "StringEquals": {"iam:PassedToService": "lambda.amazonaws.com"}
+      }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 //! Orchestrators run the units of experiments beside live: on Docker, Cloud
-//! Run, Kubernetes, ECS on Fargate, or Fly.io, or from build folders in S3
-//! or Cloud Storage. A new orchestrator is a new module and a new subcommand
+//! Run, Kubernetes, ECS on Fargate, Fly.io, or AWS Lambda, or from build
+//! folders in S3 or Cloud Storage. A new orchestrator is a new module and a new subcommand
 //! of `ssp proxy`.
 
 pub mod aws;
@@ -13,10 +13,12 @@ pub mod fly;
 mod google;
 mod kube;
 pub mod kubernetes;
+pub mod lambda;
 
 use std::future::Future;
 
-use http::{HeaderName, HeaderValue};
+use bytes::Bytes;
+use http::{HeaderName, HeaderValue, Request, Response};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -135,6 +137,10 @@ impl UnitKey {
     }
 }
 
+/// The largest request body that the proxy reads for an orchestrator that
+/// invokes: the payload limit of a synchronous Lambda invocation, 6 MB.
+pub const INVOKED_BODY_LIMIT: usize = 6 * 1024 * 1024;
+
 /// The environment variable that holds OpenTelemetry resource attributes.
 pub const RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 /// The resource attributes that `ssp` sets on a unit. Each value of live
@@ -195,7 +201,7 @@ pub struct Running {
 /// report live or run units take the app.
 pub trait Orchestrator: Send + Sync + 'static {
     /// The name the report gives: `docker`, `cloudrun`, `kubernetes`,
-    /// `fargate`, `fly`, `s3`, or `gcs`.
+    /// `fargate`, `fly`, `lambda`, `s3`, or `gcs`.
     fn name(&self) -> &'static str;
     /// What live runs now.
     fn live(&self, app: &App) -> impl Future<Output = anyhow::Result<Live>> + Send;
@@ -224,6 +230,22 @@ pub trait Orchestrator: Send + Sync + 'static {
         _address: &str,
     ) -> impl Future<Output = Option<(HeaderName, HeaderValue)>> + Send {
         async { None }
+    }
+    /// Whether the orchestrator sends the requests to `address` itself,
+    /// such as an invocation of a Lambda function, in place of the proxy's
+    /// HTTP client.
+    fn invokes(&self, _address: &str) -> bool {
+        false
+    }
+    /// Send a request to `address`, which [`Orchestrator::invokes`], and
+    /// give the response. The proxy reads the body first, at most
+    /// [`INVOKED_BODY_LIMIT`]. An error is a unit that did not answer.
+    fn invoke(
+        &self,
+        _address: &str,
+        _request: Request<Bytes>,
+    ) -> impl Future<Output = anyhow::Result<Response<Bytes>>> + Send {
+        async { anyhow::bail!("this runtime does not invoke") }
     }
     /// Stop what the proxy itself runs, when the proxy stops.
     fn shutdown(&self) -> impl Future<Output = ()> + Send {

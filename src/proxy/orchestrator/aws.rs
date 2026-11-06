@@ -1,5 +1,5 @@
-//! A small client for the AWS APIs that `ssp proxy fargate` and `ssp proxy
-//! s3` call. It gets credentials from the AWS default chain (environment,
+//! A small client for the AWS APIs that `ssp proxy fargate`, `ssp proxy
+//! lambda`, and `ssp proxy s3` call. It gets credentials from the AWS default chain (environment,
 //! profile, web identity, ECS task role, EC2 instance role), signs each
 //! request with SigV4, and sends it with the proxy's own HTTP client.
 
@@ -24,11 +24,16 @@ use aws_sigv4::{
 use aws_smithy_http_client::tls;
 use serde_json::Value;
 
+/// How long an invocation may take: the longest timeout of a Lambda
+/// function, 15 minutes, and a margin.
+const INVOKE_TIMEOUT: Duration = Duration::from_secs(15 * 60 + 30);
+
 /// The AWS services the proxy calls, with the endpoint of each.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Service {
     Ecs,
     Ec2,
+    Lambda,
     S3,
 }
 
@@ -38,6 +43,7 @@ impl Service {
         match self {
             Self::Ecs => "ecs",
             Self::Ec2 => "ec2",
+            Self::Lambda => "lambda",
             Self::S3 => "s3",
         }
     }
@@ -46,7 +52,7 @@ impl Service {
     fn target(self) -> &'static str {
         match self {
             Self::Ecs => "AmazonEC2ContainerServiceV20141113",
-            Self::Ec2 | Self::S3 => "",
+            Self::Ec2 | Self::Lambda | Self::S3 => "",
         }
     }
 }
@@ -57,6 +63,7 @@ impl Service {
 pub struct Endpoints {
     pub ecs: Option<String>,
     pub ec2: Option<String>,
+    pub lambda: Option<String>,
     /// S3, with the bucket as the first segment of the path.
     pub s3: Option<String>,
 }
@@ -95,6 +102,8 @@ impl Reply {
 
 pub struct Aws {
     client: reqwest::Client,
+    /// For invocations, which take as long as the function runs.
+    invoker: reqwest::Client,
     pub region: String,
     provider: SharedCredentialsProvider,
     cached: Mutex<Option<Credentials>>,
@@ -134,6 +143,10 @@ impl Aws {
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(30))
                 .build()?,
+            invoker: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(INVOKE_TIMEOUT)
+                .build()?,
             region,
             provider,
             cached: Mutex::default(),
@@ -168,10 +181,11 @@ impl Aws {
         Ok(credentials)
     }
 
-    fn endpoint(&self, service: Service) -> String {
+    pub fn endpoint(&self, service: Service) -> String {
         let configured = match service {
             Service::Ecs => &self.endpoints.ecs,
             Service::Ec2 => &self.endpoints.ec2,
+            Service::Lambda => &self.endpoints.lambda,
             Service::S3 => &self.endpoints.s3,
         };
         match configured {
@@ -202,6 +216,19 @@ impl Aws {
     /// Sign and send a request to `url`, and return the reply.
     pub async fn send(
         &self,
+        service: Service,
+        method: &str,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+    ) -> anyhow::Result<Reply> {
+        self.send_with(&self.client, service, method, url, headers, body)
+            .await
+    }
+
+    async fn send_with(
+        &self,
+        client: &reqwest::Client,
         service: Service,
         method: &str,
         url: &str,
@@ -241,8 +268,7 @@ impl Aws {
         let (instructions, _) = sign(signable, &parameters)?.into_parts();
         instructions.apply_to_request_http1x(&mut request);
         let (parts, body) = request.into_parts();
-        let response = self
-            .client
+        let response = client
             .request(parts.method, url)
             .headers(parts.headers)
             .body(body)
@@ -298,6 +324,80 @@ impl Aws {
             );
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// Call a REST API (Lambda): `method` on `path` of the service's
+    /// endpoint, with a JSON body. `None` when the resource does not exist.
+    pub async fn rest(
+        &self,
+        service: Service,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+    ) -> anyhow::Result<Option<Value>> {
+        let url = format!("{}{path}", self.endpoint(service));
+        let (headers, body) = match body {
+            Some(body) => (
+                vec![("content-type", "application/json".to_owned())],
+                serde_json::to_vec(body)?,
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        let reply = self.send(service, method, &url, &headers, body).await?;
+        if reply.status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !reply.status.is_success() {
+            let text = reply.text();
+            let error: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+            let kind = reply
+                .header("x-amzn-errortype")
+                .map(|kind| kind.split(':').next().unwrap_or_default().to_owned())
+                .or_else(|| error["Type"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let message = error["Message"]
+                .as_str()
+                .or_else(|| error["message"].as_str())
+                .map_or(text.clone(), str::to_owned);
+            bail!(
+                "AWS answered {} for {} {method} {}: {kind} {message}",
+                reply.status,
+                service.signing_name(),
+                path.split('?').next().unwrap_or(path)
+            );
+        }
+        if reply.body.is_empty() {
+            return Ok(Some(Value::Null));
+        }
+        Ok(Some(serde_json::from_slice(&reply.body)?))
+    }
+
+    /// Invoke a Lambda function at its invocation URL, and wait for its
+    /// answer: the payload, and the `X-Amz-Function-Error` of a function
+    /// that failed.
+    pub async fn invoke(
+        &self,
+        url: &str,
+        qualifier: Option<&str>,
+        payload: Vec<u8>,
+    ) -> anyhow::Result<Reply> {
+        let mut url = url.to_owned();
+        if let Some(qualifier) = qualifier {
+            url.push_str(&format!("?Qualifier={}", encode(qualifier)));
+        }
+        let headers = [
+            ("content-type", "application/json".to_owned()),
+            ("x-amz-invocation-type", "RequestResponse".to_owned()),
+        ];
+        self.send_with(
+            &self.invoker,
+            Service::Lambda,
+            "POST",
+            &url,
+            &headers,
+            payload,
+        )
+        .await
     }
 
     /// Call an action of a query API (EC2), and return the XML.

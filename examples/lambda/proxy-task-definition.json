@@ -1,0 +1,38 @@
+{
+  "family": "statespace-proxy",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "256",
+  "memory": "512",
+  "taskRoleArn": "arn:aws:iam::123456789012:role/statespace-proxy",
+  "executionRoleArn": "arn:aws:iam::123456789012:role/statespace-proxy-execution",
+  "containerDefinitions": [
+    {
+      "name": "proxy",
+      "image": "ghcr.io/statespace-tech/statespace:0.5.0",
+      "essential": true,
+      "command": [
+        "proxy", "lambda",
+        "--function", "shop",
+        "--qualifier", "live",
+        "--region", "us-east-1"
+      ],
+      "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+      "secrets": [
+        {
+          "name": "STATESPACE_TOKEN",
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:123456789012:secret:statespace-token"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/statespace-proxy",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "proxy",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

@@ -344,6 +344,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         fly: FlyArgs,
     },
+    /// Run the arms of experiments as copies of an AWS Lambda function.
+    Lambda {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        lambda: LambdaArgs,
+    },
     /// Serve a static site and the arms of experiments from build folders
     /// in an S3 bucket.
     S3 {
@@ -524,6 +531,29 @@ pub struct FargateArgs {
     pub ec2_api: Option<String>,
 }
 
+#[derive(Args, Clone)]
+pub struct LambdaArgs {
+    /// The Lambda function that runs live. It must deploy from a container
+    /// image.
+    #[arg(long)]
+    pub function: String,
+    /// The alias or version of live, such as `live`. Defaults to
+    /// `$LATEST`.
+    #[arg(long)]
+    pub qualifier: Option<String>,
+    /// The AWS region of the function. Defaults to the region of the AWS
+    /// configuration, such as `AWS_REGION`.
+    #[arg(long)]
+    pub region: Option<String>,
+    /// Where the proxy sends live traffic over HTTP, such as live's
+    /// function URL. Defaults to an invocation of the function.
+    #[arg(long)]
+    pub live_url: Option<String>,
+    /// The Lambda API. For tests.
+    #[arg(long, env = "AWS_ENDPOINT_URL_LAMBDA", hide = true)]
+    pub lambda_api: Option<String>,
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UnitIp {
     Private,
@@ -697,6 +727,19 @@ mod tests {
                 "http://shop.internal",
                 "--unit-ip",
                 "public",
+            ],
+            vec![
+                "ssp",
+                "proxy",
+                "lambda",
+                "--token",
+                "t",
+                "--function",
+                "shop",
+                "--qualifier",
+                "live",
+                "--region",
+                "us-east-1",
             ],
             vec![
                 "ssp",

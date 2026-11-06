@@ -115,6 +115,34 @@ cargo test --locked --test cli aws_fargate -- --nocapture
 cargo test --locked --test cli aws_sweeper -- --nocapture
 ```
 
+The Lambda tests use a stand-in for the Lambda API. They run with `cargo test`.
+
+The real Lambda test runs `ssp proxy lambda` in the sandbox account of AWS. Use only a
+sandbox account. Never use a production account or an account of a customer. The test
+does these steps:
+
+1. It makes sure that the AWS credentials are of `STATESPACE_TEST_AWS_ACCOUNT`. If
+   not, it stops before it makes anything.
+2. It makes an ECR repository, and pushes three images of `examples/lambda`. It makes
+   a function from one, with the alias `live`. Each name is
+   `statespace-test-<run id>`.
+3. It runs the proxy on your machine with your credentials. It starts an experiment
+   with two arms, deploys a new live, and stops the experiment.
+4. It deletes what it made, also when it fails. The sweeper deletes what runs older
+   than three hours left, with the log groups of their functions.
+
+The test needs Docker and the AWS CLI. The functions use the execution role
+`statespace-test-lambda` of the account.
+
+```shell
+export STATESPACE_LAMBDA_TESTS=1
+export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
+export STATESPACE_TEST_AWS_REGION=us-east-1
+cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+cargo test --locked --test cli aws_lambda_proxies -- --nocapture
+cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+```
+
 The tests of `ssp proxy s3` and `ssp proxy gcs` use stand-ins for S3, Cloud
 Storage, and the metadata server. They run with `cargo test`.
 

@@ -1,6 +1,7 @@
 //! The public listener: assign each request, then forward it to live or to
 //! the arm of a running experiment that takes it. On a file runtime, the
-//! proxy answers from the files of live or of the arm instead.
+//! proxy answers from the files of live or of the arm instead. On Lambda,
+//! the orchestrator invokes the function with the request.
 
 use std::{
     convert::Infallible,
@@ -11,7 +12,7 @@ use std::{
 
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode, header};
-use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
+use http_body_util::{BodyExt, Empty, Full, LengthLimitError, Limited, combinators::BoxBody};
 use hyper::body::{Body, Incoming};
 use hyper_rustls::HttpsConnector;
 use hyper_util::{
@@ -27,7 +28,7 @@ use super::{
     },
     counts::{self, Counter, Subject},
     events,
-    orchestrator::{FileRequest, Orchestrator, UnitKey},
+    orchestrator::{FileRequest, INVOKED_BODY_LIMIT, Orchestrator, UnitKey},
 };
 
 type ProxyBody = BoxBody<Bytes, hyper::Error>;
@@ -405,22 +406,19 @@ async fn deliver<O: Orchestrator>(
     // Clients may speak HTTP/2; the app is reached over HTTP/1.1.
     parts.version = http::Version::HTTP_11;
     upstream_host(&mut parts.headers, &parts.uri);
-    if let Some((name, value)) = runtime.orchestrator.credential(&address).await {
-        parts.headers.insert(name, value);
-    }
     let upstream = Request::from_parts(parts, body.boxed());
 
-    let mut response = match client().request(upstream).await {
+    let mut response = match exchange(runtime, &address, upstream).await {
         Ok(response) => response,
         Err(error) => {
             let Some(key) = serve.clone() else {
-                eprintln!("[ssp] live did not answer: {error}");
+                eprintln!("[ssp] live did not answer: {error:#}");
                 return text(StatusCode::BAD_GATEWAY, "the app did not answer");
             };
             runtime.suspect(&key);
             // Fail open: a request without a body goes to live instead.
             let Some((method, uri, mut headers)) = retry else {
-                eprintln!("[ssp] {key} did not answer: {error}");
+                eprintln!("[ssp] {key} did not answer: {error:#}");
                 return text(StatusCode::BAD_GATEWAY, "the app did not answer");
             };
             serve = None;
@@ -433,13 +431,10 @@ async fn deliver<O: Orchestrator>(
             *again.headers_mut() = headers;
             let target = again.uri().clone();
             upstream_host(again.headers_mut(), &target);
-            if let Some((name, value)) = runtime.orchestrator.credential(&live).await {
-                again.headers_mut().insert(name, value);
-            }
-            match client().request(again).await {
+            match exchange(runtime, &live, again).await {
                 Ok(response) => response,
                 Err(error) => {
-                    eprintln!("[ssp] live did not answer: {error}");
+                    eprintln!("[ssp] live did not answer: {error:#}");
                     return text(StatusCode::BAD_GATEWAY, "the app did not answer");
                 }
             }
@@ -474,6 +469,38 @@ async fn deliver<O: Orchestrator>(
         make_private(&mut parts.headers);
     }
     Response::from_parts(parts, body.boxed())
+}
+
+/// Send `request` to `address`: with the proxy's HTTP client and the
+/// orchestrator's credential, or through the orchestrator when it invokes
+/// `address` itself. A body too large to invoke with gets a 413.
+async fn exchange<O: Orchestrator>(
+    runtime: &Arc<Runtime<O>>,
+    address: &str,
+    mut request: Request<ProxyBody>,
+) -> anyhow::Result<Response<ProxyBody>> {
+    if runtime.orchestrator.invokes(address) {
+        let (parts, body) = request.into_parts();
+        let body = match Limited::new(body, INVOKED_BODY_LIMIT).collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(error) if error.downcast_ref::<LengthLimitError>().is_some() => {
+                return Ok(text(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "the request body is larger than 6 MB",
+                ));
+            }
+            Err(error) => anyhow::bail!("could not read the request: {error}"),
+        };
+        let response = runtime
+            .orchestrator
+            .invoke(address, Request::from_parts(parts, body))
+            .await?;
+        return Ok(response.map(|body| Full::new(body).map_err(|never| match never {}).boxed()));
+    }
+    if let Some((name, value)) = runtime.orchestrator.credential(address).await {
+        request.headers_mut().insert(name, value);
+    }
+    Ok(client().request(request).await?.map(BodyExt::boxed))
 }
 
 /// A request that an arm serves to an assigned subject, counted when its
