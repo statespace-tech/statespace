@@ -31,13 +31,13 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 
 
 <p align="center">
-  <a href="https://docs.statespace.com/guides/docker">Docker</a> ·
-  <a href="https://docs.statespace.com/guides/kubernetes">Kubernetes</a> ·
-  <a href="https://docs.statespace.com/guides/cloud-run">Cloud Run</a> ·
-  <a href="https://docs.statespace.com/guides/fargate">ECS Fargate</a> ·
-  <a href="https://docs.statespace.com/guides/fly">Fly.io</a> ·
-  <a href="https://docs.statespace.com/guides/s3">S3</a> ·
-  <a href="https://docs.statespace.com/guides/gcs">Cloud Storage</a>
+  <a href="https://docs.statespace.com/runtimes/docker">Docker</a> ·
+  <a href="https://docs.statespace.com/runtimes/kubernetes">Kubernetes</a> ·
+  <a href="https://docs.statespace.com/runtimes/cloud-run">Cloud Run</a> ·
+  <a href="https://docs.statespace.com/runtimes/fargate">ECS Fargate</a> ·
+  <a href="https://docs.statespace.com/runtimes/fly">Fly.io</a> ·
+  <a href="https://docs.statespace.com/runtimes/s3">S3</a> ·
+  <a href="https://docs.statespace.com/runtimes/gcs">Cloud Storage</a>
 </p>
 
 ## Quickstart
