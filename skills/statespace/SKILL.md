@@ -100,9 +100,9 @@ subcommand from where live runs:
 | Live runs on | Subcommand | Each arm runs as |
 | --- | --- | --- |
 | One machine with Docker | `ssp proxy docker` | A copy of live's container |
-| Cloud Run | `ssp proxy cloudrun` | A copy of live's service |
 | Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
 | ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
+| Cloud Run | `ssp proxy cloudrun` | A copy of live's service |
 | Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
 | AWS Lambda (from an image) | `ssp proxy lambda` | A Lambda function with live's configuration |
 | S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
@@ -146,7 +146,34 @@ proxy starts, make sure that this identity has these permissions.
   environment, networks, mounts, and limits. It has no Compose labels, so
   Compose ignores it.
 
-### Cloud Run
+### Kubernetes
+
+The proxy runs as its own Deployment. Its service account needs a Role
+that can manage Deployments and Services, and read pods, in the namespace
+of the app.
+
+### AWS Fargate
+
+The proxy runs as its own ECS service. Its task role needs:
+
+1. The ECS actions `CreateService`, `DeleteService`,
+   `DeleteTaskDefinitions`, `DeregisterTaskDefinition`,
+   `DescribeServices`, `DescribeTaskDefinition`, `DescribeTasks`,
+   `ListServices`, `ListTaskDefinitions`, `ListTasks`,
+   `RegisterTaskDefinition`, `TagResource`, and `UpdateService`.
+2. `iam:PassRole` on the task role and the execution role of live, for
+   `ecs-tasks.amazonaws.com`.
+
+Gotchas:
+
+- Set `--live-url` to live's internal load balancer. Without it, the proxy
+  uses live's first Service Connect name.
+- The arms use the security group of live. Let the security group of the
+  proxy connect to the app's port.
+- Use `--unit-ip public` only when the proxy runs outside the VPC, such as
+  in a test. It also needs `ec2:DescribeNetworkInterfaces`.
+
+### Google Cloud Run
 
 The proxy runs as its own Cloud Run service. Each arm is its own Cloud Run
 service, `<service>-ssp-<experiment>-<commit 12>`, a copy of live's service
@@ -170,33 +197,6 @@ Gotchas:
   between requests: it renews its lease and starts and stops arms.
 - An arm's service copies the ingress of live's service. The proxy must
   reach both.
-
-### Kubernetes
-
-The proxy runs as its own Deployment. Its service account needs a Role
-that can manage Deployments and Services, and read pods, in the namespace
-of the app.
-
-### ECS Fargate
-
-The proxy runs as its own ECS service. Its task role needs:
-
-1. The ECS actions `CreateService`, `DeleteService`,
-   `DeleteTaskDefinitions`, `DeregisterTaskDefinition`,
-   `DescribeServices`, `DescribeTaskDefinition`, `DescribeTasks`,
-   `ListServices`, `ListTaskDefinitions`, `ListTasks`,
-   `RegisterTaskDefinition`, `TagResource`, and `UpdateService`.
-2. `iam:PassRole` on the task role and the execution role of live, for
-   `ecs-tasks.amazonaws.com`.
-
-Gotchas:
-
-- Set `--live-url` to live's internal load balancer. Without it, the proxy
-  uses live's first Service Connect name.
-- The arms use the security group of live. Let the security group of the
-  proxy connect to the app's port.
-- Use `--unit-ip public` only when the proxy runs outside the VPC, such as
-  in a test. It also needs `ec2:DescribeNetworkInterfaces`.
 
 ### Fly.io
 
@@ -245,7 +245,7 @@ Gotchas:
   requests go through the proxy.
 - A request body can be at most 6 MB.
 
-### S3 and Cloud Storage
+### Amazon S3 and Google Cloud Storage
 
 For a static site. Live is the bucket root. Each build is a folder of
 files in a bucket, such as `s3://acme-site/builds/<commit>/`. The proxy

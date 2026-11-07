@@ -316,13 +316,6 @@ pub enum ProxyCommand {
         #[command(flatten)]
         docker: DockerArgs,
     },
-    /// Run the arms of experiments as copies of a Cloud Run service.
-    Cloudrun {
-        #[command(flatten)]
-        common: ProxyArgs,
-        #[command(flatten)]
-        cloudrun: CloudRunArgs,
-    },
     /// Run the arms of experiments as copies of a Kubernetes Deployment.
     Kubernetes {
         #[command(flatten)]
@@ -336,6 +329,13 @@ pub enum ProxyCommand {
         common: ProxyArgs,
         #[command(flatten)]
         fargate: FargateArgs,
+    },
+    /// Run the arms of experiments as copies of a Cloud Run service.
+    Cloudrun {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        cloudrun: CloudRunArgs,
     },
     /// Run the arms of experiments as Machines of a Fly.io app.
     Fly {

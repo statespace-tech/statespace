@@ -1,5 +1,5 @@
-//! Checks of the `ssp` binary against stand-ins for Statespace, Google
-//! Cloud, AWS, Fly.io, Docker, and Kubernetes. The Docker test runs when
+//! Checks of the `ssp` binary against stand-ins for Statespace, Docker,
+//! Kubernetes, AWS, Google Cloud, and Fly.io. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
 //! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
@@ -3253,7 +3253,7 @@ fn kubectl(arguments: &[&str]) -> String {
 /// pod status, starts both arms of an experiment as copies of the
 /// Deployment, and deletes an arm when it leaves the configuration. The proxy runs
 /// outside the cluster through `kubectl proxy`, so it cannot reach the
-/// Services; routing is tested with Cloud Run and Docker.
+/// Services; routing is tested with Docker and Cloud Run.
 #[test]
 fn kind_kubernetes_proxies_copy_the_deployment() {
     if std::env::var("STATESPACE_KIND_TESTS").as_deref() != Ok("1") {

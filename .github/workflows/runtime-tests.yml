@@ -1,15 +1,16 @@
 name: Runtime tests
 
-# Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), Cloud Run and
-# Cloud Storage in the sandbox project, ECS Fargate, Lambda, and S3 in the sandbox
-# account, and Fly.io in the dedicated test app. The release runs them before it publishes; an admin
-# can run them by hand on main.
+# Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), Fargate, Cloud
+# Run, Fly.io, Lambda, S3, and Cloud Storage. The AWS runtimes run in the sandbox
+# account, the Google Cloud runtimes in the sandbox project, and Fly.io in the
+# dedicated test app. The release runs them before it publishes; an admin can run
+# them by hand on main.
 
 on:
   workflow_dispatch:
     inputs:
       skip:
-        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun,fargate,lambda,fly,s3,gcs)"
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,fargate,cloudrun,fly,lambda,s3,gcs)"
         required: false
         default: ""
   workflow_call:
@@ -81,6 +82,39 @@ jobs:
         env:
           STATESPACE_KIND_TESTS: "1"
 
+  fargate:
+    name: Fargate
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',fargate,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_FARGATE_TESTS: "1"
+      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
+      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Build first, so the short-lived AWS credentials last for the test.
+      - run: cargo test --locked --test cli --no-run
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          role-session-name: statespace-runtime-tests-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+      - name: Sweep old test resources
+        run: cargo test --locked --test cli aws_sweeper -- --nocapture
+      - run: cargo test --locked --test cli aws_fargate -- --nocapture
+      - name: Sweep old test resources
+        if: always()
+        run: cargo test --locked --test cli aws_sweeper -- --nocapture
+
   cloudrun:
     name: Cloud Run
     needs: allowed
@@ -122,38 +156,72 @@ jobs:
         if: always()
         run: cargo test --locked --test cli gcp_sweeper -- --nocapture
 
-  fargate:
-    name: Fargate
+  fly:
+    name: Fly.io
     needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',fargate,') }}
+    if: ${{ !contains(format(',{0},', inputs.skip), ',fly,') }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
+    # The environment holds FLY_API_TOKEN, a deploy token of the test app only. Its
+    # branch rules let only main and v* tags use it. Fly.io has no GitHub OIDC. The
+    # job deploys nothing, so GitHub records no deployment.
+    environment:
+      name: fly-runtime-test
+      deployment: false
+    # One run at a time uses the test app.
+    concurrency:
+      group: fly-runtime-test
+      cancel-in-progress: false
     env:
-      STATESPACE_FARGATE_TESTS: "1"
-      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
-      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
+      STATESPACE_FLY_TESTS: "1"
+      STATESPACE_TEST_FLY_APP: ${{ vars.FLY_TEST_APP }}
+      STATESPACE_TEST_FLY_ORG: ${{ vars.FLY_TEST_ORG }}
+      STATESPACE_TEST_FLY_REGION: ${{ vars.FLY_TEST_REGION }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      STATESPACE_TEST_SSP_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/ssp
       SSP_TEST_LOGS: "1"
     steps:
+      - name: Check the Fly.io token and app
+        id: setup
+        shell: bash
+        run: |
+          # A missing token fails the job, as any untested runtime does. To release
+          # without Fly.io, run with skip: fly; the release notes then say so.
+          if [[ -z "$FLY_API_TOKEN" || -z "$STATESPACE_TEST_FLY_APP" ]]; then
+            echo "::error::Fly.io not tested: set the secret FLY_API_TOKEN and the variable FLY_TEST_APP of the environment fly-runtime-test, or run with skip: fly."
+            exit 1
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.setup.outputs.ready == 'true'
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        if: steps.setup.outputs.ready == 'true'
         with:
           toolchain: stable
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      # Build first, so the short-lived AWS credentials last for the test.
-      - run: cargo test --locked --test cli --no-run
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
-          role-session-name: statespace-runtime-tests-${{ github.run_id }}
-          aws-region: ${{ vars.AWS_TEST_REGION }}
-      - name: Sweep old test resources
-        run: cargo test --locked --test cli aws_sweeper -- --nocapture
-      - run: cargo test --locked --test cli aws_fargate -- --nocapture
-      - name: Sweep old test resources
-        if: always()
-        run: cargo test --locked --test cli aws_sweeper -- --nocapture
+        if: steps.setup.outputs.ready == 'true'
+      - name: Install musl tools, flyctl, and cloudflared
+        if: steps.setup.outputs.ready == 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          curl --fail --silent --show-error --location --output cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb && rm cloudflared.deb
+          curl --fail --silent --show-error --location --output flyctl.tar.gz \
+            https://github.com/superfly/flyctl/releases/download/v0.4.105/flyctl_0.4.105_Linux_x86_64.tar.gz
+          tar -xzf flyctl.tar.gz flyctl && sudo install flyctl /usr/local/bin/fly && rm flyctl flyctl.tar.gz
+      # The image of the proxy that runs as a Machine of the test app.
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+        if: steps.setup.outputs.ready == 'true'
+      - name: Sweep old test Machines
+        if: steps.setup.outputs.ready == 'true'
+        run: cargo test --locked --test cli fly_sweeper -- --nocapture
+      - run: cargo test --locked --test cli fly_proxies_run_arms -- --nocapture
+        if: steps.setup.outputs.ready == 'true'
+      - name: Sweep old test Machines
+        if: always() && steps.setup.outputs.ready == 'true'
+        run: cargo test --locked --test cli fly_sweeper -- --nocapture
 
   lambda:
     name: Lambda
@@ -253,70 +321,3 @@ jobs:
       - name: Sweep old test buckets
         if: always()
         run: cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
-
-  fly:
-    name: Fly.io
-    needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',fly,') }}
-    runs-on: ubuntu-latest
-    # The environment holds FLY_API_TOKEN, a deploy token of the test app only. Its
-    # branch rules let only main and v* tags use it. Fly.io has no GitHub OIDC. The
-    # job deploys nothing, so GitHub records no deployment.
-    environment:
-      name: fly-runtime-test
-      deployment: false
-    # One run at a time uses the test app.
-    concurrency:
-      group: fly-runtime-test
-      cancel-in-progress: false
-    env:
-      STATESPACE_FLY_TESTS: "1"
-      STATESPACE_TEST_FLY_APP: ${{ vars.FLY_TEST_APP }}
-      STATESPACE_TEST_FLY_ORG: ${{ vars.FLY_TEST_ORG }}
-      STATESPACE_TEST_FLY_REGION: ${{ vars.FLY_TEST_REGION }}
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-      STATESPACE_TEST_SSP_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/ssp
-      SSP_TEST_LOGS: "1"
-    steps:
-      - name: Check the Fly.io token and app
-        id: setup
-        shell: bash
-        run: |
-          # A missing token fails the job, as any untested runtime does. To release
-          # without Fly.io, run with skip: fly; the release notes then say so.
-          if [[ -z "$FLY_API_TOKEN" || -z "$STATESPACE_TEST_FLY_APP" ]]; then
-            echo "::error::Fly.io not tested: set the secret FLY_API_TOKEN and the variable FLY_TEST_APP of the environment fly-runtime-test, or run with skip: fly."
-            exit 1
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: steps.setup.outputs.ready == 'true'
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        if: steps.setup.outputs.ready == 'true'
-        with:
-          toolchain: stable
-          targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-        if: steps.setup.outputs.ready == 'true'
-      - name: Install musl tools, flyctl, and cloudflared
-        if: steps.setup.outputs.ready == 'true'
-        run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          curl --fail --silent --show-error --location --output cloudflared.deb \
-            https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb && rm cloudflared.deb
-          curl --fail --silent --show-error --location --output flyctl.tar.gz \
-            https://github.com/superfly/flyctl/releases/download/v0.4.105/flyctl_0.4.105_Linux_x86_64.tar.gz
-          tar -xzf flyctl.tar.gz flyctl && sudo install flyctl /usr/local/bin/fly && rm flyctl flyctl.tar.gz
-      # The image of the proxy that runs as a Machine of the test app.
-      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
-        if: steps.setup.outputs.ready == 'true'
-      - name: Sweep old test Machines
-        if: steps.setup.outputs.ready == 'true'
-        run: cargo test --locked --test cli fly_sweeper -- --nocapture
-      - run: cargo test --locked --test cli fly_proxies_run_arms -- --nocapture
-        if: steps.setup.outputs.ready == 'true'
-      - name: Sweep old test Machines
-        if: always() && steps.setup.outputs.ready == 'true'
-        run: cargo test --locked --test cli fly_sweeper -- --nocapture

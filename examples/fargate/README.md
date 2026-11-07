@@ -1,4 +1,4 @@
-# ECS Fargate
+# AWS Fargate
 
 Run the arms of the shop's experiments on ECS Fargate. `ssp proxy fargate`
 runs as its own ECS service in front of the service `shop`. Each arm is an

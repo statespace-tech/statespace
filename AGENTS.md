@@ -2,8 +2,9 @@
 
 An experiment compares commits of one app. Each arm is one commit with an exact share
 of the app's subjects. `ssp app`, `ssp experiment`, and `ssp token` call the
-Statespace API. `ssp proxy docker`, `ssp proxy cloudrun`, `ssp proxy kubernetes`, `ssp proxy
-fargate`, and `ssp proxy fly` run a reverse proxy in front of the app's live service.
+Statespace API. `ssp proxy docker`, `ssp proxy kubernetes`, `ssp proxy fargate`, `ssp proxy
+cloudrun`, `ssp proxy fly`, and `ssp proxy lambda` run a reverse proxy in front of the
+app's live service.
 `ssp proxy s3` and `ssp proxy gcs` serve a static site from a bucket: live is the
 bucket root, and each arm is a build folder (`src/proxy/orchestrator/files`).
 Every proxy instance routes requests to the arms of running experiments, in the order
@@ -54,7 +55,7 @@ STATESPACE_DOCKER_TESTS=1 cargo test --locked --test cli docker
 STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 # Needs a Fly.io test app and its deploy token; see CONTRIBUTING.md
 STATESPACE_FLY_TESTS=1 cargo test --locked --test cli fly_proxies_run_arms
-# Real Cloud Run, Fargate, S3, and Cloud Storage: see CONTRIBUTING.md
+# Real Fargate, Cloud Run, Lambda, S3, and Cloud Storage: see CONTRIBUTING.md
 ```
 
 ## Commits

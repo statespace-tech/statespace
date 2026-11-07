@@ -1,5 +1,5 @@
-//! Orchestrators run the units of experiments beside live: on Docker, Cloud
-//! Run, Kubernetes, ECS on Fargate, Fly.io, or AWS Lambda, or from build
+//! Orchestrators run the units of experiments beside live: on Docker,
+//! Kubernetes, ECS on Fargate, Cloud Run, Fly.io, or Lambda, or from build
 //! folders in S3 or Cloud Storage. A new orchestrator is a new module and a new subcommand
 //! of `ssp proxy`.
 
