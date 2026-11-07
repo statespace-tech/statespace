@@ -462,7 +462,7 @@ fn describe(build: &Build) -> String {
 }
 
 /// The live to report. When live cannot be read for a moment, such as while
-/// a new live starts on AWS Fargate, the proxy reports the last live it read:
+/// a new live starts on Fargate, the proxy reports the last live it read:
 /// live has not changed as far as anyone can tell, and a report without live
 /// would stop the app's experiments.
 fn reported_live(read: anyhow::Result<Live>, last: &mut Option<Live>) -> Option<Live> {
@@ -659,7 +659,7 @@ async fn signal() -> anyhow::Result<()> {
 }
 
 /// A unit's address for a report. A unit that is still starting can have no
-/// address yet, such as an AWS Fargate task without an IP. Statespace refuses an
+/// address yet, such as a Fargate task without an IP. Statespace refuses an
 /// empty address, so the report leaves it out.
 fn known(address: &str) -> Option<&str> {
     (!address.is_empty()).then_some(address)

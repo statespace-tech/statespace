@@ -1,6 +1,6 @@
 //! The public listener: assign each request, then forward it to live or to
 //! the arm of a running experiment that takes it. On a file runtime, the
-//! proxy answers from the files of live or of the arm instead. On AWS Lambda,
+//! proxy answers from the files of live or of the arm instead. On Lambda,
 //! the orchestrator invokes the function with the request.
 
 use std::{
@@ -830,7 +830,7 @@ pub fn prepare_headers<B>(request: &mut Request<B>, peer: SocketAddr, serve: Opt
     }
 }
 
-/// An `https` upstream, such as a Google Cloud Run URL, routes by its own host
+/// An `https` upstream, such as a Cloud Run URL, routes by its own host
 /// name; the original host moves to `x-forwarded-host`.
 fn upstream_host(headers: &mut HeaderMap, uri: &http::Uri) {
     if uri.scheme_str() != Some("https") {

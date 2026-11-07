@@ -1,14 +1,14 @@
-//! Checks of the `ssp` binary against stand-ins for Statespace, Docker,
-//! Kubernetes, AWS, Google Cloud, and Fly.io. The Docker test runs when
+//! Checks of the `ssp` binary against stand-ins for Statespace, Google
+//! Cloud, AWS, Fly.io, Docker, and Kubernetes. The Docker test runs when
 //! `STATESPACE_DOCKER_TESTS=1`; the Kubernetes test runs on a kind cluster
-//! when `STATESPACE_KIND_TESTS=1`; the real Google Cloud Run test runs in a sandbox
+//! when `STATESPACE_KIND_TESTS=1`; the real Cloud Run test runs in a sandbox
 //! project of Google Cloud when `STATESPACE_CLOUDRUN_TESTS=1`; the real
-//! AWS Fargate test runs in a sandbox account of AWS when
-//! `STATESPACE_FARGATE_TESTS=1`, and the real AWS Lambda test there when
+//! Fargate test runs in a sandbox account of AWS when
+//! `STATESPACE_FARGATE_TESTS=1`, and the real Lambda test there when
 //! `STATESPACE_LAMBDA_TESTS=1`; the real Fly.io test runs in a dedicated
 //! Fly.io app when `STATESPACE_FLY_TESTS=1`. The file runtimes run against
-//! stand-ins for Amazon S3 and Google Cloud Storage; the real Amazon S3 test runs in the sandbox
-//! account of AWS when `STATESPACE_S3_TESTS=1`, and the real Google Cloud Storage
+//! stand-ins for S3 and Cloud Storage; the real S3 test runs in the sandbox
+//! account of AWS when `STATESPACE_S3_TESTS=1`, and the real Cloud Storage
 //! test in the sandbox project when `STATESPACE_GCS_TESTS=1`.
 
 use std::{
@@ -1884,10 +1884,10 @@ fn proxies_serve_live_until_statespace_answers() {
 }
 
 // ---------------------------------------------------------------------------
-// The proxy on Google Cloud Run, against stand-ins for the Admin API, the metadata
+// The proxy on Cloud Run, against stand-ins for the Admin API, the metadata
 // server, and Cloud Logging.
 
-/// The state of the Google Cloud Run services of the project `acme` in us-east1:
+/// The state of the Cloud Run services of the project `acme` in us-east1:
 /// the customer's service `shop`, and the services the proxy makes.
 struct Google {
     /// `shop`, which the proxy must never change.
@@ -2031,12 +2031,12 @@ struct CloudRunTest {
     _directory: tempfile::TempDir,
 }
 
-/// A Google Cloud Run proxy of `shop-prod`.
+/// A Cloud Run proxy of `shop-prod`.
 fn cloudrun_proxy(lease: bool) -> CloudRunTest {
     cloudrun_proxy_with(lease, true)
 }
 
-/// A Google Cloud Run proxy of `shop-prod`. Without `up`, nothing answers at the
+/// A Cloud Run proxy of `shop-prod`. Without `up`, nothing answers at the
 /// address of Statespace until the test starts the stand-in there.
 fn cloudrun_proxy_with(lease: bool, up: bool) -> CloudRunTest {
     let live = echo("live");
@@ -3253,7 +3253,7 @@ fn kubectl(arguments: &[&str]) -> String {
 /// pod status, starts both arms of an experiment as copies of the
 /// Deployment, and deletes an arm when it leaves the configuration. The proxy runs
 /// outside the cluster through `kubectl proxy`, so it cannot reach the
-/// Services; routing is tested with Docker and Google Cloud Run.
+/// Services; routing is tested with Cloud Run and Docker.
 #[test]
 fn kind_kubernetes_proxies_copy_the_deployment() {
     if std::env::var("STATESPACE_KIND_TESTS").as_deref() != Ok("1") {
@@ -3578,16 +3578,16 @@ spec:
 }
 
 // ---------------------------------------------------------------------------
-// The proxy on real Google Cloud Run, in a sandbox project of Google Cloud.
+// The proxy on real Cloud Run, in a sandbox project of Google Cloud.
 
-/// The label of every resource that a Google Cloud Run test makes. Its value is the
+/// The label of every resource that a Cloud Run test makes. Its value is the
 /// run id: the start of the run in Unix seconds, in hex.
 const TEST_LABEL: &str = "statespace-test";
 /// How old the resources of a run are before the sweeper deletes them.
 const SWEEP_AFTER: Duration = Duration::from_secs(3 * 60 * 60);
 const CLOUD_PLATFORM: &str = "https://www.googleapis.com/auth/cloud-platform";
 
-/// The sandbox project of the Google Cloud Run tests, and the credentials that
+/// The sandbox project of the Cloud Run tests, and the credentials that
 /// reach it: the Application Default Credentials of the machine.
 struct Sandbox {
     project: String,
@@ -3602,7 +3602,7 @@ struct Sandbox {
     client: reqwest::blocking::Client,
 }
 
-/// The sandbox, or `None` when the Google Cloud Run tests do not run. Panics when
+/// The sandbox, or `None` when the Cloud Run tests do not run. Panics when
 /// the credentials are of another project, before anything is made.
 fn sandbox() -> Option<Sandbox> {
     sandbox_for("STATESPACE_CLOUDRUN_TESTS", "Cloud Run")
@@ -3854,7 +3854,7 @@ impl Sandbox {
         self.must("GET", &format!("{}/services/{name}", self.run_api()), None)
     }
 
-    /// Change a service as the Admin API takes it, and wait until Google Cloud Run
+    /// Change a service as the Admin API takes it, and wait until Cloud Run
     /// made the change.
     fn update(&self, service: &Value) {
         let name = service["name"].as_str().unwrap();
@@ -3955,7 +3955,7 @@ impl Sandbox {
                 "--platform",
                 "linux/amd64",
             ])
-            // One manifest, so the digest is the one Google Cloud Run reports.
+            // One manifest, so the digest is the one Cloud Run reports.
             .args(["--provenance=false", "--sbom=false"])
             .args(["--label", &format!("{TEST_LABEL}={run}")])
             .args(["--tag", &format!("{reference}:{tag}")])
@@ -4101,7 +4101,7 @@ impl Drop for Run<'_> {
     }
 }
 
-/// A service's spec: everything but what Google Cloud Run reports. It keeps the
+/// A service's spec: everything but what Cloud Run reports. It keeps the
 /// template, the traffic, the labels, and the annotations.
 fn spec(service: &Value) -> Value {
     let mut spec = service.clone();
@@ -4168,7 +4168,7 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8(decoded).unwrap()
 }
 
-/// A stand-in for the metadata server of Google Cloud Run, for a proxy on this
+/// A stand-in for the metadata server of Cloud Run, for a proxy on this
 /// machine: it gives the access tokens of the credentials, and ID tokens of
 /// the test account. It keeps each audience it was asked for.
 fn metadata_server(sandbox: Arc<Sandbox>, audiences: Arc<Mutex<Vec<String>>>) -> String {
@@ -4250,7 +4250,7 @@ fn unit_services(sandbox: &Sandbox, service: &str) -> BTreeMap<String, Value> {
         .collect()
 }
 
-/// The sweeper: deletes the services and images of Google Cloud Run test runs that
+/// The sweeper: deletes the services and images of Cloud Run test runs that
 /// started more than three hours ago. CI runs it before and after the tests.
 #[test]
 fn gcp_sweeper_deletes_old_test_resources() {
@@ -4260,8 +4260,8 @@ fn gcp_sweeper_deletes_old_test_resources() {
     sandbox.sweep(old_run);
 }
 
-/// `ssp proxy cloudrun` against real Google Cloud Run, first on this machine and
-/// then as its own Google Cloud Run service: each arm is its own service, a copy of
+/// `ssp proxy cloudrun` against real Cloud Run, first on this machine and
+/// then as its own Cloud Run service: each arm is its own service, a copy of
 /// live's with another image; requests reach it with an ID token for its URL
 /// while the app keeps its own Authorization header; the customer's service
 /// never changes, also when it is applied again as Terraform does or
@@ -4484,7 +4484,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         images,
         HashSet::from([live_digest.clone(), arm_digest.clone()])
     );
-    // ID tokens are for live's URL or an arm's: Google Cloud Run takes a token at
+    // ID tokens are for live's URL or an arm's: Cloud Run takes a token at
     // the URL of the service it names.
     let urls: Vec<String> = units
         .values()
@@ -4612,7 +4612,7 @@ fn gcp_cloudrun_proxies_run_arms_as_services() {
         "{log:?}"
     );
 
-    // b. The proxy as its own Google Cloud Run service, with the credentials of the
+    // b. The proxy as its own Cloud Run service, with the credentials of the
     // metadata server. It reaches the stand-in through a quick tunnel.
     let Ok(binary) = std::env::var("STATESPACE_TEST_SSP_BINARY") else {
         eprintln!(
@@ -4937,7 +4937,7 @@ fn aws(state: Arc<Mutex<Ecs>>) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-/// A proxy on AWS Fargate runs each unit as an ECS service from a copy of live's
+/// A proxy on Fargate runs each unit as an ECS service from a copy of live's
 /// task definition, sends to the task's address, counts the arms' subjects,
 /// and deletes the services and task definitions of an experiment that
 /// stops.
@@ -5238,7 +5238,7 @@ fn lambda_digest(character: char) -> String {
     format!("{ECR}@sha256:{}", character.to_string().repeat(64))
 }
 
-/// A stand-in AWS Lambda API. A function answers with its name, the variables
+/// A stand-in Lambda API. A function answers with its name, the variables
 /// that label an arm, and the event it got; a request for `/fail` makes an
 /// arm fail.
 fn lambda_api(state: Arc<Mutex<LambdaApi>>) -> String {
@@ -5277,7 +5277,7 @@ fn lambda_api(state: Arc<Mutex<LambdaApi>>) -> String {
                 json(200, &json!({"Functions": functions}))
             }
             ("GET", [name]) => match api.functions.get(*name) {
-                // As AWS Lambda, give the tags only without a qualifier.
+                // As Lambda, give the tags only without a qualifier.
                 Some(function) if received.query.contains("Qualifier=") => {
                     let mut function = function.clone();
                     function.as_object_mut().unwrap().remove("Tags");
@@ -5366,7 +5366,7 @@ fn lambda_api(state: Arc<Mutex<LambdaApi>>) -> String {
     format!("http://127.0.0.1:{port}")
 }
 
-/// A proxy on AWS Lambda runs each unit as a function with live's configuration,
+/// A proxy on Lambda runs each unit as a function with live's configuration,
 /// invokes live and the units with the events of a function URL, counts
 /// the arms' subjects, fails open to live, and deletes the functions of an
 /// experiment that stops.
@@ -5610,7 +5610,7 @@ fn lambda_proxies_run_units_as_functions() {
 }
 
 // ---------------------------------------------------------------------------
-// The proxy on AWS Fargate, in the AWS sandbox account. It runs when
+// The proxy on ECS Fargate, in the AWS sandbox account. It runs when
 // `STATESPACE_FARGATE_TESTS=1`, with `STATESPACE_TEST_AWS_ACCOUNT` and AWS
 // credentials of that account. It uses the `aws` and `docker` commands.
 
@@ -5744,9 +5744,9 @@ impl AwsSandbox {
             .unwrap_or_else(|| panic!("{reference} has no digest in {repository}"))
     }
 
-    /// Build the example app as an AWS Lambda function with a greeting, push it
+    /// Build the example app as a Lambda function with a greeting, push it
     /// with a tag, and return the tag reference and the digest reference.
-    /// AWS Lambda takes only an image of one platform: with BuildKit, the build
+    /// Lambda takes only an image of one platform: with BuildKit, the build
     /// leaves out the provenance attestation.
     fn push_function(&self, repository: &str, tag: &str, greeting: &str) -> (String, String) {
         let reference = format!("{}/{repository}:{tag}", self.registry());
@@ -5890,7 +5890,7 @@ impl AwsSandbox {
     }
 
     /// Delete the resources of every test run that `select` picks: ECS
-    /// services and clusters, task definitions, security groups, AWS Lambda
+    /// services and clusters, task definitions, security groups, Lambda
     /// functions and their log groups, ECR repositories, and VPCs that a
     /// test made.
     fn sweep(&self, select: impl Fn(&str) -> bool) {
@@ -6001,7 +6001,7 @@ impl AwsSandbox {
                 }
             }
         }
-        // AWS Lambda functions, and the log groups of their invocations.
+        // Lambda functions, and the log groups of their invocations.
         let functions = self
             .try_aws(&["lambda", "list-functions"])
             .map(|listed| listed["Functions"].as_array().cloned().unwrap_or_default())
@@ -6149,7 +6149,7 @@ impl AwsSandbox {
                 .unwrap_or_default();
             let subnets: Vec<String> = subnets
                 .iter()
-                // AWS Fargate does not run in every zone, such as use1-az3.
+                // Fargate does not run in every zone, such as use1-az3.
                 .filter(|subnet| subnet["AvailabilityZoneId"] != "use1-az3")
                 .filter_map(|subnet| subnet["SubnetId"].as_str().map(str::to_owned))
                 .take(3)
@@ -6306,7 +6306,7 @@ fn aws_sweeper_deletes_old_test_resources() {
     sandbox.sweep(old_aws_run);
 }
 
-/// The proxy on the CI runner orchestrates a real AWS Fargate service: it reads
+/// The proxy on the CI runner orchestrates a real Fargate service: it reads
 /// live's digest, starts both arms of an experiment as ECS services, sends
 /// each arm its requests with the right headers, keeps the arms through a
 /// redeploy of live, counts the arms' subjects, and deletes them when the
@@ -6757,7 +6757,7 @@ fn aws_lambda_sweeper_deletes_old_test_resources() {
     sandbox.sweep(old_aws_run);
 }
 
-/// The proxy on the CI runner orchestrates a real AWS Lambda function: it reads
+/// The proxy on the CI runner orchestrates a real Lambda function: it reads
 /// the digest of live's alias, starts both arms of an experiment as
 /// functions, invokes each arm with its requests and the right headers,
 /// keeps the arms through a redeploy of live, counts the arms' subjects,
@@ -7616,7 +7616,7 @@ primary_region = "{region}"
         assert_eq!(config["metadata"]["statespace_experiment"], "checkout");
     }
 
-    // Live traffic never reaches a unit: Fly.io's proxy sends Flycast
+    // Live traffic never reaches a unit: Fly's proxy sends Flycast
     // requests only to live's Machines, which have no arm variables.
     let marker = format!("/live-only-{run}");
     for subject in &live_subjects {
@@ -7712,7 +7712,7 @@ fn a_pending_workspace_gets_one_clear_line() {
 
 // ---------------------------------------------------------------------------
 // File runtimes: `ssp proxy s3` and `ssp proxy gcs` serve a static site from
-// build folders. The same checks run against stand-ins for Amazon Amazon S3 and Google Cloud
+// build folders. The same checks run against stand-ins for S3 and Cloud
 // Storage, and against real buckets.
 
 /// The app of the file runtime tests.
@@ -8096,7 +8096,7 @@ fn check_site(
     );
 }
 
-/// An in-memory bucket for the stand-ins of Amazon S3 and Google Cloud Storage. Each
+/// An in-memory bucket for the stand-ins of S3 and Cloud Storage. Each
 /// object has a version that changes when its content does.
 #[derive(Default)]
 struct FakeBucket {
@@ -8171,7 +8171,7 @@ fn query_value(query: &str, name: &str) -> Option<String> {
     })
 }
 
-/// A stand-in for Amazon S3 with path-style URLs: ListObjectsV2 and GetObject.
+/// A stand-in for S3 with path-style URLs: ListObjectsV2 and GetObject.
 fn fake_s3(bucket: Arc<Mutex<FakeBucket>>) -> u16 {
     serve_replies(move |received| {
         let mut bucket = bucket.lock().unwrap();
@@ -8439,7 +8439,7 @@ fn aws_s3_sweeper_deletes_old_test_buckets() {
     sandbox.sweep_buckets(old_aws_run);
 }
 
-/// `ssp proxy s3` serves a real Amazon S3 bucket: live at the root, and the arms
+/// `ssp proxy s3` serves a real S3 bucket: live at the root, and the arms
 /// from their build folders.
 #[test]
 fn aws_s3_proxies_serve_builds_from_a_real_bucket() {
@@ -8640,7 +8640,7 @@ fn gcp_gcs_sweeper_deletes_old_test_buckets() {
     sandbox.sweep_buckets(old_run);
 }
 
-/// `ssp proxy gcs` serves a real Google Cloud Storage bucket: live at the root, and
+/// `ssp proxy gcs` serves a real Cloud Storage bucket: live at the root, and
 /// the arms from their build folders.
 #[test]
 fn gcp_gcs_proxies_serve_builds_from_a_real_bucket() {

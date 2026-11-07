@@ -1,4 +1,4 @@
-//! `ssp proxy s3`: build folders in Amazon S3, or in any S3-compatible store with
+//! `ssp proxy s3`: build folders in S3, or in any S3-compatible store with
 //! `--endpoint` (R2, B2, Spaces, MinIO). The proxy uses the AWS default
 //! credential chain and SigV4, and needs `s3:GetObject` and
 //! `s3:ListBucket` only.
@@ -105,7 +105,7 @@ fn contents(xml: &str) -> Vec<Listed> {
         .collect()
 }
 
-/// A key that Amazon S3 sent URL-encoded: `%XX`, and `+` for a space.
+/// A key that S3 sent URL-encoded: `%XX`, and `+` for a space.
 fn url_decode(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

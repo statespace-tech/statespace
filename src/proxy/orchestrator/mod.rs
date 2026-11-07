@@ -1,6 +1,6 @@
-//! Orchestrators run the units of experiments beside live: on Docker,
-//! Kubernetes, AWS Fargate, Google Cloud Run, Fly.io, or AWS Lambda, or from
-//! build folders in Amazon S3 or Google Cloud Storage. A new orchestrator is a new module and a new subcommand
+//! Orchestrators run the units of experiments beside live: on Docker, Cloud
+//! Run, Kubernetes, ECS on Fargate, Fly.io, or AWS Lambda, or from build
+//! folders in S3 or Cloud Storage. A new orchestrator is a new module and a new subcommand
 //! of `ssp proxy`.
 
 pub mod aws;
@@ -138,7 +138,7 @@ impl UnitKey {
 }
 
 /// The largest request body that the proxy reads for an orchestrator that
-/// invokes: the payload limit of a synchronous AWS Lambda invocation, 6 MB.
+/// invokes: the payload limit of a synchronous Lambda invocation, 6 MB.
 pub const INVOKED_BODY_LIMIT: usize = 6 * 1024 * 1024;
 
 /// The environment variable that holds OpenTelemetry resource attributes.
@@ -232,7 +232,7 @@ pub trait Orchestrator: Send + Sync + 'static {
         async { None }
     }
     /// Whether the orchestrator sends the requests to `address` itself,
-    /// such as an invocation of an AWS Lambda function, in place of the proxy's
+    /// such as an invocation of a Lambda function, in place of the proxy's
     /// HTTP client.
     fn invokes(&self, _address: &str) -> bool {
         false

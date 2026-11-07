@@ -24,7 +24,7 @@ use aws_sigv4::{
 use aws_smithy_http_client::tls;
 use serde_json::Value;
 
-/// How long an invocation may take: the longest timeout of an AWS Lambda
+/// How long an invocation may take: the longest timeout of a Lambda
 /// function, 15 minutes, and a margin.
 const INVOKE_TIMEOUT: Duration = Duration::from_secs(15 * 60 + 30);
 
@@ -64,7 +64,7 @@ pub struct Endpoints {
     pub ecs: Option<String>,
     pub ec2: Option<String>,
     pub lambda: Option<String>,
-    /// Amazon S3, with the bucket as the first segment of the path.
+    /// S3, with the bucket as the first segment of the path.
     pub s3: Option<String>,
 }
 
@@ -199,7 +199,7 @@ impl Aws {
     }
 
     /// The URL of an object, or of the bucket when `key` is empty. A key is
-    /// sent percent-encoded once, as Amazon S3 signs it.
+    /// sent percent-encoded once, as S3 signs it.
     pub fn s3_url(&self, bucket: &str, key: &str) -> String {
         let key: Vec<String> = key.split('/').map(encode).collect();
         let key = key.join("/");
@@ -326,7 +326,7 @@ impl Aws {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    /// Call a REST API (AWS Lambda): `method` on `path` of the service's
+    /// Call a REST API (Lambda): `method` on `path` of the service's
     /// endpoint, with a JSON body. `None` when the resource does not exist.
     pub async fn rest(
         &self,
@@ -372,7 +372,7 @@ impl Aws {
         Ok(Some(serde_json::from_slice(&reply.body)?))
     }
 
-    /// Invoke an AWS Lambda function at its invocation URL, and wait for its
+    /// Invoke a Lambda function at its invocation URL, and wait for its
     /// answer: the payload, and the `X-Amz-Function-Error` of a function
     /// that failed.
     pub async fn invoke(

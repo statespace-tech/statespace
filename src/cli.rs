@@ -316,6 +316,13 @@ pub enum ProxyCommand {
         #[command(flatten)]
         docker: DockerArgs,
     },
+    /// Run the arms of experiments as copies of a Cloud Run service.
+    Cloudrun {
+        #[command(flatten)]
+        common: ProxyArgs,
+        #[command(flatten)]
+        cloudrun: CloudRunArgs,
+    },
     /// Run the arms of experiments as copies of a Kubernetes Deployment.
     Kubernetes {
         #[command(flatten)]
@@ -323,19 +330,12 @@ pub enum ProxyCommand {
         #[command(flatten)]
         kubernetes: KubernetesArgs,
     },
-    /// Run the arms of experiments as copies of an ECS service on AWS Fargate.
+    /// Run the arms of experiments as copies of an ECS service on Fargate.
     Fargate {
         #[command(flatten)]
         common: ProxyArgs,
         #[command(flatten)]
         fargate: FargateArgs,
-    },
-    /// Run the arms of experiments as copies of a Google Cloud Run service.
-    Cloudrun {
-        #[command(flatten)]
-        common: ProxyArgs,
-        #[command(flatten)]
-        cloudrun: CloudRunArgs,
     },
     /// Run the arms of experiments as Machines of a Fly.io app.
     Fly {
@@ -352,7 +352,7 @@ pub enum ProxyCommand {
         lambda: LambdaArgs,
     },
     /// Serve a static site and the arms of experiments from build folders
-    /// in an Amazon S3 bucket.
+    /// in an S3 bucket.
     S3 {
         #[command(flatten)]
         common: ProxyArgs,
@@ -360,7 +360,7 @@ pub enum ProxyCommand {
         s3: S3Args,
     },
     /// Serve a static site and the arms of experiments from build folders
-    /// in a Google Cloud Storage bucket.
+    /// in a Cloud Storage bucket.
     Gcs {
         #[command(flatten)]
         common: ProxyArgs,
@@ -418,7 +418,7 @@ pub struct GcsArgs {
     pub bucket: String,
     #[command(flatten)]
     pub files: FileArgs,
-    /// The Google Cloud Storage API. For tests.
+    /// The Cloud Storage API. For tests.
     #[arg(
         long,
         env = "STATESPACE_GCS_API",
@@ -456,7 +456,7 @@ pub struct DockerArgs {
 
 #[derive(Args, Clone)]
 pub struct CloudRunArgs {
-    /// The Google Cloud Run service that runs live.
+    /// The Cloud Run service that runs live.
     #[arg(long)]
     pub service: String,
     /// The region of the service, such as `us-east1`.
@@ -533,7 +533,7 @@ pub struct FargateArgs {
 
 #[derive(Args, Clone)]
 pub struct LambdaArgs {
-    /// The AWS Lambda function that runs live. It must deploy from a container
+    /// The Lambda function that runs live. It must deploy from a container
     /// image.
     #[arg(long)]
     pub function: String,
@@ -549,7 +549,7 @@ pub struct LambdaArgs {
     /// function URL. Defaults to an invocation of the function.
     #[arg(long)]
     pub live_url: Option<String>,
-    /// The AWS Lambda API. For tests.
+    /// The Lambda API. For tests.
     #[arg(long, env = "AWS_ENDPOINT_URL_LAMBDA", hide = true)]
     pub lambda_api: Option<String>,
 }

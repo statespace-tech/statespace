@@ -12,7 +12,7 @@ into an image.
 | `build.yml` | A GitHub Actions workflow that builds every commit and records the build |
 | `compose.yaml` | The shop and `ssp proxy docker` with Docker Compose |
 
-For Kubernetes, see `../kubernetes`. For Google Cloud Run, see `../cloudrun`.
+For Kubernetes, see `../kubernetes`. For Cloud Run, see `../cloudrun`.
 
 ## Set up
 

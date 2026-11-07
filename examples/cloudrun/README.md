@@ -1,7 +1,7 @@
-# Google Cloud Run
+# Cloud Run
 
-Run the arms of the shop's experiments on Google Cloud Run. `ssp proxy cloudrun` runs as its
-own Google Cloud Run service in front of the service `shop`. Each arm is its own Google Cloud Run
+Run the arms of the shop's experiments on Cloud Run. `ssp proxy cloudrun` runs as its
+own Cloud Run service in front of the service `shop`. Each arm is its own Cloud Run
 service, a copy of `shop` with another image. The proxy never changes `shop`.
 
 ## Set up

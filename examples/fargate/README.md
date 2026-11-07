@@ -1,6 +1,6 @@
-# AWS Fargate
+# ECS Fargate
 
-Run the arms of the shop's experiments on AWS Fargate. `ssp proxy fargate`
+Run the arms of the shop's experiments on ECS Fargate. `ssp proxy fargate`
 runs as its own ECS service in front of the service `shop`. Each arm is an
 ECS service in the same cluster. The service `shop` does not change.
 
@@ -86,7 +86,7 @@ aws ecs update-service --cluster shop --service shop \
 ## Credentials
 
 The proxy uses the AWS default chain: environment variables, a profile, web
-identity, the ECS task role, or the EC2 instance role. On AWS Fargate, it uses
+identity, the ECS task role, or the EC2 instance role. On Fargate, it uses
 its task role.
 
 When the proxy runs outside the VPC of the tasks, add `--unit-ip public`.

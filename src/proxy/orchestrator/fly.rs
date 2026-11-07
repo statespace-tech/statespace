@@ -5,7 +5,7 @@
 //! and metadata `statespace_app`, `statespace_experiment`, and
 //! `statespace_commit`.
 //!
-//! A unit has no services, so Fly.io's proxy never sends it public or Flycast
+//! A unit has no services, so Fly's proxy never sends it public or Flycast
 //! traffic, and no `fly_*` metadata, so `fly deploy` and `fly scale` leave it
 //! alone. The proxy runs on Fly.io in the same organization and reaches a
 //! unit at its private (6PN) address. Readiness and the reason a unit is not
@@ -471,7 +471,7 @@ fn last_exit(machine: &Value) -> Option<String> {
 ///
 /// - It keeps the guest size, environment, files, init, restart policy,
 ///   and DNS of live. Fly.io gives it the app's secrets.
-/// - It has no services, so Fly.io's proxy never sends it public or Flycast
+/// - It has no services, so Fly's proxy never sends it public or Flycast
 ///   traffic. Their health checks become Machine checks on the internal
 ///   port, which only report.
 /// - It has no mounts: a volume belongs to one Machine.
