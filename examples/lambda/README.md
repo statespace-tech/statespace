@@ -41,7 +41,9 @@ roles, and the load balancer with yours.
    ```
 
 5. Point the public load balancer or the DNS name at the proxy's target
-   group instead of the API Gateway or function URL of `shop`.
+   group. Do not change `shop`: it keeps its function URL or API Gateway
+   route, so a CDN or load balancer can fall back to it. A request that goes
+   to `shop` directly gets live and is in no arm.
 6. Check that the proxy reports, and that the app has a live commit:
 
    ```shell

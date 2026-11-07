@@ -3525,6 +3525,56 @@ spec:
     ]);
     assert!(!services.contains(&arm_name), "{services}");
     assert!(names().contains(&live_arm_name));
+
+    // A Deployment with the name of an arm that ssp did not make stays as it
+    // is, and the arm is not ready.
+    let promo_name = format!("shop-ssp-promo-{}", &ARM[..12]);
+    let foreign = format!(
+        "apiVersion: apps/v1\nkind: Deployment\nmetadata: {{name: {promo_name}, labels: {{team: other}}}}\n\
+         spec:\n  replicas: 0\n  selector: {{matchLabels: {{app: other}}}}\n  template:\n    \
+         metadata: {{labels: {{app: other}}}}\n    spec:\n      containers:\n        - name: other\n          \
+         image: registry.k8s.io/e2e-test-images/agnhost:2.53\n"
+    );
+    std::fs::write(file.path(), foreign).unwrap();
+    kubectl(&[
+        "apply",
+        "--namespace",
+        &namespace,
+        "-f",
+        file.path().to_str().unwrap(),
+    ]);
+    let generation = || {
+        kubectl(&[
+            "get",
+            "deployment",
+            &promo_name,
+            "--namespace",
+            &namespace,
+            "-o",
+            "jsonpath={.metadata.generation}",
+        ])
+    };
+    let before = generation();
+    state.lock().unwrap().config["experiments"] = json!([{
+        "name": "promo", "version": 1, "state": "running",
+        "subject": "request.cookies.ssp_sid", "eligibility": null, "events": [],
+        "arms": [{"commit": ARM, "image": live_digest, "ranges": [[0.0, 0.5]]}],
+    }]);
+    wait_until(60, "the arm of promo is not ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units.iter().any(|unit| {
+                    unit["experiment"] == "promo"
+                        && unit["reason"]
+                            .as_str()
+                            .is_some_and(|reason| reason.contains("is not an arm of shop-prod"))
+                })
+            })
+        })
+    });
+    state.lock().unwrap().config["experiments"] = json!([]);
+    std::thread::sleep(Duration::from_secs(3));
+    assert_eq!(generation(), before, "the Deployment is unchanged");
 }
 
 // ---------------------------------------------------------------------------
@@ -5098,7 +5148,15 @@ fn fargate_proxies_run_units_as_services() {
     }
 
     // When checkout stops, its services and task definitions go, and its
-    // subjects go to live.
+    // subjects go to live. A revision in an arm's family that ssp did not
+    // register stays.
+    let foreign_revision =
+        format!("arn:aws:ecs:us-east-1:123456789012:task-definition/{arm_name}:99");
+    ecs.lock().unwrap().definitions.insert(
+        foreign_revision.clone(),
+        json!({"taskDefinition": {"taskDefinitionArn": foreign_revision, "family": arm_name},
+               "tags": [{"key": "team", "value": "other"}]}),
+    );
     state.lock().unwrap().config["experiments"] = json!([]);
     wait_until(30, "the units are deleted", || {
         let ecs = ecs.lock().unwrap();
@@ -5113,10 +5171,56 @@ fn fargate_proxies_run_units_as_services() {
         );
         assert_eq!(ecs.services["shop"]["status"], "ACTIVE", "live stays");
         assert!(!ecs.deregistered.contains(&live_arn.to_owned()));
+        assert!(!ecs.deregistered.contains(&foreign_revision));
     }
     wait_until(30, "the arm's subjects go to live", || {
         get(&arm_subject).is_some_and(|body| body["name"] == "live")
     });
+
+    // A service with the name of an arm that ssp did not make stays as it
+    // is, and the arm is not ready.
+    let promo_name = format!("shop-ssp-promo-{}", &ARM[..12]);
+    let foreign = json!({
+        "serviceName": promo_name, "status": "ACTIVE", "clusterArn": CLUSTER_ARN,
+        "desiredCount": 1, "taskDefinition": foreign_revision,
+        "tags": [{"key": "team", "value": "other"}],
+    });
+    ecs.lock()
+        .unwrap()
+        .services
+        .insert(promo_name.clone(), foreign.clone());
+    state.lock().unwrap().config["experiments"] = json!([{
+        "name": "promo", "version": 1, "state": "running",
+        "subject": "request.cookies.ssp_sid", "eligibility": null, "events": [],
+        "arms": [{"commit": ARM, "image": fargate_digest('2'), "ranges": [[0.0, 0.5]]}],
+    }]);
+    wait_until(30, "the arm of promo is not ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units.iter().any(|unit| {
+                    unit["experiment"] == "promo"
+                        && unit["reason"]
+                            .as_str()
+                            .is_some_and(|reason| reason.contains("is not an arm of shop-prod"))
+                })
+            })
+        })
+    });
+    {
+        let ecs = ecs.lock().unwrap();
+        assert_eq!(ecs.services[&promo_name], foreign);
+        assert!(
+            ecs.registrations
+                .iter()
+                .all(|registration| registration["family"] != promo_name.as_str())
+        );
+        assert!(!ecs.actions.iter().any(|action| action == "UpdateService"));
+    }
+    state.lock().unwrap().config["experiments"] = json!([]);
+    std::thread::sleep(Duration::from_secs(3));
+    let ecs = ecs.lock().unwrap();
+    assert_eq!(ecs.services[&promo_name], foreign);
+    assert_eq!(ecs.deletions.len(), 2);
 }
 
 #[derive(Default)]
@@ -5466,6 +5570,43 @@ fn lambda_proxies_run_units_as_functions() {
     wait_until(30, "the arm's subjects go to live", || {
         get(&arm_subject, "/checkout").is_some_and(|body| body["name"] == "shop")
     });
+
+    // A function with the name of an arm that ssp did not make stays as it
+    // is, and the arm is not ready.
+    let promo_name = format!("shop-ssp-promo-{}", &ARM[..12]);
+    let foreign = json!({
+        "Configuration": {"FunctionName": promo_name, "PackageType": "Image",
+                          "State": "Active", "LastUpdateStatus": "Successful"},
+        "Code": {"ImageUri": lambda_digest('9')},
+        "Tags": {"team": "other"},
+    });
+    api.lock()
+        .unwrap()
+        .functions
+        .insert(promo_name.clone(), foreign.clone());
+    state.lock().unwrap().config["experiments"] = json!([{
+        "name": "promo", "version": 1, "state": "running",
+        "subject": "request.cookies.ssp_sid", "eligibility": null, "events": [],
+        "arms": [{"commit": ARM, "image": lambda_digest('2'), "ranges": [[0.0, 0.5]]}],
+    }]);
+    wait_until(30, "the arm of promo is not ready", || {
+        state.lock().unwrap().reports().iter().any(|report| {
+            report["units"].as_array().is_some_and(|units| {
+                units.iter().any(|unit| {
+                    unit["experiment"] == "promo"
+                        && unit["reason"]
+                            .as_str()
+                            .is_some_and(|reason| reason.contains("is not an arm of shop-prod"))
+                })
+            })
+        })
+    });
+    state.lock().unwrap().config["experiments"] = json!([]);
+    std::thread::sleep(Duration::from_secs(3));
+    let api = api.lock().unwrap();
+    assert_eq!(api.functions[&promo_name], foreign);
+    assert_eq!(api.creations.len(), 2);
+    assert_eq!(api.deletions.len(), 2);
 }
 
 // ---------------------------------------------------------------------------

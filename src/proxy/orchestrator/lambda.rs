@@ -250,8 +250,16 @@ impl Orchestrator for Lambda {
         Ok(self.address(&name))
     }
 
-    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = self.unit_name(&unit.key());
+        let ours = self
+            .function(&name, None)
+            .await?
+            .is_some_and(|current| tag(&current["Tags"], APP_TAG) == Some(app.name.as_str()));
+        if !ours {
+            self.remember(&name, false);
+            return Ok(());
+        }
         let deleted = self
             .aws
             .rest(

@@ -157,7 +157,17 @@ impl Orchestrator for Kubernetes {
         let (deployment, port) =
             unit_deployment(&live, self.container.as_deref(), &app.name, &name, unit)?;
         let deployments = self.deployments();
-        match self.kube.get(&format!("{deployments}/{name}")).await? {
+        let services = self.services();
+        let current = self.kube.get(&format!("{deployments}/{name}")).await?;
+        let current_service = self.kube.get(&format!("{services}/{name}")).await?;
+        for (kind, object) in [("Deployment", &current), ("Service", &current_service)] {
+            if let Some(object) = object
+                && !ours(object, &app.name)
+            {
+                bail!("{kind} {name} exists and is not an arm of {}", app.name);
+            }
+        }
+        match current {
             Some(current) if current_hash(&current) == current_hash(&deployment) => {}
             Some(current) => {
                 let mut replacement = deployment;
@@ -174,8 +184,7 @@ impl Orchestrator for Kubernetes {
             }
         }
         let service = unit_service(&app.name, &name, port, unit);
-        let services = self.services();
-        match self.kube.get(&format!("{services}/{name}")).await? {
+        match current_service {
             Some(current) if current_hash(&current) == current_hash(&service) => {}
             Some(_) => {
                 self.kube.delete(&format!("{services}/{name}")).await?;
@@ -188,15 +197,20 @@ impl Orchestrator for Kubernetes {
         Ok(self.address(&name, port))
     }
 
-    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = unit_name(&self.deployment, unit);
-        self.kube
-            .delete(&format!("{}/{name}", self.deployments()))
-            .await?;
-        self.kube
-            .delete(&format!("{}/{name}", self.services()))
-            .await?;
-        eprintln!("[ssp] deleted Deployment and Service {name}");
+        for (kind, collection) in [
+            ("Deployment", self.deployments()),
+            ("Service", self.services()),
+        ] {
+            let path = format!("{collection}/{name}");
+            if let Some(object) = self.kube.get(&path).await?
+                && ours(&object, &app.name)
+            {
+                self.kube.delete(&path).await?;
+                eprintln!("[ssp] deleted {kind} {name}");
+            }
+        }
         Ok(())
     }
 
@@ -354,6 +368,11 @@ fn rolled_out(deployment: &Value) -> bool {
     status["observedGeneration"].as_u64().unwrap_or(0) >= generation
         && status["updatedReplicas"].as_u64().unwrap_or(0) >= wanted
         && status["readyReplicas"].as_u64().unwrap_or(0) >= 1
+}
+
+/// Whether `ssp` made an object for this app: it has the app's label.
+fn ours(object: &Value, app: &str) -> bool {
+    object["metadata"]["labels"][APP_LABEL] == app
 }
 
 fn labels(app: &str, name: &str, unit: &Unit) -> Value {

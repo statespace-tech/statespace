@@ -103,7 +103,9 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-7. Read the results:
+7. Read the results. `ssp experiment show` gives the latency and the events
+   of `statespace.toml` for each arm. For all other data, filter your own data
+   tools, such as Datadog or Grafana, by `statespace.arm` or `service.version`:
 
    ```text
    $ ssp experiment show checkout

@@ -384,6 +384,12 @@ impl Orchestrator for Fargate {
     async fn start(&self, app: &App, unit: &Unit) -> anyhow::Result<Address> {
         let name = self.unit_name(&unit.key());
         let current = self.ecs.service(&name).await?;
+        if let Some(service) = &current
+            && service["status"] != "INACTIVE"
+            && tag(&service["tags"], APP_TAG) != Some(app.name.as_str())
+        {
+            bail!("service {name} exists and is not an arm of {}", app.name);
+        }
         let active = current
             .as_ref()
             .filter(|service| service["status"] == "ACTIVE");
@@ -442,10 +448,12 @@ impl Orchestrator for Fargate {
         Ok(String::new())
     }
 
-    async fn stop(&self, _app: &App, unit: &Unit) -> anyhow::Result<()> {
+    async fn stop(&self, app: &App, unit: &Unit) -> anyhow::Result<()> {
         let name = self.unit_name(&unit.key());
+        let ours = |tags: &Value| tag(tags, APP_TAG) == Some(app.name.as_str());
         if let Some(service) = self.ecs.service(&name).await?
             && service["status"] == "ACTIVE"
+            && ours(&service["tags"])
         {
             self.ecs
                 .call(
@@ -469,7 +477,9 @@ impl Orchestrator for Fargate {
                 .flatten()
             {
                 let arn = arn.as_str().unwrap_or_default();
-                if family_of(arn) == Some(name.as_str()) {
+                if family_of(arn) == Some(name.as_str())
+                    && ours(&self.ecs.task_definition(arn).await?["tags"])
+                {
                     arns.push(arn.to_owned());
                 }
             }

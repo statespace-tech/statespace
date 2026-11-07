@@ -40,13 +40,9 @@ organization. Each arm is a Machine of `shop` without services.
    fly deploy -c examples/fly/fly.toml
    ```
 
-7. Point the domain of the shop at `shop-statespace`. Then remove the public
-   addresses of `shop`, so that all requests go through the proxy:
-
-   ```shell
-   fly ips list -a shop
-   fly ips release -a shop <public address>
-   ```
+7. Point the domain of the shop at `shop-statespace`. Do not change `shop`:
+   it keeps its public addresses, so a CDN or load balancer can fall back to
+   it. A request that goes to `shop` directly gets live and is in no arm.
 
 Never set a secret that starts with `STATESPACE_` on `shop`: the arms get
 the secrets of `shop`.
