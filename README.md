@@ -33,12 +33,12 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
 <p align="center">
   <a href="https://docs.statespace.com/runtimes/docker">Docker</a> ·
   <a href="https://docs.statespace.com/runtimes/kubernetes">Kubernetes</a> ·
-  <a href="https://docs.statespace.com/runtimes/cloud-run">Cloud Run</a> ·
-  <a href="https://docs.statespace.com/runtimes/fargate">ECS Fargate</a> ·
+  <a href="https://docs.statespace.com/runtimes/fargate">AWS Fargate</a> ·
+  <a href="https://docs.statespace.com/runtimes/cloud-run">Google Cloud Run</a> ·
   <a href="https://docs.statespace.com/runtimes/fly">Fly.io</a> ·
   <a href="https://docs.statespace.com/runtimes/lambda">AWS Lambda</a> ·
-  <a href="https://docs.statespace.com/runtimes/s3">S3</a> ·
-  <a href="https://docs.statespace.com/runtimes/gcs">Cloud Storage</a>
+  <a href="https://docs.statespace.com/runtimes/s3">Amazon S3</a> ·
+  <a href="https://docs.statespace.com/runtimes/gcs">Google Cloud Storage</a>
 </p>
 
 ## Quickstart
@@ -75,8 +75,8 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    match = 'request.method == "POST" && request.path == "/signup"'
 
    [[event]]
-   name  = "search"
-   match = 'request.path == "/search"'
+   name  = "purchase"
+   match = 'response.headers["x-app-event"] == "purchase"'
 
    [experiment.checkout]
    subject     = 'request.headers["x-user-id"]'
@@ -103,9 +103,7 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    ssp experiment start checkout --note "one-page checkout"
    ```
 
-7. Read the results. `ssp experiment show` gives the latency and the events
-   of `statespace.toml` for each arm. For all other data, filter your own data
-   tools, such as Datadog or Grafana, by `statespace.arm` or `service.version`:
+7. Read the results here or in your own tools, like Datadog or Grafana:
 
    ```text
    $ ssp experiment show checkout
@@ -119,8 +117,8 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    events (estimate [95% CI])   c0ffee1                   a1b2c3d
      requests_4xx               0.1121 [0.0950, 0.1318]   0.1178 [0.1003, 0.1378]
      requests_5xx               0.0274 [0.0193, 0.0388]   0.0438 [0.0331, 0.0578]
-     signup                     0.0208 [0.0136, 0.0306]   0.0261 [0.0184, 0.0368]
-     search                     0.2804 [0.2554, 0.3068]   0.2753 [0.2499, 0.3007]
+     signup                     0.0208 [0.0141, 0.0305]   0.0261 [0.0184, 0.0368]
+     purchase                   0.0100 [0.0057, 0.0173]   0.0152 [0.0096, 0.0238]
 
    Find it in your own data tools: statespace.arm = "c0ffee1…" | "a1b2c3d…"
 

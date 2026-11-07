@@ -40,51 +40,9 @@ kind create cluster --name ssp-test
 STATESPACE_KIND_TESTS=1 cargo test --locked --test cli kind
 ```
 
-The Cloud Run tests use stand-ins for the Admin API and the metadata server. They run
-with `cargo test`.
+The AWS Fargate tests use stand-ins for ECS and EC2. They run with `cargo test`.
 
-The real Cloud Run test runs `ssp proxy cloudrun` in a sandbox project of Google
-Cloud. Use only a sandbox project. Never use a production project or a project of a
-customer. The test does these steps:
-
-1. It makes sure that the Application Default Credentials are of
-   `STATESPACE_TEST_GCP_PROJECT`. If not, it stops before it makes anything.
-2. It pushes three images of `examples/app` to the Artifact Registry repository
-   `statespace-test`. It deploys one image as the service `statespace-test-<run id>`.
-3. It runs the proxy on your machine with your credentials. It starts an experiment
-   with two arms. Each arm is its own service. The test checks that the spec of the
-   customer's service (template, traffic, and labels) and its generation do not
-   change. It applies the customer's service again with its full spec, as Terraform
-   does, and checks that the arms still serve. Then it deploys a new live, and stops
-   the experiment. Then it does the same with the proxy as its own Cloud Run service.
-4. It deletes its services and images, also when it fails. The sweeper deletes the
-   services and images of runs that are older than three hours. These include the
-   arms' services (`statespace-test-<run id>-ssp-…`).
-
-The test needs Docker and a service account of the sandbox that runs the services and
-the proxy. That account needs the permissions of the proxy (see
-`examples/cloudrun/README.md`); `roles/run.admin` on the sandbox project has them. Your
-credentials must have the role Service Account Token Creator on that account. To
-run the proxy as a Cloud Run service, the test also needs a Linux amd64 build of `ssp`
-and `cloudflared`.
-
-```shell
-gcloud auth application-default login
-export STATESPACE_CLOUDRUN_TESTS=1
-export STATESPACE_TEST_GCP_PROJECT=<sandbox project>
-export STATESPACE_TEST_GCP_REGION=us-east1
-export STATESPACE_TEST_GCP_SERVICE_ACCOUNT=<account>@<sandbox project>.iam.gserviceaccount.com
-# Optional: run the proxy as a Cloud Run service too.
-cargo build --release --locked --target x86_64-unknown-linux-musl
-export STATESPACE_TEST_SSP_BINARY=$PWD/target/x86_64-unknown-linux-musl/release/ssp
-cargo test --locked --test cli gcp_sweeper -- --nocapture
-cargo test --locked --test cli gcp_cloudrun -- --nocapture
-cargo test --locked --test cli gcp_sweeper -- --nocapture
-```
-
-The Fargate tests use stand-ins for ECS and EC2. They run with `cargo test`.
-
-The real Fargate test runs `ssp proxy fargate` in a sandbox account of AWS.
+The real AWS Fargate test runs `ssp proxy fargate` in a sandbox account of AWS.
 Use only a sandbox account. Never use a production account or an account of
 a customer. The test does these steps:
 
@@ -115,77 +73,46 @@ cargo test --locked --test cli aws_fargate -- --nocapture
 cargo test --locked --test cli aws_sweeper -- --nocapture
 ```
 
-The Lambda tests use a stand-in for the Lambda API. They run with `cargo test`.
+The Google Cloud Run tests use stand-ins for the Admin API and the metadata server. They run
+with `cargo test`.
 
-The real Lambda test runs `ssp proxy lambda` in the sandbox account of AWS. Use only a
-sandbox account. Never use a production account or an account of a customer. The test
-does these steps:
+The real Google Cloud Run test runs `ssp proxy cloudrun` in a sandbox project of Google
+Cloud. Use only a sandbox project. Never use a production project or a project of a
+customer. The test does these steps:
 
-1. It makes sure that the AWS credentials are of `STATESPACE_TEST_AWS_ACCOUNT`. If
-   not, it stops before it makes anything.
-2. It makes an ECR repository, and pushes three images of `examples/lambda`. It makes
-   a function from one, with the alias `live`. Each name is
-   `statespace-test-<run id>`.
+1. It makes sure that the Application Default Credentials are of
+   `STATESPACE_TEST_GCP_PROJECT`. If not, it stops before it makes anything.
+2. It pushes three images of `examples/app` to the Artifact Registry repository
+   `statespace-test`. It deploys one image as the service `statespace-test-<run id>`.
 3. It runs the proxy on your machine with your credentials. It starts an experiment
-   with two arms, deploys a new live, and stops the experiment.
-4. It deletes what it made, also when it fails. The sweeper deletes what runs older
-   than three hours left, with the log groups of their functions.
+   with two arms. Each arm is its own service. The test checks that the spec of the
+   customer's service (template, traffic, and labels) and its generation do not
+   change. It applies the customer's service again with its full spec, as Terraform
+   does, and checks that the arms still serve. Then it deploys a new live, and stops
+   the experiment. Then it does the same with the proxy as its own Google Cloud Run service.
+4. It deletes its services and images, also when it fails. The sweeper deletes the
+   services and images of runs that are older than three hours. These include the
+   arms' services (`statespace-test-<run id>-ssp-…`).
 
-The test needs Docker and the AWS CLI. The functions use the execution role
-`statespace-test-lambda` of the account.
-
-```shell
-export STATESPACE_LAMBDA_TESTS=1
-export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
-export STATESPACE_TEST_AWS_REGION=us-east-1
-cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
-cargo test --locked --test cli aws_lambda_proxies -- --nocapture
-cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
-```
-
-The tests of `ssp proxy s3` and `ssp proxy gcs` use stand-ins for S3, Cloud
-Storage, and the metadata server. They run with `cargo test`.
-
-The real S3 test runs `ssp proxy s3` in the sandbox account of AWS, and the real
-Cloud Storage test runs `ssp proxy gcs` in the sandbox project of Google Cloud. Use
-only a sandbox. Never use a production account or project, or one of a customer. Each
-test does these steps:
-
-1. It makes sure that the credentials are of the sandbox. If not, it stops before it
-   makes anything.
-2. It makes a bucket `statespace-test-<run id>`. It uploads a live site to the root,
-   and two builds to `builds/<commit>/`.
-3. It runs the proxy on your machine with your credentials. It checks over HTTP:
-   live's files hash, the split, an override link, the headers of arm responses, the
-   path rules, 404, the fallback, a build that changed, and a build that is deleted.
-4. It deletes the bucket, also when it fails. The sweeper deletes the buckets of runs
-   that are older than three hours.
-
-The S3 test needs the AWS CLI. The credentials need `s3:CreateBucket`,
-`s3:DeleteBucket`, `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and
-`s3:DeleteObject` on `statespace-test-*`, and `s3:ListAllMyBuckets`.
-
-```shell
-export STATESPACE_S3_TESTS=1
-export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
-export STATESPACE_TEST_AWS_REGION=us-east-1
-cargo test --locked --test cli aws_s3_sweeper -- --nocapture
-cargo test --locked --test cli aws_s3_proxies -- --nocapture
-cargo test --locked --test cli aws_s3_sweeper -- --nocapture
-```
-
-The Cloud Storage test uses the Application Default Credentials, as the Cloud Run
-test does. They need Storage Admin (`roles/storage.admin`) on the sandbox project.
+The test needs Docker and a service account of the sandbox that runs the services and
+the proxy. That account needs the permissions of the proxy (see
+`examples/cloudrun/README.md`); `roles/run.admin` on the sandbox project has them. Your
+credentials must have the role Service Account Token Creator on that account. To
+run the proxy as a Google Cloud Run service, the test also needs a Linux amd64 build of `ssp`
+and `cloudflared`.
 
 ```shell
 gcloud auth application-default login
-export STATESPACE_GCS_TESTS=1
+export STATESPACE_CLOUDRUN_TESTS=1
 export STATESPACE_TEST_GCP_PROJECT=<sandbox project>
 export STATESPACE_TEST_GCP_REGION=us-east1
 export STATESPACE_TEST_GCP_SERVICE_ACCOUNT=<account>@<sandbox project>.iam.gserviceaccount.com
-cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
-cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
-cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+# Optional: run the proxy as a Cloud Run service too.
+cargo build --release --locked --target x86_64-unknown-linux-musl
+export STATESPACE_TEST_SSP_BINARY=$PWD/target/x86_64-unknown-linux-musl/release/ssp
+cargo test --locked --test cli gcp_sweeper -- --nocapture
+cargo test --locked --test cli gcp_cloudrun -- --nocapture
+cargo test --locked --test cli gcp_sweeper -- --nocapture
 ```
 
 The Fly.io tests use a stand-in for the Machines API. They run with `cargo test`.
@@ -226,6 +153,79 @@ Run the CLI against a local service by setting its URL.
 
 ```shell
 STATESPACE_API=http://localhost:8080 cargo run -- app list
+```
+
+The AWS Lambda tests use a stand-in for the AWS Lambda API. They run with `cargo test`.
+
+The real AWS Lambda test runs `ssp proxy lambda` in the sandbox account of AWS. Use only a
+sandbox account. Never use a production account or an account of a customer. The test
+does these steps:
+
+1. It makes sure that the AWS credentials are of `STATESPACE_TEST_AWS_ACCOUNT`. If
+   not, it stops before it makes anything.
+2. It makes an ECR repository, and pushes three images of `examples/lambda`. It makes
+   a function from one, with the alias `live`. Each name is
+   `statespace-test-<run id>`.
+3. It runs the proxy on your machine with your credentials. It starts an experiment
+   with two arms, deploys a new live, and stops the experiment.
+4. It deletes what it made, also when it fails. The sweeper deletes what runs older
+   than three hours left, with the log groups of their functions.
+
+The test needs Docker and the AWS CLI. The functions use the execution role
+`statespace-test-lambda` of the account.
+
+```shell
+export STATESPACE_LAMBDA_TESTS=1
+export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
+export STATESPACE_TEST_AWS_REGION=us-east-1
+cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+cargo test --locked --test cli aws_lambda_proxies -- --nocapture
+cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+```
+
+The tests of `ssp proxy s3` and `ssp proxy gcs` use stand-ins for Amazon S3, Google Cloud
+Storage, and the metadata server. They run with `cargo test`.
+
+The real Amazon S3 test runs `ssp proxy s3` in the sandbox account of AWS, and the real
+Google Cloud Storage test runs `ssp proxy gcs` in the sandbox project of Google Cloud. Use
+only a sandbox. Never use a production account or project, or one of a customer. Each
+test does these steps:
+
+1. It makes sure that the credentials are of the sandbox. If not, it stops before it
+   makes anything.
+2. It makes a bucket `statespace-test-<run id>`. It uploads a live site to the root,
+   and two builds to `builds/<commit>/`.
+3. It runs the proxy on your machine with your credentials. It checks over HTTP:
+   live's files hash, the split, an override link, the headers of arm responses, the
+   path rules, 404, the fallback, a build that changed, and a build that is deleted.
+4. It deletes the bucket, also when it fails. The sweeper deletes the buckets of runs
+   that are older than three hours.
+
+The Amazon S3 test needs the AWS CLI. The credentials need `s3:CreateBucket`,
+`s3:DeleteBucket`, `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, and
+`s3:DeleteObject` on `statespace-test-*`, and `s3:ListAllMyBuckets`.
+
+```shell
+export STATESPACE_S3_TESTS=1
+export STATESPACE_TEST_AWS_ACCOUNT=<sandbox account>
+export STATESPACE_TEST_AWS_REGION=us-east-1
+cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+cargo test --locked --test cli aws_s3_proxies -- --nocapture
+cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+```
+
+The Google Cloud Storage test uses the Application Default Credentials, as the
+Google Cloud Run test does. They need Storage Admin (`roles/storage.admin`) on the sandbox project.
+
+```shell
+gcloud auth application-default login
+export STATESPACE_GCS_TESTS=1
+export STATESPACE_TEST_GCP_PROJECT=<sandbox project>
+export STATESPACE_TEST_GCP_REGION=us-east1
+export STATESPACE_TEST_GCP_SERVICE_ACCOUNT=<account>@<sandbox project>.iam.gserviceaccount.com
+cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
+cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
 ```
 
 ## Pull requests

@@ -1,5 +1,5 @@
-//! `ssp proxy cloudrun`: live is a Cloud Run service. The proxy never
-//! changes it. Each unit runs as its own Cloud Run service in the same
+//! `ssp proxy cloudrun`: live is a Google Cloud Run service. The proxy never
+//! changes it. Each unit runs as its own Google Cloud Run service in the same
 //! project and region, `<service>-ssp-<experiment>-<commit 12>` (cut with a
 //! short hash past 49 characters), from a copy of live's template with
 //! another image. The unit's service has live's ingress and the labels
@@ -30,13 +30,13 @@ use super::{
 use crate::{cli::CloudRunArgs, image};
 
 /// The labels of a unit's service: the app, and the full experiment and
-/// commit. Cloud Run labels take no `.` or `/`.
+/// commit. Google Cloud Run labels take no `.` or `/`.
 pub const APP_LABEL: &str = "statespace-app";
 pub const EXPERIMENT_LABEL: &str = "statespace-experiment";
 pub const COMMIT_LABEL: &str = "statespace-commit";
-/// Cloud Run service names have at most 49 characters.
+/// Google Cloud Run service names have at most 49 characters.
 const NAME_LIMIT: usize = 49;
-/// The header Cloud Run reads the ID token from, so the app keeps its own
+/// The header Google Cloud Run reads the ID token from, so the app keeps its own
 /// `Authorization` header.
 const AUTHORIZATION: &str = "x-serverless-authorization";
 /// The role that lets the proxy call a unit's service.
@@ -252,7 +252,7 @@ impl CloudRun {
         .await
     }
 
-    /// The digest of a revision's image. Cloud Run keeps a tag as it was
+    /// The digest of a revision's image. Google Cloud Run keeps a tag as it was
     /// deployed; the v1 API reports the digest it resolved.
     async fn revision_digest(&self, revision: &Value) -> anyhow::Result<Image> {
         let index = ingress_container(&revision["containers"]);
@@ -684,7 +684,7 @@ mod tests {
             unit_name("shop", &arm().key()),
             "shop-ssp-checkout-a1b2c3d4e5f6"
         );
-        // A long service name ends with a hash within Cloud Run's limit.
+        // A long service name ends with a hash within Google Cloud Run's limit.
         let long = unit_name("shop-checkout-service-eu-west", &arm().key());
         assert_eq!(long.len(), 49, "{long}");
         assert!(

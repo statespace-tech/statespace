@@ -100,13 +100,13 @@ subcommand from where live runs:
 | Live runs on | Subcommand | Each arm runs as |
 | --- | --- | --- |
 | One machine with Docker | `ssp proxy docker` | A copy of live's container |
-| Cloud Run | `ssp proxy cloudrun` | A copy of live's service |
 | Kubernetes | `ssp proxy kubernetes` | A copy of the Deployment |
-| ECS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
+| AWS Fargate | `ssp proxy fargate` | An ECS service in the same cluster |
+| Google Cloud Run | `ssp proxy cloudrun` | A copy of live's service |
 | Fly.io | `ssp proxy fly` | A Machine of the same Fly.io app |
-| AWS Lambda (from an image) | `ssp proxy lambda` | A Lambda function with live's configuration |
-| S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
-| Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
+| AWS Lambda (from an image) | `ssp proxy lambda` | An AWS Lambda function with live's configuration |
+| Amazon S3 (static site) | `ssp proxy s3` | A build folder in the bucket |
+| Google Cloud Storage (static site) | `ssp proxy gcs` | A build folder in the bucket |
 
 Each subcommand needs the runtime token in `STATESPACE_TOKEN`. The proxy
 asks Statespace which app the token is for, so it takes no `--app`. It
@@ -146,38 +146,13 @@ proxy starts, make sure that this identity has these permissions.
   environment, networks, mounts, and limits. It has no Compose labels, so
   Compose ignores it.
 
-### Cloud Run
-
-The proxy runs as its own Cloud Run service. Each arm is its own Cloud Run
-service, `<service>-ssp-<experiment>-<commit 12>`, a copy of live's service
-with another image. The proxy never changes live's service. Give the
-proxy's service account:
-
-1. A custom role on the project with `run.services.create`,
-   `run.services.delete`, `run.services.get`, `run.services.list`,
-   `run.services.getIamPolicy`, `run.services.setIamPolicy`,
-   `run.revisions.get`, `run.operations.get`, and `run.routes.invoke`.
-2. Service Account User (`roles/iam.serviceAccountUser`) on the runtime
-   service account of the app's service, so that the arms can run as it.
-3. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
-   repository of the images. Cloud Run deploys an image only when the
-   caller can read it.
-
-Gotchas:
-
-- Deploy the proxy service with CPU always allocated and one instance at
-  minimum (`--no-cpu-throttling --min-instances 1`). The proxy works
-  between requests: it renews its lease and starts and stops arms.
-- An arm's service copies the ingress of live's service. The proxy must
-  reach both.
-
 ### Kubernetes
 
 The proxy runs as its own Deployment. Its service account needs a Role
 that can manage Deployments and Services, and read pods, in the namespace
 of the app.
 
-### ECS Fargate
+### AWS Fargate
 
 The proxy runs as its own ECS service. Its task role needs:
 
@@ -197,6 +172,31 @@ Gotchas:
   proxy connect to the app's port.
 - Use `--unit-ip public` only when the proxy runs outside the VPC, such as
   in a test. It also needs `ec2:DescribeNetworkInterfaces`.
+
+### Google Cloud Run
+
+The proxy runs as its own Google Cloud Run service. Each arm is its own Google Cloud Run
+service, `<service>-ssp-<experiment>-<commit 12>`, a copy of live's service
+with another image. The proxy never changes live's service. Give the
+proxy's service account:
+
+1. A custom role on the project with `run.services.create`,
+   `run.services.delete`, `run.services.get`, `run.services.list`,
+   `run.services.getIamPolicy`, `run.services.setIamPolicy`,
+   `run.revisions.get`, `run.operations.get`, and `run.routes.invoke`.
+2. Service Account User (`roles/iam.serviceAccountUser`) on the runtime
+   service account of the app's service, so that the arms can run as it.
+3. Artifact Registry Reader (`roles/artifactregistry.reader`) on the
+   repository of the images. Google Cloud Run deploys an image only when the
+   caller can read it.
+
+Gotchas:
+
+- Deploy the proxy service with CPU always allocated and one instance at
+  minimum (`--no-cpu-throttling --min-instances 1`). The proxy works
+  between requests: it renews its lease and starts and stops arms.
+- An arm's service copies the ingress of live's service. The proxy must
+  reach both.
 
 ### Fly.io
 
@@ -223,12 +223,12 @@ Gotchas:
 
 ### AWS Lambda
 
-The proxy runs as its own ECS service, as on ECS Fargate, in front of the
+The proxy runs as its own ECS service, as on AWS Fargate, in front of the
 function. Live is the function at `--qualifier`, such as the alias `live`.
 Each arm is its own function, `<function>-ssp-<experiment>-<commit 12>`,
 with live's configuration and another image. Its task role needs:
 
-1. The Lambda actions `CreateFunction`, `DeleteFunction`, `GetFunction`,
+1. The AWS Lambda actions `CreateFunction`, `DeleteFunction`, `GetFunction`,
    `InvokeFunction`, `ListTags`, `TagResource`, and `UpdateFunctionCode` on
    live's function and on `<function>-ssp-*`, and `ListFunctions`.
 2. `iam:PassRole` on the execution role of live, for
@@ -245,7 +245,7 @@ Gotchas:
   requests go through the proxy.
 - A request body can be at most 6 MB.
 
-### S3 and Cloud Storage
+### Amazon S3 and Google Cloud Storage
 
 For a static site. Live is the bucket root. Each build is a folder of
 files in a bucket, such as `s3://acme-site/builds/<commit>/`. The proxy

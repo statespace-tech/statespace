@@ -53,7 +53,7 @@ pub struct Object {
     pub cache_control: Option<String>,
 }
 
-/// A bucket store: S3 or Cloud Storage. It only reads.
+/// A bucket store: Amazon S3 or Google Cloud Storage. It only reads.
 pub trait Storage: Send + Sync + 'static {
     /// Every object whose key starts with `prefix`.
     fn list(

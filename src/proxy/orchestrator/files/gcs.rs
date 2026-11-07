@@ -1,4 +1,4 @@
-//! `ssp proxy gcs`: build folders in Cloud Storage, read with the Cloud
+//! `ssp proxy gcs`: build folders in Google Cloud Storage, read with the Cloud
 //! Storage JSON API. The proxy signs in to Google with the metadata server
 //! or with application default credentials, and needs
 //! `storage.objects.get` and `storage.objects.list` only (Storage Object
@@ -49,7 +49,7 @@ impl GcsStorage {
     }
 }
 
-/// The message of a Cloud Storage error.
+/// The message of a Google Cloud Storage error.
 async fn failure(response: reqwest::Response, what: &str) -> anyhow::Error {
     let status = response.status();
     let text = response.text().await.unwrap_or_default();

@@ -2,7 +2,7 @@
 
 Run the arms of the shop's experiments on AWS Lambda. `ssp proxy lambda`
 runs as its own ECS service in front of the function `shop`. Each arm is a
-Lambda function in the same account and region. The function `shop` does not
+AWS Lambda function in the same account and region. The function `shop` does not
 change.
 
 | File | Purpose |
@@ -72,7 +72,7 @@ roles, and the load balancer with yours.
 - The function of an arm has the tags `statespace.com/app`,
   `statespace.com/experiment`, and `statespace.com/commit`, and the tags of
   `shop`.
-- An arm is ready when Lambda says that its function is active.
+- An arm is ready when AWS Lambda says that its function is active.
 - A request body can be at most 6 MB, the limit of an invocation.
 - When an experiment stops, the proxy deletes the functions of its arms. The
   log groups of the arms stay.
@@ -90,7 +90,7 @@ aws lambda update-alias --function-name shop --name live \
 ## Try the app
 
 From the root folder of the repo, build the app of this folder, and push it
-to Amazon ECR. Lambda reads only images with one platform, so turn off the
+to Amazon ECR. AWS Lambda reads only images with one platform, so turn off the
 provenance attestation.
 
 ```shell
@@ -103,5 +103,5 @@ docker push 123456789012.dkr.ecr.us-east-1.amazonaws.com/shop:hi
 ## Credentials
 
 The proxy uses the AWS default chain: environment variables, a profile, web
-identity, the ECS task role, or the EC2 instance role. On Fargate, it uses
+identity, the ECS task role, or the EC2 instance role. On AWS Fargate, it uses
 its task role.

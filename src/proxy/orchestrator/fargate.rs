@@ -1,4 +1,4 @@
-//! `ssp proxy fargate`: live is an ECS service on Fargate. Each unit runs as
+//! `ssp proxy fargate`: live is an ECS service on AWS Fargate. Each unit runs as
 //! its own ECS service in the same cluster,
 //! `<service>-ssp-<experiment>-<commit 12>` (cut with a short hash when the
 //! name is too long), from a copy of live's task definition with another

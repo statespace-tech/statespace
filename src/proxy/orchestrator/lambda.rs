@@ -230,7 +230,7 @@ impl Orchestrator for Lambda {
             return Ok(self.address(&name));
         }
         let mut live = self.live_function().await?;
-        // Lambda gives the tags only for the function without a qualifier.
+        // AWS Lambda gives the tags only for the function without a qualifier.
         if self.qualifier.is_some()
             && let Some(function) = self.function(&self.function, None).await?
         {
@@ -375,7 +375,7 @@ pub fn unit_name(function: &str, key: &UnitKey) -> String {
     key.name(&format!("{function}-ssp-"), NAME_LIMIT)
 }
 
-/// The value of a tag in a Lambda tag map.
+/// The value of a tag in an AWS Lambda tag map.
 fn tag<'a>(tags: &'a Value, key: &str) -> Option<&'a str> {
     tags.get(key)?.as_str()
 }

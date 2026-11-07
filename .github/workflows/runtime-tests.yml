@@ -1,15 +1,16 @@
 name: Runtime tests
 
-# Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), Cloud Run and
-# Cloud Storage in the sandbox project, ECS Fargate, Lambda, and S3 in the sandbox
-# account, and Fly.io in the dedicated test app. The release runs them before it publishes; an admin
-# can run them by hand on main.
+# Runs ssp proxy on each runtime for real: Docker, Kubernetes (kind), AWS Fargate,
+# Google Cloud Run, Fly.io, AWS Lambda, Amazon S3, and Google Cloud Storage. The AWS
+# runtimes run in the sandbox account, the Google Cloud runtimes in the sandbox
+# project, and Fly.io in the dedicated test app. The release runs them before it
+# publishes; an admin can run them by hand on main.
 
 on:
   workflow_dispatch:
     inputs:
       skip:
-        description: "Runtimes not to test, separated by commas (docker,kubernetes,cloudrun,fargate,lambda,fly,s3,gcs)"
+        description: "Runtimes not to test, separated by commas (docker,kubernetes,fargate,cloudrun,fly,lambda,s3,gcs)"
         required: false
         default: ""
   workflow_call:
@@ -81,49 +82,8 @@ jobs:
         env:
           STATESPACE_KIND_TESTS: "1"
 
-  cloudrun:
-    name: Cloud Run
-    needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',cloudrun,') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      STATESPACE_CLOUDRUN_TESTS: "1"
-      STATESPACE_TEST_GCP_PROJECT: ${{ vars.GCP_TEST_PROJECT }}
-      STATESPACE_TEST_GCP_REGION: ${{ vars.GCP_TEST_REGION }}
-      STATESPACE_TEST_GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      STATESPACE_TEST_SSP_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/ssp
-      SSP_TEST_LOGS: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          targets: x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - name: Install musl tools and cloudflared
-        run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          curl --fail --silent --show-error --location --output cloudflared.deb \
-            https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb && rm cloudflared.deb
-      # The image of the proxy that runs as its own Cloud Run service.
-      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
-      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - name: Sweep old test resources
-        run: cargo test --locked --test cli gcp_sweeper -- --nocapture
-      - run: cargo test --locked --test cli gcp_cloudrun -- --nocapture
-      - name: Sweep old test resources
-        if: always()
-        run: cargo test --locked --test cli gcp_sweeper -- --nocapture
-
   fargate:
-    name: Fargate
+    name: AWS Fargate
     needs: allowed
     if: ${{ !contains(format(',{0},', inputs.skip), ',fargate,') }}
     runs-on: ubuntu-latest
@@ -155,104 +115,46 @@ jobs:
         if: always()
         run: cargo test --locked --test cli aws_sweeper -- --nocapture
 
-  lambda:
-    name: Lambda
+  cloudrun:
+    name: Google Cloud Run
     needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',lambda,') }}
+    if: ${{ !contains(format(',{0},', inputs.skip), ',cloudrun,') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     env:
-      STATESPACE_LAMBDA_TESTS: "1"
-      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
-      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
-      SSP_TEST_LOGS: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      # Build first, so the short-lived AWS credentials last for the test.
-      - run: cargo test --locked --test cli --no-run
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
-          role-session-name: statespace-runtime-tests-${{ github.run_id }}
-          aws-region: ${{ vars.AWS_TEST_REGION }}
-      - name: Sweep old test resources
-        run: cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
-      - run: cargo test --locked --test cli aws_lambda_proxies -- --nocapture
-      - name: Sweep old test resources
-        if: always()
-        run: cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
-
-  s3:
-    name: S3
-    needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',s3,') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      STATESPACE_S3_TESTS: "1"
-      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
-      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
-      SSP_TEST_LOGS: "1"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      # Build first, so the short-lived AWS credentials last for the test.
-      - run: cargo test --locked --test cli --no-run
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
-          role-session-name: statespace-runtime-tests-${{ github.run_id }}
-          aws-region: ${{ vars.AWS_TEST_REGION }}
-      - name: Sweep old test buckets
-        run: cargo test --locked --test cli aws_s3_sweeper -- --nocapture
-      - run: cargo test --locked --test cli aws_s3_proxies -- --nocapture
-      - name: Sweep old test buckets
-        if: always()
-        run: cargo test --locked --test cli aws_s3_sweeper -- --nocapture
-
-  gcs:
-    name: Cloud Storage
-    needs: allowed
-    if: ${{ !contains(format(',{0},', inputs.skip), ',gcs,') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      STATESPACE_GCS_TESTS: "1"
+      STATESPACE_CLOUDRUN_TESTS: "1"
       STATESPACE_TEST_GCP_PROJECT: ${{ vars.GCP_TEST_PROJECT }}
       STATESPACE_TEST_GCP_REGION: ${{ vars.GCP_TEST_REGION }}
       STATESPACE_TEST_GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      STATESPACE_TEST_SSP_BINARY: ${{ github.workspace }}/target/x86_64-unknown-linux-musl/release/ssp
       SSP_TEST_LOGS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: cargo test --locked --test cli --no-run
-      # The proxy signs in with the credentials file that this step writes.
+      - name: Install musl tools and cloudflared
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          curl --fail --silent --show-error --location --output cloudflared.deb \
+            https://github.com/cloudflare/cloudflared/releases/download/2026.10.6/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb && rm cloudflared.deb
+      # The image of the proxy that runs as its own Google Cloud Run service.
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - name: Sweep old test buckets
-        run: cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
-      - run: cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
-      - name: Sweep old test buckets
+      - name: Sweep old test resources
+        run: cargo test --locked --test cli gcp_sweeper -- --nocapture
+      - run: cargo test --locked --test cli gcp_cloudrun -- --nocapture
+      - name: Sweep old test resources
         if: always()
-        run: cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+        run: cargo test --locked --test cli gcp_sweeper -- --nocapture
 
   fly:
     name: Fly.io
@@ -320,3 +222,102 @@ jobs:
       - name: Sweep old test Machines
         if: always() && steps.setup.outputs.ready == 'true'
         run: cargo test --locked --test cli fly_sweeper -- --nocapture
+
+  lambda:
+    name: AWS Lambda
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',lambda,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_LAMBDA_TESTS: "1"
+      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
+      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Build first, so the short-lived AWS credentials last for the test.
+      - run: cargo test --locked --test cli --no-run
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          role-session-name: statespace-runtime-tests-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+      - name: Sweep old test resources
+        run: cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+      - run: cargo test --locked --test cli aws_lambda_proxies -- --nocapture
+      - name: Sweep old test resources
+        if: always()
+        run: cargo test --locked --test cli aws_lambda_sweeper -- --nocapture
+
+  s3:
+    name: Amazon S3
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',s3,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_S3_TESTS: "1"
+      STATESPACE_TEST_AWS_ACCOUNT: ${{ vars.AWS_TEST_ACCOUNT }}
+      STATESPACE_TEST_AWS_REGION: ${{ vars.AWS_TEST_REGION }}
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Build first, so the short-lived AWS credentials last for the test.
+      - run: cargo test --locked --test cli --no-run
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          role-session-name: statespace-runtime-tests-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_TEST_REGION }}
+      - name: Sweep old test buckets
+        run: cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+      - run: cargo test --locked --test cli aws_s3_proxies -- --nocapture
+      - name: Sweep old test buckets
+        if: always()
+        run: cargo test --locked --test cli aws_s3_sweeper -- --nocapture
+
+  gcs:
+    name: Google Cloud Storage
+    needs: allowed
+    if: ${{ !contains(format(',{0},', inputs.skip), ',gcs,') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STATESPACE_GCS_TESTS: "1"
+      STATESPACE_TEST_GCP_PROJECT: ${{ vars.GCP_TEST_PROJECT }}
+      STATESPACE_TEST_GCP_REGION: ${{ vars.GCP_TEST_REGION }}
+      STATESPACE_TEST_GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      SSP_TEST_LOGS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked --test cli --no-run
+      # The proxy signs in with the credentials file that this step writes.
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - name: Sweep old test buckets
+        run: cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
+      - run: cargo test --locked --test cli gcp_gcs_proxies -- --nocapture
+      - name: Sweep old test buckets
+        if: always()
+        run: cargo test --locked --test cli gcp_gcs_sweeper -- --nocapture
