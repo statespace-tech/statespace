@@ -2,7 +2,7 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.5.1 - 2026-11-06
 
 ### Added
 
@@ -19,17 +19,17 @@ Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versio
   at most 6 MB. An arm that fails sends a request without a body to live, as on the
   other runtimes.
 - `examples/lambda` has the tiny app as a function with the AWS Lambda Web Adapter,
-  and the policy, task definition, and service of a proxy on ECS Fargate.
+  and the policy, task definition, and service of a proxy on AWS Fargate.
 
 ### Fixed
 
-- `ssp proxy fargate` and `ssp proxy kubernetes` no longer change a service, Deployment,
+- `ssp proxy kubernetes` and `ssp proxy fargate` no longer change a service, Deployment,
   or Service that has the name of an arm but not the app's tag or label. The arm is
   not ready, with the reason `... exists and is not an arm of <app>`. Before, the proxy
   updated it with the arm's image.
-- When an experiment stops, `ssp proxy fargate`, `ssp proxy kubernetes`, and
-  `ssp proxy lambda` delete only the resources with the app's tag or label. Fargate
-  deregisters only the task definitions that it registered.
+- When an experiment stops, `ssp proxy kubernetes`, `ssp proxy fargate`, and
+  `ssp proxy lambda` delete only the resources with the app's tag or label. `ssp proxy
+  fargate` deregisters only the task definitions that it registered.
 - `ssp app remove` says that it deletes the experiments, versions, and results of the
   app.
 - `ssp whoami` prints no `Workspaces` row, and its `--json` has no `workspaces`: the

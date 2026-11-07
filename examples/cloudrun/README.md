@@ -45,7 +45,7 @@ service, a copy of `shop` with another image. The proxy never changes `shop`.
 
    ```shell
    gcloud run deploy statespace-proxy --region us-east1 \
-     --image ghcr.io/statespace-tech/statespace:0.5.0 \
+     --image ghcr.io/statespace-tech/statespace:0.5.1 \
      --service-account "$proxy" \
      --set-secrets STATESPACE_TOKEN=statespace-token:latest \
      --no-cpu-throttling --min-instances 1 \

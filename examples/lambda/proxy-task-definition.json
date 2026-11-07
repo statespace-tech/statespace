@@ -9,7 +9,7 @@
   "containerDefinitions": [
     {
       "name": "proxy",
-      "image": "ghcr.io/statespace-tech/statespace:0.5.0",
+      "image": "ghcr.io/statespace-tech/statespace:0.5.1",
       "essential": true,
       "command": [
         "proxy", "lambda",
