@@ -23,6 +23,9 @@ ignore = [
     # pin-utils is unmaintained, with no known vulnerability. aws-smithy-http, which
     # the AWS SDK uses, still depends on it in its latest version.
     { id = "RUSTSEC-2026-0441", reason = "dependency of the AWS SDK, no known vulnerability" },
+    # chrono is unmaintained, with no known vulnerability. cel-interpreter 0.10,
+    # which evaluates the CEL rules of events, depends on it in its latest version.
+    { id = "RUSTSEC-2026-0543", reason = "dependency of cel-interpreter, no known vulnerability" },
 ]
 
 [licenses]
