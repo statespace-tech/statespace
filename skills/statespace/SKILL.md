@@ -64,7 +64,7 @@ not help.
    ```
 
 2. Ask the user to install the Statespace GitHub App on the repository from
-   https://statespace.com.
+   https://github.com/apps/statespace-app/installations/new.
 3. Write `statespace.toml` in the app's folder. Start from the file in
    [Starter statespace.toml](#starter-statespacetoml). Change the event
    rules to match the app.
