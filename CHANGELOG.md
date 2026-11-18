@@ -2,6 +2,14 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
+## Unreleased
+
+### Changed
+
+- When Statespace pauses a workspace, a command that changes something prints one
+  line: `<workspace> is paused: you can read its results, but not change them`.
+  Commands that read still work.
+
 ## 0.5.1 - 2026-11-06
 
 ### Added

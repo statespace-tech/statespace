@@ -7684,22 +7684,17 @@ primary_region = "{region}"
 }
 
 #[test]
-fn a_pending_workspace_gets_one_clear_line() {
+fn a_suspended_workspace_gets_one_clear_line() {
     let directory = tempfile::tempdir().unwrap();
-    let port = serve(|_| {
+    let line = "acme is paused: you can read its results, but not change them. Talk to us at https://statespace.com/contact";
+    let port = serve(move |_| {
         json_answer(
             403,
-            &json!({
-                "error": "pending",
-                "workspace": "acme",
-                "message": "acme is pending: Statespace is reviewing your access. See https://statespace.com/contact",
-            }),
+            &json!({ "error": "suspended", "workspace": "acme", "message": line }),
         )
     });
     let api = format!("http://127.0.0.1:{port}");
     let token = [("STATESPACE_TOKEN", "t")];
-    let line =
-        "acme is pending: Statespace is reviewing your access. See https://statespace.com/contact";
 
     let (ok, stdout, stderr) = ssp(directory.path(), &api, &token, &["app", "list"]);
     assert!(!ok && stdout.is_empty());

@@ -50,9 +50,10 @@ ssp whoami --json
 If it fails and you have no GitHub token, ask the user to run `ssp login`.
 This command opens a browser, so the user must run it.
 
-A new workspace starts as pending. Until Statespace staff activate it, every
-command fails with `<workspace> is pending: Statespace is reviewing your
-access`. Tell the user, and stop. Retrying does not help.
+Statespace can pause a workspace. Then every command that changes something
+fails with `<workspace> is paused: you can read its results, but not change
+them`. Commands that read still work. Tell the user, and stop. Retrying does
+not help.
 
 ## Set up
 
