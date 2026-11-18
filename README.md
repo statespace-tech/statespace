@@ -51,7 +51,7 @@ Statespace lets you A/B test code changes on your own infrastructure. A reverse 
    ```
 
 2. Install the
-   [GitHub App](https://github.com/apps/statespace-tech/installations/new)
+   [GitHub App](https://github.com/apps/statespace-app/installations/new)
    and add this step to your image build:
 
    ```yaml
