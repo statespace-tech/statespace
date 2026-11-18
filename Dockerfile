@@ -4,7 +4,7 @@
 # The image has no shell. It holds the static binary, CA certificates, and the user
 # nonroot (65532). `statespace` is a hard link to `ssp`. The first stage makes the link
 # on the build platform, so the build runs no emulated command.
-FROM --platform=$BUILDPLATFORM busybox:1.37-musl@sha256:f6a95d611e0a8780fabdb2aec43e31275b2720dfefa3e41b16835bfc42454478 AS bin
+FROM --platform=$BUILDPLATFORM busybox:1.38-musl@sha256:80e38f9a1b39188b8bdb28879178edb322a4402b081a9aedda1924609decd6f6 AS bin
 ARG TARGETARCH
 COPY image/${TARGETARCH}/ssp /out/ssp
 RUN chmod 0755 /out/ssp && ln /out/ssp /out/statespace
