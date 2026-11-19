@@ -2,13 +2,16 @@
 
 Notable changes to Statespace and its `ssp` CLI. Releases follow semantic versioning.
 
-## Unreleased
+## 0.5.2 - 2026-11-18
 
 ### Changed
 
 - When Statespace pauses a workspace, a command that changes something prints one
   line: `<workspace> is paused: you can read its results, but not change them`.
   Commands that read still work.
+- The agent skill links to the installation page of the GitHub App, and to the sign-in
+  page of Statespace.
+- The dependencies and the base image of the proxy are up to date.
 
 ## 0.5.1 - 2026-11-06
 
